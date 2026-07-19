@@ -10,6 +10,7 @@ dependencies = [
     "djangorestframework>=3.17.1",
     "djangorestframework-simplejwt>=5.5.1",
     "psycopg[binary]>=3.3.4",
+    "uvicorn>=0.51.0",
 ]
 
 [dependency-groups]
