@@ -14,6 +14,7 @@
   </component>
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/.atl" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="uv WSL (Ubuntu): (/home/sebastian/.virtualenvs/amandu-api/bin/python)" jdkType="Python SDK" />
