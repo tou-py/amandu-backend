@@ -21,14 +21,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY . .
 
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# runserver only: autoreload, readable tracebacks, and it serves /static/ itself.
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
 
 # ---------------------------------------------------------------- builder
 FROM base AS builder
 
 # --locked: fail if uv.lock is stale against pyproject.toml, instead of silently
 #           building yesterday's dependencies.
-# --no-dev: leave pytest and debug-toolbar out of the runtime image.
+# --no-dev: leave pytest out of the runtime image.
 # --compile-bytecode: pay .pyc compilation at build time, not on the first request.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --compile-bytecode
@@ -44,7 +45,21 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /usr/src/app
 COPY . .
 
+# collectstatic imports settings, which demand real credentials. These placeholders
+# never reach the final image: nothing is read from them but the static config.
+RUN SECRET_KEY=build POSTGRES_DB=build POSTGRES_USER=build POSTGRES_PASSWORD=build \
+    AWS_S3_ENDPOINT_URL=http://build AWS_ACCESS_KEY_ID=build \
+    AWS_SECRET_ACCESS_KEY=build AWS_STORAGE_BUCKET_NAME=build \
+    python manage.py collectstatic --noinput
+
 RUN useradd --create-home --uid 1000 app
 USER app
 
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
+# --timeout kills hung workers, --max-requests recycles them to bound memory growth.
+CMD ["gunicorn", "config.wsgi:application", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "3", \
+     "--timeout", "60", \
+     "--max-requests", "1000", \
+     "--max-requests-jitter", "100", \
+     "--access-logfile", "-"]
