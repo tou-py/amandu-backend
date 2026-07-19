@@ -39,6 +39,7 @@ FROM python:3.14-slim-bookworm AS prod
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/opt/venv/bin:$PATH"
+ENV DJANGO_SETTINGS_MODULE=config.settings.production
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -47,7 +48,8 @@ COPY . .
 
 # collectstatic imports settings, which demand real credentials. These placeholders
 # never reach the final image: nothing is read from them but the static config.
-RUN SECRET_KEY=build POSTGRES_DB=build POSTGRES_USER=build POSTGRES_PASSWORD=build \
+RUN SECRET_KEY=build ALLOWED_HOSTS=build POSTGRES_DB=build POSTGRES_USER=build POSTGRES_PASSWORD=build \
+    POSTGRES_HOST=build POSTGRES_PORT=5432 REDIS_URL=redis://build:6379/0 \
     AWS_S3_ENDPOINT_URL=http://build AWS_ACCESS_KEY_ID=build \
     AWS_SECRET_ACCESS_KEY=build AWS_STORAGE_BUCKET_NAME=build \
     python manage.py collectstatic --noinput

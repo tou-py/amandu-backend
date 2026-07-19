@@ -16,6 +16,9 @@ dependencies = [
     "whitenoise>=6.12.0",
 ]
 
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
