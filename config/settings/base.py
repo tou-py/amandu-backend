@@ -2,8 +2,10 @@
 Shared Django settings. Never used directly: pick an environment module
 (development, test, production) through DJANGO_SETTINGS_MODULE.
 
-Defaults here are development-friendly on purpose. Every one of them is re-read
-without a default in production.py; keep that block in sync when adding another.
+Anything that differs between deployments is required from the environment, with no
+fallback: a missing variable fails at boot naming itself, in every environment
+equally. Copy .env.example to .env to work locally. Only values that are safe
+everywhere (ports, regions, timeouts) carry a default.
 
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
@@ -17,12 +19,12 @@ env = environ.Env()
 environ.Env.read_env(BASE_DIR / '.env')
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env.str('SECRET_KEY', default='super-secret-key')
+SECRET_KEY = env.str('SECRET_KEY')
 
 # Overridden per environment.
 DEBUG = False
 
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['*',])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS')
 
 
 # Application definition
@@ -36,13 +38,16 @@ DJANGO_APPS = [
     'django.contrib.staticfiles',
 ]
 
-THIRD_PARTY_APPS = []
+THIRD_PARTY_APPS = [
+    'corsheaders',
+]
 
 LOCAL_APPS = []
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -82,7 +87,7 @@ DATABASES = {
         'NAME': env.str('POSTGRES_DB'),
         'USER': env.str('POSTGRES_USER'),
         'PASSWORD': env.str('POSTGRES_PASSWORD'),
-        'HOST': env.str('POSTGRES_HOST', default='localhost'),
+        'HOST': env.str('POSTGRES_HOST'),
         'PORT': env.int('POSTGRES_PORT', default=5432),
     }
 }
@@ -151,11 +156,14 @@ STORAGES = {
 }
 
 
+# CORS
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS')
+
 # Cache and Celery broker
 
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': env.str('REDIS_URL', default='redis://redis:6379/0'),
+        'LOCATION': env.str('REDIS_URL'),
     }
 }
