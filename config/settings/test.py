@@ -6,14 +6,21 @@ import os
 # Redis or S3 -- all three are replaced below -- so placeholders let the suite run on
 # a machine with no .env. Adding a required setting to base breaks the tests here
 # immediately and by name, which is why this list is safe to maintain by hand.
-for _key in (
-    'SECRET_KEY', 'ALLOWED_HOSTS', 'CORS_ALLOWED_ORIGINS',
-    'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_HOST',
-    'REDIS_URL',
-    'AWS_S3_ENDPOINT_URL', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
-    'AWS_STORAGE_BUCKET_NAME',
+for _key, _value in (
+    ('SECRET_KEY', 'test'),
+    ('ALLOWED_HOSTS', 'test'),
+    ('CORS_ALLOWED_ORIGINS', 'http://test'),
+    ('POSTGRES_DB', 'test'),
+    ('POSTGRES_USER', 'test'),
+    ('POSTGRES_PASSWORD', 'test'),
+    ('POSTGRES_HOST', 'test'),
+    ('REDIS_URL', 'redis://test:6379/0'),
+    ('AWS_S3_ENDPOINT_URL', 'http://test'),
+    ('AWS_ACCESS_KEY_ID', 'test'),
+    ('AWS_SECRET_ACCESS_KEY', 'test'),
+    ('AWS_STORAGE_BUCKET_NAME', 'test'),
 ):
-    os.environ.setdefault(_key, 'test')
+    os.environ.setdefault(_key, _value)
 
 from .base import *  # noqa: E402, F403
 
