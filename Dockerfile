@@ -21,6 +21,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY . .
 
+# The compose bind mount makes the container's uid the owner of anything written
+# back to the host, and manage.py writes real files (migrations, __pycache__).
+# Matching the host uid keeps those files editable outside Docker.
+RUN useradd --create-home --uid 1000 app
+USER app
+
 # runserver only: autoreload, readable tracebacks, and it serves /static/ itself.
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
 
