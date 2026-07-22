@@ -1,0 +1,61 @@
+from django.conf import settings
+from django.db import models
+
+
+class Membership(models.Model):
+    """
+    Join row between a user and a tenant, and the reason CustomUser has no
+    `tenant` FK: the same person may work for several tenants with a different
+    role in each, so access lives here, not on the user.
+
+    A user with zero memberships is valid and deliberate: that is a
+    platform-level account (a superuser), which belongs to no tenant.
+    """
+
+    class Role(models.TextChoices):
+        OWNER = 'owner', 'Owner'
+        ADMIN = 'admin', 'Admin'
+        STAFF = 'staff', 'Staff'
+
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Active'
+        # Access to THIS tenant cut off without removing the row, so history and
+        # role survive. Distinct from Tenant.Status: one suspends the whole
+        # tenant, this suspends one person inside it.
+        SUSPENDED = 'suspended', 'Suspended'
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='memberships',
+    )
+    tenant = models.ForeignKey(
+        'tenancy.Tenant',
+        on_delete=models.CASCADE,
+        related_name='memberships',
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=Role.choices,  # type: ignore
+        default=Role.STAFF,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,  # type: ignore
+        default=Status.ACTIVE,
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tb_membership'
+        constraints = [
+            # One membership row per (user, tenant); the role is what varies,
+            # never the pairing.
+            models.UniqueConstraint(
+                fields=['user', 'tenant'],
+                name='unique_membership_per_user_tenant',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.user} @ {self.tenant} ({self.role})'

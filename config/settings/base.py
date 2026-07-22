@@ -26,6 +26,10 @@ DEBUG = False
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS')
 
+AUTH_USER_MODEL = 'accounts.CustomUser'
+
+# Django still defaults to AutoField (32-bit) and warns per app (models.W042).
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Application definition
 
@@ -42,7 +46,11 @@ THIRD_PARTY_APPS = [
     'corsheaders',
 ]
 
-LOCAL_APPS = []
+LOCAL_APPS = [
+    'apps.commons',
+    'apps.tenancy',
+    'apps.accounts',
+]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
