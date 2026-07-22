@@ -10,6 +10,7 @@ everywhere (ports, regions, timeouts) carry a default.
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 import environ
 
@@ -44,6 +45,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     'corsheaders',
+    'rest_framework',
 ]
 
 LOCAL_APPS = [
@@ -174,4 +176,26 @@ CACHES = {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': env.str('REDIS_URL'),
     }
+}
+
+
+# Django REST Framework
+# Fail closed by default: every endpoint requires authentication unless it opts
+# out explicitly (the login/refresh views set their own empty permissions).
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+# JWT
+# The access token carries IDENTITY ONLY — no tenant, no role. The active tenant
+# travels in the X-Tenant-ID header and is validated against a live Membership on
+# every request, so authorization is never frozen into the token.
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
