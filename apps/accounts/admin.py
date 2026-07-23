@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.utils.translation import gettext_lazy as _
 
-from apps.accounts.models import CustomUser, Membership
+from apps.accounts.models import CustomUser, Invitation, Membership
 
 
 class MembershipInline(admin.TabularInline):
@@ -52,3 +52,11 @@ class CustomUserAdmin(UserAdmin):
     ordering = ('email',)
     readonly_fields = ('last_login', 'created_at', 'updated_at')
     inlines = (MembershipInline,)
+
+
+@admin.register(Invitation)
+class InvitationAdmin(admin.ModelAdmin):
+    list_display = ('email', 'tenant', 'role', 'status', 'expires_at', 'created_at')
+    list_filter = ('tenant', 'status')
+    search_fields = ('email',)
+    readonly_fields = ('token', 'expires_at', 'created_at', 'updated_at')

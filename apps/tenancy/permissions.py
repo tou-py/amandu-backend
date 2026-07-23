@@ -68,3 +68,20 @@ class HasActiveMembership(BasePermission):
         # the token, or a demotion would not apply until the token expires.
         request.membership = membership
         return True
+
+
+class IsTenantAdmin(BasePermission):
+    """
+    In-app authorization on the tenant plane: the caller's active membership must
+    be owner or admin. Layered AFTER HasActiveMembership, which is what set
+    request.membership; on its own this returns False (no membership resolved).
+    """
+
+    message = 'Requires a tenant owner or admin role.'
+
+    def has_permission(self, request, view):
+        membership = getattr(request, 'membership', None)
+        return membership is not None and membership.role in (
+            Membership.Role.OWNER,
+            Membership.Role.ADMIN,
+        )
