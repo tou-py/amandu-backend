@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from apps.scheduling.models import Category, Client, Service
+from apps.scheduling.models import (
+    Appointment,
+    AppointmentClient,
+    Category,
+    Client,
+    Service,
+)
 
 
 @admin.register(Client)
@@ -31,3 +37,17 @@ class ServiceAdmin(admin.ModelAdmin):
     list_filter = ('tenant', 'category')
     search_fields = ('name',)
     readonly_fields = ('created_at', 'updated_at')
+
+
+class AppointmentClientInline(admin.TabularInline):
+    model = AppointmentClient
+    extra = 1
+
+
+@admin.register(Appointment)
+class AppointmentAdmin(admin.ModelAdmin):
+    list_display = ('start', 'end', 'tenant', 'professional', 'service', 'status')
+    list_filter = ('tenant', 'status')
+    search_fields = ('clients__name',)
+    readonly_fields = ('end', 'cancelled_at', 'created_at', 'updated_at')
+    inlines = (AppointmentClientInline,)

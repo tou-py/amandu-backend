@@ -1,7 +1,8 @@
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
-from apps.scheduling.models import Category, Client, Service
+from apps.accounts.models import Membership
+from apps.scheduling.models import Appointment, Category, Client, Service
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -73,3 +74,62 @@ class ServiceSerializer(serializers.ModelSerializer):
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             self.fields['category'].queryset = Category.objects.for_tenant(tenant)
+
+
+class AppointmentSerializer(serializers.ModelSerializer):
+    """
+    Every relation is scoped to the request tenant, so the four tenant paths
+    (own, professional, clients, service) always agree -- the database does not
+    check that `end` is derived from the service duration, never sent.
+    """
+
+    clients = serializers.PrimaryKeyRelatedField(
+        many=True, allow_empty=False, queryset=Client.objects.none()
+    )
+
+    class Meta:
+        model = Appointment
+        fields = (
+            'id', 'professional', 'clients', 'service', 'start', 'end', 'status',
+            'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
+        )
+        read_only_fields = (
+            'id', 'end', 'status', 'cancelled_at', 'cancellation_reason',
+            'created_at', 'updated_at',
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            # Only active, bookable memberships of this tenant may be the professional.
+            self.fields['professional'].queryset = Membership.objects.filter(
+                tenant=tenant,
+                status=Membership.Status.ACTIVE,
+                attends_appointments=True,
+            )
+            self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
+            self.fields['service'].queryset = Service.objects.for_tenant(tenant)
+
+    def validate(self, attrs):
+        tenant = self.context['request'].tenant
+        # On a partial update the unchanged sides come from the instance.
+        professional = attrs.get('professional') or getattr(self.instance, 'professional', None)
+        service = attrs.get('service') or getattr(self.instance, 'service', None)
+        start = attrs.get('start') or getattr(self.instance, 'start', None)
+
+        end = start + service.duration
+        attrs['end'] = end
+
+        overlapping = (
+            Appointment.objects.for_tenant(tenant)
+            .filter(professional=professional, start__lt=end, end__gt=start)
+            .exclude(status=Appointment.Status.CANCELLED)
+        )
+        if self.instance is not None:
+            overlapping = overlapping.exclude(pk=self.instance.pk)
+        if overlapping.exists():
+            raise serializers.ValidationError(
+                'This professional already has an appointment in that time range.'
+            )
+        return attrs
