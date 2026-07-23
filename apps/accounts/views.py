@@ -10,6 +10,7 @@ from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     InvitationSerializer,
     TenantAwareTokenObtainPairSerializer,
+    active_memberships,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -19,6 +20,31 @@ class LoginView(TokenObtainPairView):
     """Email/password login that also returns the user's active memberships."""
 
     serializer_class = TenantAwareTokenObtainPairSerializer
+
+
+class MeView(APIView):
+    """
+    Identity plus the tenants the caller may act for, callable any time in the
+    session. This is what lets a multi-tenant client render (and refresh) its
+    tenant switcher without logging in again -- the membership list otherwise
+    only arrives at login and is lost on a token refresh or a page reload.
+
+    Switching needs no endpoint of its own: the client just sends a different
+    X-Tenant-ID on the next request, and HasActiveMembership re-validates it.
+    Requires only authentication, never an active tenant -- picking one is the
+    whole point.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        return Response(
+            {
+                'id': request.user.id,
+                'email': request.user.email,
+                'memberships': active_memberships(request.user),
+            }
+        )
 
 
 class InvitationViewSet(TenantScopedModelViewSet):

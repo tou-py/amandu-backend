@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.core.mail import send_mail
 
-`
+
 def send_invitation_email(invitation):
     """
     Deliver the accept link to the invited address. The token travels in the URL,

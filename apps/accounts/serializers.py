@@ -4,6 +4,28 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from apps.accounts.models import CustomUser, Invitation, Membership
+from apps.tenancy.models import Tenant
+
+
+def active_memberships(user):
+    """
+    The tenants a user may currently act for, shaped for the client's tenant
+    switcher. Filtered to exactly what HasActiveMembership will accept per
+    request -- the membership is ACTIVE and its tenant is not suspended -- so the
+    switcher never offers an option that then 403s on every call.
+    """
+    return [
+        {
+            'tenant_id': m.tenant_id,
+            'tenant_slug': m.tenant.slug,
+            'tenant_name': m.tenant.name,
+            'role': m.role,
+        }
+        for m in user.memberships.select_related('tenant').filter(
+            status=Membership.Status.ACTIVE,
+            tenant__status=Tenant.Status.ACTIVE,
+        )
+    ]
 
 
 class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -12,25 +34,11 @@ class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     response body (NOT in the token). The client needs this to know which tenants
     it may act for and which X-Tenant-ID header to send; a single-tenant user's
     client just uses the only entry.
-
-    Only ACTIVE memberships are listed: a suspended membership is not an option
-    the client should offer, and would be rejected by the per-request check
-    anyway.
     """
 
     def validate(self, attrs):
         data = super().validate(attrs)  # authenticates and sets self.user
-        data['memberships'] = [
-            {
-                'tenant_id': m.tenant_id,
-                'tenant_slug': m.tenant.slug,
-                'tenant_name': m.tenant.name,
-                'role': m.role,
-            }
-            for m in self.user.memberships.select_related('tenant').filter(
-                status=Membership.Status.ACTIVE
-            )
-        ]
+        data['memberships'] = active_memberships(self.user)
         return data
 
 
