@@ -1,6 +1,27 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 
 from apps.commons.mixins import TimestampMixin
+
+
+def validate_timezone(value):
+    """
+    Django has no timezone field, and a bad value here is not a cosmetic bug: every
+    time the tenant sees is rendered through it, so garbage breaks the whole agenda
+    at display time instead of at write time.
+
+    Building the ZoneInfo IS the check -- comparing against available_timezones()
+    would scan the entire tz database on every validation to answer the same question.
+    """
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValidationError(
+            '%(value)s is not a known IANA time zone.', params={'value': value}
+        )
 
 
 class Tenant(TimestampMixin):
@@ -30,6 +51,25 @@ class Tenant(TimestampMixin):
         max_length=20,
         choices=Status.choices, # type: ignore
         default=Status.ACTIVE,
+    )
+    # Instants are stored in UTC (USE_TZ). This is the single zone every time inside
+    # the tenant is interpreted and displayed in: "9:00" means 9:00 here, for
+    # everyone, whatever timezone the browser happens to be in.
+    timezone = models.CharField(
+        max_length=63,
+        default='UTC',
+        validators=[validate_timezone],
+    )
+    # ISO 3166-1 alpha-2, used as the default region when parsing a phone number the
+    # staff typed in local format. Blank is a defined behaviour, not a hole: without a
+    # region, phone numbers must arrive already in international form.
+    # Shape only -- whether the region actually exists is answered by the phone
+    # parser, which fails loudly on an unknown one.
+    country = models.CharField(
+        max_length=2,
+        blank=True,
+        default='',
+        validators=[RegexValidator(r'^[A-Z]{2}$', 'Use an ISO 3166-1 alpha-2 code.')],
     )
 
     class Meta:

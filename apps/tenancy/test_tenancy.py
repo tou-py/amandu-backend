@@ -1,8 +1,10 @@
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, models
 
 from apps.tenancy.mixins import TenantOwnedMixin
 from apps.tenancy.models import Tenant
+from apps.tenancy.models.tenant import validate_timezone
 
 
 class Service(TenantOwnedMixin):
@@ -134,3 +136,39 @@ def test_fk_traversal_ignores_scoping(tenants, service_table):
     # Someone holding an id from another tenant gets the object anyway.
     assert Service.objects.filter(pk=service.pk).exists()
     assert Service.objects.for_tenant(a).filter(pk=service.pk).count() == 0
+
+
+@pytest.mark.django_db
+def test_tenant_defaults_to_utc_and_no_country(tenants):
+    a, _ = tenants
+
+    assert a.timezone == 'UTC'
+    assert a.country == ''
+
+
+@pytest.mark.parametrize('value', ['Mars/Olympus', '', 'not a zone', '../etc/passwd'])
+def test_timezone_validator_rejects_unknown_zones(value):
+    """
+    Both failure shapes matter: ZoneInfo raises ZoneInfoNotFoundError for a plausible
+    name and ValueError for a malformed key, and the validator has to catch both or a
+    bad tenant slips through as a 500.
+    """
+    with pytest.raises(ValidationError):
+        validate_timezone(value)
+
+
+@pytest.mark.parametrize('value', ['UTC', 'America/Argentina/Buenos_Aires', 'Europe/Madrid'])
+def test_timezone_validator_accepts_iana_zones(value):
+    validate_timezone(value)
+
+
+@pytest.mark.django_db
+def test_country_must_be_two_uppercase_letters(tenants):
+    a, _ = tenants
+    a.country = 'arg'
+
+    with pytest.raises(ValidationError):
+        a.full_clean()
+
+    a.country = 'AR'
+    a.full_clean()
