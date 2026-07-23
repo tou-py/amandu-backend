@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "config.settings.test"
+# --ds (command-line precedence) beats the container's DJANGO_SETTINGS_MODULE env
+# var, which the plain ini key does NOT: without this the suite silently runs under
+# development settings instead of test (real email backend, slow hasher, S3 storage).
+addopts = "--ds=config.settings.test"
 
 [dependency-groups]
 dev = [

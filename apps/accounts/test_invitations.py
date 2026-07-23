@@ -1,4 +1,5 @@
 import pytest
+from django.core import mail
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -13,6 +14,14 @@ STRONG_PASSWORD = 'sup3r-secret-pw'
 
 def detail_url(invitation):
     return reverse('accounts:invitation-detail', args=[invitation.pk])
+
+
+def pending_token(email, tenant):
+    """The token never comes back in the API response; it is read here the way a
+    test stands in for the invitee's inbox."""
+    return Invitation.objects.get(
+        email=email, tenant=tenant, status=Invitation.Status.PENDING
+    ).token
 
 
 def api(user=None, tenant=None):
@@ -43,16 +52,40 @@ def staff_user(db, django_user_model, salon):
     return user
 
 
-def test_admin_invites_and_gets_a_token_back(admin_user, salon):
+def test_admin_invites_and_the_token_never_leaves_in_the_response(admin_user, salon):
     res = api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
     )
 
     assert res.status_code == 201
-    assert res.data['token']
+    assert 'token' not in res.data
     invitation = Invitation.objects.get(email='new@example.com', tenant=salon)
     assert invitation.status == Invitation.Status.PENDING
     assert invitation.invited_by.user == admin_user
+
+
+def test_inviting_emails_the_accept_link_to_the_invitee(admin_user, salon):
+    mail.outbox.clear()
+    api(admin_user, salon).post(
+        INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
+    )
+
+    assert len(mail.outbox) == 1
+    message = mail.outbox[0]
+    assert message.to == ['new@example.com']
+    token = Invitation.objects.get(email='new@example.com', tenant=salon).token
+    assert token in message.body
+
+
+def test_reinviting_emails_the_refreshed_token(admin_user, salon):
+    mail.outbox.clear()
+    http = api(admin_user, salon)
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
+
+    assert len(mail.outbox) == 2
+    token = Invitation.objects.get(email='x@example.com', tenant=salon).token
+    assert token in mail.outbox[1].body
 
 
 def test_a_staff_member_cannot_invite(staff_user, salon):
@@ -79,19 +112,21 @@ def test_cannot_invite_someone_who_already_has_a_membership(admin_user, salon, s
 
 def test_reinviting_refreshes_the_same_pending_row(admin_user, salon):
     http = api(admin_user, salon)
-    first = http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
+    first_token = pending_token('x@example.com', salon)
     second = http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
 
     assert second.status_code == 201
     assert Invitation.objects.filter(email='x@example.com', tenant=salon).count() == 1
-    assert first.data['token'] != second.data['token']
+    assert first_token != pending_token('x@example.com', salon)
     assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'admin'
 
 
 def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):
-    token = api(admin_user, salon).post(
+    api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    )
+    token = pending_token('new@example.com', salon)
 
     accept = api().post(
         ACCEPT_URL, {'token': token, 'password': STRONG_PASSWORD}, format='json'
@@ -115,9 +150,10 @@ def test_accepting_as_an_existing_user_does_not_reset_their_password(admin_user,
         email='bob@example.com', password='original-pw-123'
     )
     Membership.objects.create(user=existing, tenant=other, role=Membership.Role.STAFF)
-    token = api(admin_user, salon).post(
+    api(admin_user, salon).post(
         INVITE_LIST, {'email': 'bob@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    )
+    token = pending_token('bob@example.com', salon)
 
     accept = api().post(
         ACCEPT_URL, {'token': token, 'password': 'attacker-chosen-pw'}, format='json'
@@ -130,9 +166,10 @@ def test_accepting_as_an_existing_user_does_not_reset_their_password(admin_user,
 
 
 def test_accept_requires_a_password_for_a_new_user(admin_user, salon):
-    token = api(admin_user, salon).post(
+    api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    )
+    token = pending_token('new@example.com', salon)
 
     res = api().post(ACCEPT_URL, {'token': token}, format='json')
 
@@ -141,9 +178,10 @@ def test_accept_requires_a_password_for_a_new_user(admin_user, salon):
 
 
 def test_accept_rejects_a_weak_password(admin_user, salon):
-    token = api(admin_user, salon).post(
+    api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    )
+    token = pending_token('new@example.com', salon)
 
     res = api().post(ACCEPT_URL, {'token': token, 'password': '123'}, format='json')
 
@@ -157,9 +195,10 @@ def test_accept_with_an_unknown_token_is_rejected(db):
 
 
 def test_a_token_cannot_be_used_twice(admin_user, salon):
-    token = api(admin_user, salon).post(
+    api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    )
+    token = pending_token('new@example.com', salon)
 
     first = api().post(ACCEPT_URL, {'token': token, 'password': STRONG_PASSWORD}, format='json')
     second = api().post(ACCEPT_URL, {'token': token, 'password': STRONG_PASSWORD}, format='json')
@@ -172,6 +211,7 @@ def test_revoking_removes_it_from_the_list_and_blocks_accept(admin_user, salon):
     http = api(admin_user, salon)
     created = http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
     invitation = Invitation.objects.get(pk=created.data['id'])
+    token = invitation.token
 
     delete = http.delete(detail_url(invitation))
 
@@ -180,7 +220,7 @@ def test_revoking_removes_it_from_the_list_and_blocks_accept(admin_user, salon):
     assert invitation.status == Invitation.Status.REVOKED
     assert http.get(INVITE_LIST).data['count'] == 0
     accept = api().post(
-        ACCEPT_URL, {'token': created.data['token'], 'password': STRONG_PASSWORD}, format='json'
+        ACCEPT_URL, {'token': token, 'password': STRONG_PASSWORD}, format='json'
     )
     assert accept.status_code == 400
 
@@ -188,9 +228,8 @@ def test_revoking_removes_it_from_the_list_and_blocks_accept(admin_user, salon):
 def test_list_shows_only_pending_invitations(admin_user, salon):
     http = api(admin_user, salon)
     http.post(INVITE_LIST, {'email': 'a@example.com', 'role': 'staff'}, format='json')
-    accepted_token = http.post(
-        INVITE_LIST, {'email': 'b@example.com', 'role': 'staff'}, format='json'
-    ).data['token']
+    http.post(INVITE_LIST, {'email': 'b@example.com', 'role': 'staff'}, format='json')
+    accepted_token = pending_token('b@example.com', salon)
     api().post(ACCEPT_URL, {'token': accepted_token, 'password': STRONG_PASSWORD}, format='json')
 
     res = http.get(INVITE_LIST)

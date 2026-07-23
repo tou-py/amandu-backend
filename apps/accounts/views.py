@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from apps.accounts.emails import send_invitation_email
 from apps.accounts.models import Invitation
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
@@ -37,7 +38,12 @@ class InvitationViewSet(TenantScopedModelViewSet):
         return super().get_queryset().filter(status=Invitation.Status.PENDING)
 
     def perform_create(self, serializer):
-        serializer.save(tenant=self.request.tenant, invited_by=self.request.membership)
+        invitation = serializer.save(
+            tenant=self.request.tenant, invited_by=self.request.membership
+        )
+        # Covers a re-invite too: create() returns the refreshed row, so its new
+        # token gets mailed.
+        send_invitation_email(invitation)
 
     def perform_destroy(self, invitation):
         invitation.status = Invitation.Status.REVOKED

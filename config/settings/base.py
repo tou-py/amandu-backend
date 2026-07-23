@@ -210,3 +210,22 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
+
+# Email
+# Console by default: safe everywhere, prints to stdout in dev and never sends a
+# real message by accident. Production sets EMAIL_BACKEND to SMTP via the
+# environment along with the host/credentials below.
+EMAIL_BACKEND = env.str('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = env.str('EMAIL_HOST', default='localhost')
+EMAIL_PORT = env.int('EMAIL_PORT', default=25)
+EMAIL_HOST_USER = env.str('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env.str('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=False)
+DEFAULT_FROM_EMAIL = env.str('DEFAULT_FROM_EMAIL', default='no-reply@amandu.local')
+
+# The invited person opens this frontend page, which reads the token from the query
+# string and POSTs it to the accept endpoint. That frontend is not ours, so its URL
+# is configuration, not a hardcoded route.
+INVITATION_ACCEPT_URL = env.str(
+    'INVITATION_ACCEPT_URL', default='http://localhost:3000/invitations/accept'
+)

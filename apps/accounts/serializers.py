@@ -36,15 +36,16 @@ class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class InvitationSerializer(serializers.ModelSerializer):
     """
-    Admin-facing. `token` is returned on purpose: with no email delivery wired
-    yet, the response IS how the admin gets the accept link to relay. `tenant`
-    and `invited_by` are absent -- the view sets them from the request.
+    Admin-facing. `token` is deliberately NOT exposed: it is a bearer credential
+    and travels only to the invitee's inbox, so not even the inviting admin can
+    read it back and accept on someone's behalf. `tenant` and `invited_by` are
+    absent too -- the view sets them from the request.
     """
 
     class Meta:
         model = Invitation
-        fields = ('id', 'email', 'role', 'status', 'token', 'expires_at', 'created_at')
-        read_only_fields = ('id', 'status', 'token', 'expires_at', 'created_at')
+        fields = ('id', 'email', 'role', 'status', 'expires_at', 'created_at')
+        read_only_fields = ('id', 'status', 'expires_at', 'created_at')
 
     def validate_email(self, value):
         tenant = self.context['request'].tenant
