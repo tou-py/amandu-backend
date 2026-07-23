@@ -1,7 +1,7 @@
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
-from apps.scheduling.models import Client
+from apps.scheduling.models import Category, Client, Service
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -53,3 +53,23 @@ class ClientSerializer(serializers.ModelSerializer):
                 {'phone': 'A client with this phone already exists.'}
             )
         return attrs
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ('id', 'name', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+class ServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Service
+        fields = ('id', 'name', 'duration', 'category', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['category'].queryset = Category.objects.for_tenant(tenant)

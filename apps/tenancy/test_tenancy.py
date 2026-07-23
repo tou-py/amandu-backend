@@ -17,7 +17,7 @@ class Service(TenantOwnedMixin):
         constraints = [
             models.UniqueConstraint(
                 fields=['tenant', 'name'],
-                name='unique_service_name_per_tenant',
+                name='unique_stub_name_per_tenant',
             ),
         ]
 

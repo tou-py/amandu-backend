@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.scheduling.models import Client
+from apps.scheduling.models import Category, Client, Service
 
 
 @admin.register(Client)
@@ -14,4 +14,20 @@ class ClientAdmin(admin.ModelAdmin):
     list_display = ('name', 'tenant', 'phone', 'email', 'created_at')
     list_filter = ('tenant',)
     search_fields = ('name', 'phone', 'email')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'tenant', 'created_at')
+    list_filter = ('tenant',)
+    search_fields = ('name',)
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = ('name', 'tenant', 'duration', 'category', 'created_at')
+    list_filter = ('tenant', 'category')
+    search_fields = ('name',)
     readonly_fields = ('created_at', 'updated_at')
