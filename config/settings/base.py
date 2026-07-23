@@ -195,6 +195,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Every list is paginated: an unbounded agenda or client list is a slow query
+    # waiting for the first busy tenant. Responses become {count, next, previous,
+    # results}.
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
 }
 
 # JWT

@@ -116,7 +116,7 @@ def test_service_list_only_returns_the_active_tenants_services(receptionist, sal
     res = api(receptionist, salon).get(SERVICE_LIST)
 
     assert res.status_code == 200
-    assert [s['name'] for s in res.data] == ['Haircut']
+    assert [s['name'] for s in res.data['results']] == ['Haircut']
 
 
 def test_another_tenants_service_is_not_reachable_by_id(receptionist, salon, clinic):

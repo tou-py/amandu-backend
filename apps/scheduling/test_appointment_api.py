@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.db import IntegrityError, connection, transaction
@@ -297,6 +298,93 @@ def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylis
         http.get(LIST_URL)
 
     assert len(three_appointments) == len(one_appointment)
+
+
+def test_the_list_is_paginated(receptionist, salon, stylist, haircut):
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(receptionist, salon).get(LIST_URL)
+
+    assert res.status_code == 200
+    assert res.data['count'] == 1
+    assert 'results' in res.data
+
+
+def test_filter_by_professional(receptionist, salon, stylist, haircut, django_user_model):
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='o2@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    mine = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(receptionist, salon).get(LIST_URL, {'professional': stylist.pk})
+
+    assert [a['id'] for a in res.data['results']] == [str(mine.pk)]
+
+
+def test_filter_by_status(receptionist, salon, stylist, haircut):
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    done = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW + timedelta(hours=1), end=TOMORROW + timedelta(hours=1, minutes=30),
+        status=Appointment.Status.COMPLETED,
+    )
+
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'completed'})
+
+    assert [a['id'] for a in res.data['results']] == [str(done.pk)]
+
+
+def test_date_filter_honors_the_tenant_timezone(db, django_user_model):
+    """R13: 'from'/'to' are days in the tenant timezone, not UTC. An appointment
+    at 02:00 UTC belongs to the previous day in Buenos Aires (UTC-3)."""
+    ba = Tenant.objects.create(
+        name='BA', slug='ba', timezone='America/Argentina/Buenos_Aires'
+    )
+    caller = django_user_model.objects.create_user(email='ba@example.com', password='pw')
+    Membership.objects.create(user=caller, tenant=ba)
+    pro = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='pro@example.com', password='pw'),
+        tenant=ba, attends_appointments=True,
+    )
+    service = Service.objects.create(tenant=ba, name='Cut', duration=timedelta(minutes=30))
+    start = datetime(2026, 6, 1, 2, 0, tzinfo=ZoneInfo('UTC'))
+    Appointment.objects.create(
+        tenant=ba, professional=pro, service=service,
+        start=start, end=start + timedelta(minutes=30),
+    )
+    http = api(caller, ba)
+
+    local_day = http.get(LIST_URL, {'from': '2026-05-31', 'to': '2026-05-31'})
+    utc_day = http.get(LIST_URL, {'from': '2026-06-01', 'to': '2026-06-01'})
+
+    assert local_day.data['count'] == 1
+    assert utc_day.data['count'] == 0
+
+
+def test_a_malformed_date_filter_is_rejected(receptionist, salon):
+    res = api(receptionist, salon).get(LIST_URL, {'from': '01-06-2026'})
+
+    assert res.status_code == 400
+
+
+def test_an_unknown_status_filter_is_rejected(receptionist, salon):
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'pending'})
+
+    assert res.status_code == 400
 
 
 def test_another_tenants_appointment_is_not_reachable(receptionist, salon, stylist, haircut, clinic):

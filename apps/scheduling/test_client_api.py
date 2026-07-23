@@ -120,7 +120,7 @@ def test_list_only_returns_the_active_tenants_clients(receptionist, salon, clini
     res = api(receptionist, salon).get(LIST_URL)
 
     assert res.status_code == 200
-    assert [c['name'] for c in res.data] == ['Ada']
+    assert [c['name'] for c in res.data['results']] == ['Ada']
 
 
 def test_a_client_of_another_tenant_is_not_reachable_by_id(receptionist, salon, clinic):
