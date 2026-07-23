@@ -41,6 +41,10 @@ DJANGO_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Postgres-only field types and constraints. Scheduling needs ExclusionConstraint
+    # to forbid overlapping appointments, which no other backend implements -- which
+    # is also why the test settings now talk to a real Postgres.
+    'django.contrib.postgres',
 ]
 
 THIRD_PARTY_APPS = [
