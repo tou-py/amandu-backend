@@ -49,6 +49,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     'corsheaders',
+    'phonenumber_field',
     'rest_framework',
 ]
 
@@ -56,6 +57,7 @@ LOCAL_APPS = [
     'apps.commons',
     'apps.tenancy',
     'apps.accounts',
+    'apps.scheduling',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
