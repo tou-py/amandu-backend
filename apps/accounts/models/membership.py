@@ -44,6 +44,11 @@ class Membership(models.Model):
         choices=Status.choices,  # type: ignore
         default=Status.ACTIVE,
     )
+    # Having access to a tenant and attending its clients are different facts: a
+    # receptionist books appointments without ever being booked. Default False on
+    # purpose -- appearing in the agenda is a deliberate act, not a side effect of
+    # being given a login.
+    attends_appointments = models.BooleanField(default=False)
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
