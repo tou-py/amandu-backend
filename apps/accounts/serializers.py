@@ -28,6 +28,16 @@ def active_memberships(user):
     ]
 
 
+class ActiveMembershipSerializer(serializers.Serializer):
+    """Documents the active_memberships() dict shape for the login and /me
+    responses. Read-only: the payload is built by hand, this only describes it."""
+
+    tenant_id = serializers.IntegerField()
+    tenant_slug = serializers.SlugField()
+    tenant_name = serializers.CharField()
+    role = serializers.CharField()
+
+
 class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
     Standard email/password login, plus the caller's active memberships in the

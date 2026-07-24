@@ -51,6 +51,7 @@ THIRD_PARTY_APPS = [
     'corsheaders',
     'phonenumber_field',
     'rest_framework',
+    'drf_spectacular',
 ]
 
 LOCAL_APPS = [
@@ -200,6 +201,20 @@ REST_FRAMEWORK = {
     # results}.
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+    # OpenAPI 3 schema generation. The subclass documents the X-Tenant-ID header
+    # on the endpoints that resolve a tenant through it.
+    'DEFAULT_SCHEMA_CLASS': 'apps.tenancy.schema.TenantHeaderAutoSchema',
+}
+
+# drf-spectacular (OpenAPI 3). Schema at /api/schema/, Swagger UI at /api/docs/.
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Amandu API',
+    'DESCRIPTION': 'Multi-tenant appointment scheduling API. Authenticate with a '
+                   'JWT (POST /api/auth/login/) and send X-Tenant-ID to pick the '
+                   'tenant you act for.',
+    'VERSION': '0.1.0',
+    # The Swagger/Redoc pages already render the schema; don't also inline it there.
+    'SERVE_INCLUDE_SCHEMA': False,
 }
 
 # JWT

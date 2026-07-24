@@ -1,4 +1,5 @@
-from rest_framework import status
+from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
+from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,6 +9,7 @@ from apps.accounts.emails import send_invitation_email
 from apps.accounts.models import Invitation
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
+    ActiveMembershipSerializer,
     InvitationSerializer,
     TenantAwareTokenObtainPairSerializer,
     active_memberships,
@@ -16,6 +18,16 @@ from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
+@extend_schema(
+    responses=inline_serializer(
+        name='Login',
+        fields={
+            'access': serializers.CharField(),
+            'refresh': serializers.CharField(),
+            'memberships': ActiveMembershipSerializer(many=True),
+        },
+    )
+)
 class LoginView(TokenObtainPairView):
     """Email/password login that also returns the user's active memberships."""
 
@@ -37,6 +49,16 @@ class MeView(APIView):
 
     permission_classes = (IsAuthenticated,)
 
+    @extend_schema(
+        responses=inline_serializer(
+            name='Me',
+            fields={
+                'id': serializers.IntegerField(),
+                'email': serializers.EmailField(),
+                'memberships': ActiveMembershipSerializer(many=True),
+            },
+        )
+    )
     def get(self, request):
         return Response(
             {
@@ -82,6 +104,10 @@ class AcceptInvitationView(APIView):
     authentication_classes = ()
     permission_classes = (AllowAny,)
 
+    @extend_schema(
+        request=AcceptInvitationSerializer,
+        responses={204: OpenApiResponse(description='Membership created; no body.')},
+    )
     def post(self, request):
         serializer = AcceptInvitationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
