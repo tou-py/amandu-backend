@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # Same major as docker-compose (postgres:18-alpine): the ExclusionConstraint
+      # over tstzrange is Postgres-only, so the suite must run on real Postgres.
+      db:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: amandu
+          POSTGRES_USER: amandu
+          POSTGRES_PASSWORD: amandu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amandu"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # test.py sets sane defaults for SECRET_KEY, hosts, CORS, Redis and S3, but
+      # deliberately NOT the POSTGRES_* vars -- the DB connection is real, so they
+      # must come from the environment. These point at the service container above.
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      POSTGRES_DB: amandu
+      POSTGRES_USER: amandu
+      POSTGRES_PASSWORD: amandu
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check for missing migrations
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Validate OpenAPI schema
+        run: uv run python manage.py spectacular --validate --fail-on-warn --file /dev/null
+
+  # Gate the Dokploy deploy behind green tests. Turn OFF "auto-deploy on push" in
+  # Dokploy and set the app's deploy webhook as the DOKPLOY_DEPLOY_WEBHOOK secret,
+  # so production only ever moves when the suite passes on main.
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Dokploy deploy
+        env:
+          WEBHOOK: ${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}
+        # No-op (with a warning) until the secret is set, so CI is green from day
+        # one and the deploy wires in the moment you paste the webhook.
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::DOKPLOY_DEPLOY_WEBHOOK not set -- skipping deploy trigger."
+            exit 0
+          fi
+          curl -fsSL -X POST "$WEBHOOK"
