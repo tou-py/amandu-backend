@@ -173,6 +173,34 @@ STORAGES = {
 }
 
 
+# Logging
+# Everything to stdout, so the container runtime (and whatever ships its logs)
+# is the single place they are collected -- no files to rotate inside the image.
+# Without this an unhandled 500 in production is invisible past the access log.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {'handlers': ['console'], 'level': 'INFO'},
+    'loggers': {
+        # Django logs 5xx to django.request; keep it on the console handler and
+        # stop it double-printing through the root logger.
+        'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
+
+
 # CORS
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS')
 

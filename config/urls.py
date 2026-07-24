@@ -23,8 +23,11 @@ from drf_spectacular.views import (
 )
 from rest_framework.permissions import AllowAny
 
+from apps.commons.health import healthz
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('healthz/', healthz, name='healthz'),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/', include('apps.scheduling.urls')),
     # API docs. AllowAny because DEFAULT_PERMISSION_CLASSES is IsAuthenticated and
