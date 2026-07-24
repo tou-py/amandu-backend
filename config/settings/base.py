@@ -204,6 +204,26 @@ REST_FRAMEWORK = {
     # OpenAPI 3 schema generation. The subclass documents the X-Tenant-ID header
     # on the endpoints that resolve a tenant through it.
     'DEFAULT_SCHEMA_CLASS': 'apps.tenancy.schema.TenantHeaderAutoSchema',
+    # Rate limiting. The default anon/user rates are a broad backstop; the tight
+    # scoped rates below live on the credential endpoints (login, invitation
+    # accept) that a brute-force attack actually targets. State is kept in the
+    # cache (Redis in prod), so it holds across processes and restarts.
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        # Covers every anonymous endpoint we don't scope explicitly -- notably
+        # token refresh, which takes a refresh token and is therefore a
+        # credential endpoint we can't scope without subclassing SimpleJWT.
+        'anon': '60/min',
+        'user': '1000/min',
+        # Password guessing: five tries a minute per IP, counted whether the
+        # attempt succeeds or 401s, since throttling runs before the view.
+        'login': '5/min',
+        # Token guessing on the public accept endpoint.
+        'accept-invitation': '10/min',
+    },
 }
 
 # drf-spectacular (OpenAPI 3). Schema at /api/schema/, Swagger UI at /api/docs/.

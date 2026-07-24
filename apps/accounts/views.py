@@ -2,6 +2,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_seriali
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -32,6 +33,10 @@ class LoginView(TokenObtainPairView):
     """Email/password login that also returns the user's active memberships."""
 
     serializer_class = TenantAwareTokenObtainPairSerializer
+    # Tighter than the global anon rate: this is the endpoint a credential
+    # brute-force hammers. Overrides DEFAULT_THROTTLE_CLASSES for this view.
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'login'
 
 
 class MeView(APIView):
@@ -103,6 +108,8 @@ class AcceptInvitationView(APIView):
 
     authentication_classes = ()
     permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'accept-invitation'
 
     @extend_schema(
         request=AcceptInvitationSerializer,
