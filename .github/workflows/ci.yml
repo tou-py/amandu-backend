@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [Dev, Prod]
   pull_request:
-    branches: [main]
+    branches: [Dev, Prod]
 
 jobs:
   test:
@@ -61,7 +61,7 @@ jobs:
   # so production only ever moves when the suite passes on main.
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/Prod' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Dokploy deploy
