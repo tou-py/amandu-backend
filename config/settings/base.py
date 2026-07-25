@@ -106,6 +106,7 @@ DATABASES = {
         'PASSWORD': env.str('POSTGRES_PASSWORD'),
         'HOST': env.str('POSTGRES_HOST'),
         'PORT': env.int('POSTGRES_PORT', default=5432),
+        'CONN_MAX_AGE': env.int('CONN_MAX_AGE', default=60),
     }
 }
 
@@ -147,25 +148,14 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# S3 environment keys
-AWS_S3_ENDPOINT_URL = env.str('AWS_S3_ENDPOINT_URL')
-AWS_ACCESS_KEY_ID = env.str('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = env.str('AWS_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = env.str('AWS_STORAGE_BUCKET_NAME')
-AWS_S3_REGION_NAME = env.str('AWS_S3_REGION_NAME', default='us-east-1')
-
-# MinIO serves buckets as a path, not a subdomain.
-AWS_S3_ADDRESSING_STYLE = 'path'
-# without this boto3 signs with the legacy V2 scheme, which trips browser CORS
-# preflights on direct uploads.
-AWS_S3_SIGNATURE_VERSION = 's3v4'
-# Private bucket: .url() returns a presigned GET that expires, so downloads need no endpoint of our own.
-AWS_QUERYSTRING_AUTH = True
-AWS_QUERYSTRING_EXPIRE = env.int('AWS_QUERYSTRING_EXPIRE', default=3600)
-
+# No model stores an uploaded file, so 'default' is never instantiated. It stays
+# declared because STORAGES replaces Django's defaults wholesale instead of merging
+# with them, and a missing key raises on lookup rather than falling back.
+# Reintroducing uploads means setting MEDIA_ROOT and MEDIA_URL again: without them
+# FileSystemStorage roots itself at the working directory.
 STORAGES = {
     'default': {
-        'BACKEND': 'storages.backends.s3.S3Storage',
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
     },
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',

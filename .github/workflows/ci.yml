@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [Dev, Prod]
   pull_request:
-    branches: [main]
+    branches: [Dev, Prod]
 
 jobs:
   test:
@@ -28,7 +28,7 @@ jobs:
           --health-retries 10
 
     env:
-      # test.py sets sane defaults for SECRET_KEY, hosts, CORS, Redis and S3, but
+      # test.py sets sane defaults for SECRET_KEY, hosts, CORS and Redis, but
       # deliberately NOT the POSTGRES_* vars -- the DB connection is real, so they
       # must come from the environment. These point at the service container above.
       DJANGO_SETTINGS_MODULE: config.settings.test
@@ -56,22 +56,4 @@ jobs:
       - name: Validate OpenAPI schema
         run: uv run python manage.py spectacular --validate --fail-on-warn --file /dev/null
 
-  # Gate the Dokploy deploy behind green tests. Turn OFF "auto-deploy on push" in
-  # Dokploy and set the app's deploy webhook as the DOKPLOY_DEPLOY_WEBHOOK secret,
-  # so production only ever moves when the suite passes on main.
-  deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Dokploy deploy
-        env:
-          WEBHOOK: ${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}
-        # No-op (with a warning) until the secret is set, so CI is green from day
-        # one and the deploy wires in the moment you paste the webhook.
-        run: |
-          if [ -z "$WEBHOOK" ]; then
-            echo "::warning::DOKPLOY_DEPLOY_WEBHOOK not set -- skipping deploy trigger."
-            exit 0
-          fi
-          curl -fsSL -X POST "$WEBHOOK"
+# No deployment job on purpose. Dokploy auto-deploys on push to Prod
