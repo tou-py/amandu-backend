@@ -7,7 +7,6 @@ dependencies = [
     "django-cors-headers>=4.9.0",
     "django-environ>=0.14.0",
     "django-phonenumber-field[phonenumbers]>=8.4.0",
-    "django-storages[s3]>=1.14.6",
     "djangorestframework>=3.17.1",
     "djangorestframework-simplejwt>=5.5.1",
     "drf-spectacular>=0.30.0",
@@ -20,7 +19,7 @@ dependencies = [
 [tool.pytest.ini_options]
 # --ds (command-line precedence) beats the container's DJANGO_SETTINGS_MODULE env
 # var, which the plain ini key does NOT: without this the suite silently runs under
-# development settings instead of test (real email backend, slow hasher, S3 storage).
+# development settings instead of test (real email backend, slow hasher, real Redis).
 addopts = "--ds=config.settings.test"
 
 [dependency-groups]

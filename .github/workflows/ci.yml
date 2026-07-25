@@ -28,7 +28,7 @@ jobs:
           --health-retries 10
 
     env:
-      # test.py sets sane defaults for SECRET_KEY, hosts, CORS, Redis and S3, but
+      # test.py sets sane defaults for SECRET_KEY, hosts, CORS and Redis, but
       # deliberately NOT the POSTGRES_* vars -- the DB connection is real, so they
       # must come from the environment. These point at the service container above.
       DJANGO_SETTINGS_MODULE: config.settings.test

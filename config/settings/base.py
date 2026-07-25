@@ -148,13 +148,11 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Uploaded media. Local disk by default, which is all development and tests need;
-# production.py swaps the default storage for R2 and is the only module that
-# demands the object-storage credentials. Keeping them out of here means running
-# the project locally requires no external account.
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
-
+# No model stores an uploaded file, so 'default' is never instantiated. It stays
+# declared because STORAGES replaces Django's defaults wholesale instead of merging
+# with them, and a missing key raises on lookup rather than falling back.
+# Reintroducing uploads means setting MEDIA_ROOT and MEDIA_URL again: without them
+# FileSystemStorage roots itself at the working directory.
 STORAGES = {
     'default': {
         'BACKEND': 'django.core.files.storage.FileSystemStorage',
