@@ -106,6 +106,7 @@ DATABASES = {
         'PASSWORD': env.str('POSTGRES_PASSWORD'),
         'HOST': env.str('POSTGRES_HOST'),
         'PORT': env.int('POSTGRES_PORT', default=5432),
+        'CONN_MAX_AGE': env.int('CONN_MAX_AGE', default=60),
     }
 }
 
@@ -147,25 +148,16 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# S3 environment keys
-AWS_S3_ENDPOINT_URL = env.str('AWS_S3_ENDPOINT_URL')
-AWS_ACCESS_KEY_ID = env.str('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = env.str('AWS_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = env.str('AWS_STORAGE_BUCKET_NAME')
-AWS_S3_REGION_NAME = env.str('AWS_S3_REGION_NAME', default='us-east-1')
-
-# MinIO serves buckets as a path, not a subdomain.
-AWS_S3_ADDRESSING_STYLE = 'path'
-# without this boto3 signs with the legacy V2 scheme, which trips browser CORS
-# preflights on direct uploads.
-AWS_S3_SIGNATURE_VERSION = 's3v4'
-# Private bucket: .url() returns a presigned GET that expires, so downloads need no endpoint of our own.
-AWS_QUERYSTRING_AUTH = True
-AWS_QUERYSTRING_EXPIRE = env.int('AWS_QUERYSTRING_EXPIRE', default=3600)
+# Uploaded media. Local disk by default, which is all development and tests need;
+# production.py swaps the default storage for R2 and is the only module that
+# demands the object-storage credentials. Keeping them out of here means running
+# the project locally requires no external account.
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 STORAGES = {
     'default': {
-        'BACKEND': 'storages.backends.s3.S3Storage',
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
     },
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',

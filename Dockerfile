@@ -61,8 +61,16 @@ RUN SECRET_KEY=build ALLOWED_HOSTS=build POSTGRES_DB=build POSTGRES_USER=build P
     AWS_SECRET_ACCESS_KEY=build AWS_STORAGE_BUCKET_NAME=build \
     python manage.py collectstatic --noinput
 
+# --chmod: the exec bit is set here rather than relying on the one git recorded,
+# so a fresh clone on any platform builds a runnable entrypoint.
+# ponytail: migrate runs per container, which assumes a single replica. With more
+# than one they race -- move migrate to its own deploy step before scaling out.
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+
 RUN useradd --create-home --uid 1000 app
 USER app
+
+ENTRYPOINT ["/entrypoint.sh"]
 
 # --timeout kills hung workers, --max-requests recycles them to bound memory growth.
 CMD ["gunicorn", "config.wsgi:application", \
