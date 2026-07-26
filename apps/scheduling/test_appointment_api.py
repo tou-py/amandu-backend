@@ -46,9 +46,13 @@ def clinic(db):
 
 @pytest.fixture
 def receptionist(db, django_user_model, salon):
-    """Acts for the tenant but does not attend appointments (attends default False)."""
+    """
+    Books the team's diary but does not attend appointments (attends default
+    False). Coordinator, not staff: booking someone else's day is what this
+    fixture exists to do, and staff may only book their own.
+    """
     user = django_user_model.objects.create_user(email='r@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon)
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
     return user
 
 
@@ -562,3 +566,58 @@ def test_another_tenants_appointment_is_not_reachable(receptionist, salon, styli
     res = api(receptionist, salon).get(detail_url(foreign))
 
     assert res.status_code == 404
+
+
+def test_staff_may_book_their_own_day(salon, stylist, client_, haircut):
+    """The one professional a staff member is accountable for is themselves."""
+    res = api(stylist.user, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+
+
+def test_staff_may_not_book_a_colleagues_day(db, django_user_model, salon, stylist, client_, haircut):
+    """
+    Booking for a colleague fills THEIR day, which they answer for. It takes a
+    role that answers for the diary as a whole: owner, admin or coordinator.
+    """
+    user = django_user_model.objects.create_user(email='other@example.com', password='pw')
+    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+
+    res = api(other.user, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 400
+    assert 'professional' in res.data
+    assert not Appointment.objects.exists()
+
+
+def test_a_coordinator_may_book_for_the_whole_team(receptionist, salon, stylist, client_, haircut):
+    """Coordinator attends clients like staff but keeps the team's diary."""
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+
+
+def test_staff_may_not_reassign_an_appointment_to_someone_else(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    """The rule lives in the serializer, so a PATCH cannot walk around it."""
+    user = django_user_model.objects.create_user(email='other2@example.com', password='pw')
+    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(other.user, salon).patch(
+        detail_url(appointment), {'professional': stylist.pk}, format='json'
+    )
+
+    assert res.status_code == 400
+    appointment.refresh_from_db()
+    assert appointment.professional == other

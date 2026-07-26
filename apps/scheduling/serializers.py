@@ -220,6 +220,22 @@ class AppointmentSerializer(serializers.ModelSerializer):
             self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
             self.fields['service'].queryset = Service.objects.for_tenant(tenant)
 
+    def validate_professional(self, professional):
+        """
+        Whose day this appointment lands in.
+
+        Staff book for themselves; owner, admin and coordinator book for the
+        whole team. Enforced here rather than in the view because it is a fact
+        about the payload, so it holds for a create and for a PATCH that
+        reassigns an existing slot alike.
+        """
+        membership = self.context['request'].membership
+        if professional != membership and not membership.can_schedule_for_others():
+            raise serializers.ValidationError(
+                'Your role only allows booking appointments for yourself.'
+            )
+        return professional
+
     def validate(self, attrs):
         tenant = self.context['request'].tenant
         # On a partial update the unchanged sides come from the instance.
