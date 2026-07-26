@@ -76,21 +76,44 @@ class ServiceSerializer(serializers.ModelSerializer):
             self.fields['category'].queryset = Category.objects.for_tenant(tenant)
 
 
+class ProfessionalSerializer(serializers.ModelSerializer):
+    """
+    Read model of a membership as the agenda needs it: who can be booked and how
+    to label them. Deliberately not the membership itself -- role and status are
+    access facts, and the agenda only needs an id and a name.
+    """
+
+    name = serializers.CharField(source='display_name', read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'name')
+
+
 class AppointmentSerializer(serializers.ModelSerializer):
     """
     Every relation is scoped to the request tenant, so the four tenant paths
     (own, professional, clients, service) always agree -- the database does not
     check that `end` is derived from the service duration, never sent.
+
+    The *_name fields exist so an agenda can render a slot without resolving
+    three ids per appointment: a calendar showing a week is hundreds of rows, and
+    the alternative is hundreds of round trips from a browser. They are read-only
+    labels; the ids remain the writable contract.
     """
 
     clients = serializers.PrimaryKeyRelatedField(
         many=True, allow_empty=False, queryset=Client.objects.none()
     )
+    professional_name = serializers.CharField(source='professional.display_name', read_only=True)
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    client_names = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
         fields = (
-            'id', 'professional', 'clients', 'service', 'start', 'end', 'status',
+            'id', 'professional', 'professional_name', 'clients', 'client_names',
+            'service', 'service_name', 'start', 'end', 'status',
             'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
         )
         read_only_fields = (
@@ -98,16 +121,15 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         )
 
+    def get_client_names(self, appointment) -> list[str]:
+        return [client.name for client in appointment.clients.all()]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             # Only active, bookable memberships of this tenant may be the professional.
-            self.fields['professional'].queryset = Membership.objects.filter(
-                tenant=tenant,
-                status=Membership.Status.ACTIVE,
-                attends_appointments=True,
-            )
+            self.fields['professional'].queryset = Membership.professionals_for(tenant)
             self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
             self.fields['service'].queryset = Service.objects.for_tenant(tenant)
 

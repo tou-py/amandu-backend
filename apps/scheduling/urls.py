@@ -4,6 +4,7 @@ from apps.scheduling.views import (
     AppointmentViewSet,
     CategoryViewSet,
     ClientViewSet,
+    ProfessionalViewSet,
     ServiceViewSet,
 )
 
@@ -14,5 +15,6 @@ router.register('clients', ClientViewSet, basename='client')
 router.register('categories', CategoryViewSet, basename='category')
 router.register('services', ServiceViewSet, basename='service')
 router.register('appointments', AppointmentViewSet, basename='appointment')
+router.register('professionals', ProfessionalViewSet, basename='professional')
 
 urlpatterns = router.urls

@@ -62,5 +62,22 @@ class Membership(models.Model):
             ),
         ]
 
+    @classmethod
+    def professionals_for(cls, tenant):
+        """
+        Who may be booked in this tenant's agenda. One definition on purpose: the
+        answer is needed both to validate an appointment's professional and to
+        list them for the agenda, and two copies of the same filter drift apart.
+        """
+        return cls.objects.filter(
+            tenant=tenant,
+            status=cls.Status.ACTIVE,
+            attends_appointments=True,
+        )
+
+    def display_name(self):
+        """Label for the agenda. Falls back to the email, which always exists."""
+        return self.user.get_full_name().strip() or self.user.email
+
     def __str__(self):
         return f'{self.user} @ {self.tenant} ({self.role})'

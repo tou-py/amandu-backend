@@ -6,13 +6,21 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from rest_framework import mixins, viewsets
+from rest_framework.permissions import IsAuthenticated
+
+from apps.accounts.models import Membership
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.serializers import (
     AppointmentSerializer,
     CategorySerializer,
     ClientSerializer,
+    ProfessionalSerializer,
     ServiceSerializer,
 )
+from apps.tenancy.permissions import HasActiveMembership
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -31,8 +39,71 @@ class ServiceViewSet(TenantScopedModelViewSet):
     serializer_class = ServiceSerializer
 
 
+class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    The people this tenant's agenda can book, so a client can label and colour a
+    slot without asking who each `professional` id belongs to.
+
+    Not a TenantScopedModelViewSet: that base re-scopes through TenantOwnedMixin's
+    `for_tenant`, and Membership has no such manager -- it IS the tenant link.
+    The scoping is therefore written out here.
+
+    List only. There is no detail route because nothing needs one: the agenda
+    reads the whole list once to resolve ids, and memberships are created by
+    invitation, never here.
+
+    Unpaginated on purpose. This is a reference list read to resolve ids, so a
+    truncated first page would silently mislabel every slot belonging to the
+    professionals on page two. It is bounded by a business's staff, not by data.
+    """
+
+    serializer_class = ProfessionalSerializer
+    permission_classes = (IsAuthenticated, HasActiveMembership)
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            Membership.professionals_for(self.request.tenant)
+            .select_related('user')
+            .order_by('user__first_name', 'user__email')
+        )
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                'from',
+                OpenApiTypes.DATE,
+                description='First calendar day to include (YYYY-MM-DD), read in the '
+                            'tenant timezone. Inclusive.',
+            ),
+            OpenApiParameter(
+                'to',
+                OpenApiTypes.DATE,
+                description='Last calendar day to include (YYYY-MM-DD), read in the '
+                            'tenant timezone. Inclusive of the whole day.',
+            ),
+            OpenApiParameter(
+                'professional',
+                OpenApiTypes.INT,
+                description='Membership id of the professional attending.',
+            ),
+            OpenApiParameter(
+                'status',
+                OpenApiTypes.STR,
+                enum=Appointment.Status.values,
+                description='Only appointments in this status.',
+            ),
+        ],
+    ),
+)
 class AppointmentViewSet(TenantScopedModelViewSet):
-    queryset = Appointment.objects.select_related('professional', 'service').prefetch_related('clients')
+    queryset = (
+        Appointment.objects
+        .select_related('professional__user', 'service')
+        .prefetch_related('clients')
+    )
     serializer_class = AppointmentSerializer
 
     def get_queryset(self):
