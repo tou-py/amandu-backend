@@ -41,6 +41,30 @@ class ActiveMembershipSerializer(serializers.Serializer):
     role = serializers.CharField()
 
 
+class MemberSerializer(serializers.ModelSerializer):
+    """
+    One person on the team, as the team screen needs them.
+
+    Distinct from ProfessionalSerializer, which answers a different question:
+    that one lists who may be BOOKED, so it excludes anybody who does not attend
+    and carries no role. This lists who BELONGS, so an owner can see the
+    receptionist and the admin who never appear in an agenda.
+
+    Read-only for now. Changing someone's role or whether they attend is a
+    separate action with its own consequences -- an owner demoting themselves
+    would lock the business out of its own settings -- and it is not what a list
+    is for.
+    """
+
+    name = serializers.CharField(source='display_name', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'name', 'email', 'role', 'status', 'attends_appointments', 'joined_at')
+        read_only_fields = fields
+
+
 class MeSerializer(serializers.ModelSerializer):
     """
     The signed-in user's own view of themselves, and the only writable one: a

@@ -7,6 +7,7 @@ from apps.accounts.views import (
     ChangePasswordView,
     InvitationViewSet,
     LoginView,
+    MemberListView,
     MeView,
 )
 
@@ -20,6 +21,7 @@ urlpatterns = [
     path('refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('me/', MeView.as_view(), name='me'),
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
+    path('members/', MemberListView.as_view(), name='member-list'),
     # Before the router: 'accept' must not be captured as an invitation pk.
     path('invitations/accept/', AcceptInvitationView.as_view(), name='invitation-accept'),
 ] + router.urls

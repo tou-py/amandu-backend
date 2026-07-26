@@ -3,17 +3,19 @@ from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.generics import ListAPIView
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.accounts.emails import send_invitation_email
-from apps.accounts.models import Invitation
+from apps.accounts.models import Invitation, Membership
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
     ChangePasswordSerializer,
     InvitationSerializer,
     MeSerializer,
+    MemberSerializer,
     TenantAwareTokenObtainPairSerializer,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
@@ -140,3 +142,31 @@ class AcceptInvitationView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MemberListView(ListAPIView):
+    """
+    Everyone with access to the active tenant, whether or not they are bookable.
+
+    Not /api/professionals/, which answers "who may be booked" and therefore
+    hides the receptionist and any admin who does not attend. An owner looking
+    at their team needs to see the people, not the diary.
+
+    Ordered so the list reads as a hierarchy rather than by insertion: owner
+    first, then admins, then coordinators, then staff, alphabetically within
+    each. The ordering is done in Python off the role choices so it cannot drift
+    from the enum the way a hand-written Case/When would.
+    """
+
+    serializer_class = MemberSerializer
+    permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantAdmin)
+    pagination_class = None
+
+    def get_queryset(self):
+        rank = {role: index for index, role in enumerate(Membership.Role.values)}
+        members = (
+            Membership.objects
+            .select_related('user')
+            .filter(tenant=self.request.tenant)
+        )
+        return sorted(members, key=lambda m: (rank.get(m.role, 99), m.display_name().lower()))
