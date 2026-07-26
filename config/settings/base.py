@@ -262,6 +262,7 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '0.1.0',
     # The Swagger/Redoc pages already render the schema; don't also inline it there.
     'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
 }
 
 # JWT
