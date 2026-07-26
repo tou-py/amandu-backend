@@ -1,7 +1,21 @@
-from rest_framework import viewsets
+from django.db.models import ProtectedError
+from rest_framework import status, viewsets
+from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAuthenticated
 
 from apps.tenancy.permissions import HasActiveMembership
+
+
+class Referenced(APIException):
+    """
+    409 rather than 400: nothing is wrong with the request. The row exists, the
+    caller is allowed to delete it, and what stops them is the history hanging
+    off it -- that is state, not input.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = 'This record is referenced by others and cannot be deleted.'
+    default_code = 'referenced'
 
 
 class TenantScopedModelViewSet(viewsets.ModelViewSet):
@@ -30,3 +44,20 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.tenant)
+
+    def perform_destroy(self, instance):
+        """
+        `on_delete=PROTECT` is what stops a booked client or a service in use
+        from being erased out from under an appointment's history. Uncaught it
+        reaches the handler as an unhandled ProtectedError -- a 500, which
+        reports an operator's ordinary mistake as a server fault and tells them
+        nothing about how to proceed.
+
+        Handled here rather than per viewset because every tenant-owned resource
+        routes through this base, and the two that are protected today (Client,
+        Service) were both returning 500.
+        """
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise Referenced()

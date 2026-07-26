@@ -122,6 +122,22 @@ def test_reinviting_refreshes_the_same_pending_row(admin_user, salon):
     assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'admin'
 
 
+def test_reinviting_without_a_role_keeps_the_one_already_set(admin_user, salon):
+    """
+    `role` is optional in the contract (the model has a default), so it is absent
+    from validated_data when omitted. Subscripting it in the re-invite branch
+    raised KeyError -- a 500 on a legal request. Every other test here sends the
+    role, which is why this went unseen.
+    """
+    http = api(admin_user, salon)
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
+
+    second = http.post(INVITE_LIST, {'email': 'x@example.com'}, format='json')
+
+    assert second.status_code == 201
+    assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'admin'
+
+
 def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):
     api(admin_user, salon).post(
         INVITE_LIST, {'email': 'new@example.com', 'role': 'staff'}, format='json'

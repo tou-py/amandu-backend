@@ -85,3 +85,20 @@ class IsTenantAdmin(BasePermission):
             Membership.Role.OWNER,
             Membership.Role.ADMIN,
         )
+
+
+class IsTenantOwner(BasePermission):
+    """
+    Stricter than IsTenantAdmin: the owner alone.
+
+    For the few things that are decisions about the business rather than about
+    its day -- its name, the timezone every appointment is read in, the country
+    phone numbers are parsed against -- where an admin hired to run the diary
+    has no standing. Layered AFTER HasActiveMembership, which set the membership.
+    """
+
+    message = 'Requires the tenant owner role.'
+
+    def has_permission(self, request, view):
+        membership = getattr(request, 'membership', None)
+        return membership is not None and membership.role == Membership.Role.OWNER

@@ -3,17 +3,20 @@ from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.generics import ListAPIView
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.accounts.emails import send_invitation_email
-from apps.accounts.models import Invitation
+from apps.accounts.models import Invitation, Membership
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
+    ChangePasswordSerializer,
     InvitationSerializer,
+    MeSerializer,
+    MemberSerializer,
     TenantAwareTokenObtainPairSerializer,
-    active_memberships,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -50,28 +53,47 @@ class MeView(APIView):
     X-Tenant-ID on the next request, and HasActiveMembership re-validates it.
     Requires only authentication, never an active tenant -- picking one is the
     whole point.
+
+    PATCH edits the caller's own profile, and only ever theirs: the serializer is
+    bound to request.user, so there is no id in the payload to point elsewhere.
     """
 
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(
-        responses=inline_serializer(
-            name='Me',
-            fields={
-                'id': serializers.IntegerField(),
-                'email': serializers.EmailField(),
-                'memberships': ActiveMembershipSerializer(many=True),
-            },
-        )
-    )
+    @extend_schema(responses=MeSerializer)
     def get(self, request):
-        return Response(
-            {
-                'id': request.user.id,
-                'email': request.user.email,
-                'memberships': active_memberships(request.user),
-            }
+        return Response(MeSerializer(request.user).data)
+
+    @extend_schema(request=MeSerializer, responses=MeSerializer)
+    def patch(self, request):
+        serializer = MeSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ChangePasswordView(APIView):
+    """
+    Separate from the profile PATCH on purpose: this one needs the current
+    password as proof, returns no body, and is the endpoint worth throttling.
+    Folding it into the profile would put a credential check on every name edit.
+    """
+
+    permission_classes = (IsAuthenticated,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'change-password'
+
+    @extend_schema(
+        request=ChangePasswordSerializer,
+        responses={204: OpenApiResponse(description='Password changed; no body.')},
+    )
+    def post(self, request):
+        serializer = ChangePasswordSerializer(
+            data=request.data, context={'request': request}
         )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InvitationViewSet(TenantScopedModelViewSet):
@@ -120,3 +142,31 @@ class AcceptInvitationView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MemberListView(ListAPIView):
+    """
+    Everyone with access to the active tenant, whether or not they are bookable.
+
+    Not /api/professionals/, which answers "who may be booked" and therefore
+    hides the receptionist and any admin who does not attend. An owner looking
+    at their team needs to see the people, not the diary.
+
+    Ordered so the list reads as a hierarchy rather than by insertion: owner
+    first, then admins, then coordinators, then staff, alphabetically within
+    each. The ordering is done in Python off the role choices so it cannot drift
+    from the enum the way a hand-written Case/When would.
+    """
+
+    serializer_class = MemberSerializer
+    permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantAdmin)
+    pagination_class = None
+
+    def get_queryset(self):
+        rank = {role: index for index, role in enumerate(Membership.Role.values)}
+        members = (
+            Membership.objects
+            .select_related('user')
+            .filter(tenant=self.request.tenant)
+        )
+        return sorted(members, key=lambda m: (rank.get(m.role, 99), m.display_name().lower()))

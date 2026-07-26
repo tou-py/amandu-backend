@@ -1,8 +1,15 @@
+import phonenumbers
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.accounts.models import Membership
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import (
+    Appointment,
+    AppointmentClient,
+    Category,
+    Client,
+    Service,
+)
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -32,38 +39,74 @@ class ClientSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """
-        The database constraint is what actually guarantees uniqueness; this only
-        turns the ordinary case into a 400 with a field error instead of an
-        IntegrityError surfacing as a 500. DRF cannot generate the validator itself
-        because the constraint spans `tenant`, which is not a serializer field.
+        The database constraint still guarantees exact uniqueness; this is the
+        wider net in front of it, and it stays check-then-insert, so two
+        concurrent creates can both pass here and the constraint decides.
         """
         phone = attrs.get('phone')
         if not phone:
             return attrs
 
-        duplicates = Client.objects.for_tenant(
-            self.context['request'].tenant
-        ).filter(phone=phone)
+        others = Client.objects.for_tenant(self.context['request'].tenant)
         if self.instance is not None:
-            duplicates = duplicates.exclude(pk=self.instance.pk)
+            others = others.exclude(pk=self.instance.pk)
 
-        # check-then-insert, so two concurrent creates can still both pass
-        # here and the constraint decides.
-        if duplicates.exists():
-            raise serializers.ValidationError(
-                {'phone': 'A client with this phone already exists.'}
-            )
+        tail = str(phone.national_number)[-7:]
+
+        for other in others.filter(phone__endswith=tail).iterator():
+            match = phonenumbers.is_number_match(str(phone), str(other.phone))
+            if match != phonenumbers.MatchType.NO_MATCH:
+                raise serializers.ValidationError(
+                    {'phone': 'A client with this phone already exists.'}
+                )
         return attrs
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class TenantUniqueNameMixin:
+    """
+    Turns `UniqueConstraint(fields=['tenant', 'name'])` into a 400 instead of a 500.
+
+    DRF would normally build a UniqueTogetherValidator from that constraint, but
+    it skips any constraint whose sources the serializer does not all map
+    (rest_framework/serializers.py, `get_unique_together_validators`) -- and
+    `tenant` is never one, because TenantOwnedMixin marks it `editable=False` so
+    no payload can reassign a row to another tenant. So the duplicate used to
+    reach the database as an unhandled IntegrityError: a 500 reporting an
+    operator's ordinary typo as a server fault.
+
+    Deliberately stricter than the constraint, which is case-sensitive: two
+    categories called "Hair" and "hair" would be two rows the database accepts
+    and no human can tell apart in a select.
+
+    Like ClientSerializer.validate, this stays check-then-insert -- two
+    concurrent creates can both pass here and the constraint decides. It is the
+    wider, kinder net in front of the guarantee, not the guarantee itself.
+    """
+
+    def validate_name(self, value):
+        request = self.context.get('request')
+        tenant = getattr(request, 'tenant', None)
+        if tenant is None:
+            return value
+
+        others = self.Meta.model.objects.for_tenant(tenant).filter(name__iexact=value)
+        if self.instance is not None:
+            others = others.exclude(pk=self.instance.pk)
+
+        if others.exists():
+            label = self.Meta.model._meta.verbose_name
+            raise serializers.ValidationError(f'A {label} with this name already exists.')
+        return value
+
+
+class CategorySerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ('id', 'name', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_at', 'updated_at')
 
 
-class ServiceSerializer(serializers.ModelSerializer):
+class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Service
         fields = ('id', 'name', 'duration', 'category', 'created_at', 'updated_at')
@@ -76,21 +119,91 @@ class ServiceSerializer(serializers.ModelSerializer):
             self.fields['category'].queryset = Category.objects.for_tenant(tenant)
 
 
+class ProfessionalSerializer(serializers.ModelSerializer):
+    """
+    Read model of a membership as the agenda needs it: who can be booked and how
+    to label them. Deliberately not the membership itself -- role and status are
+    access facts, and the agenda only needs an id and a name.
+    """
+
+    name = serializers.CharField(source='display_name', read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'name')
+
+
+class AttendeeSerializer(serializers.ModelSerializer):
+    """
+    One person in the slot, with whether they turned up. Flattens the through row
+    so a client reads `{id, name, attendance}` and never has to know a join table
+    sits underneath.
+    """
+
+    id = serializers.UUIDField(source='client_id', read_only=True)
+    name = serializers.CharField(source='client.name', read_only=True)
+
+    class Meta:
+        model = AppointmentClient
+        # Read-only here: attendance is recorded through its own action, so it
+        # cannot ride along on an edit that was only meant to move the time.
+        fields = ('id', 'name', 'attendance')
+        read_only_fields = fields
+
+
+class AttendanceSerializer(serializers.Serializer):
+    """
+    Body of the attendance action: one person, one verdict. Not a list -- the
+    receptionist marks people as they walk in, and a whole-roster payload would
+    make every partial update overwrite the ones already recorded.
+    """
+
+    client = serializers.UUIDField()
+    attendance = serializers.ChoiceField(choices=AppointmentClient.Attendance.choices)
+
+
+class AppointmentCancelSerializer(serializers.Serializer):
+    """
+    Body of the cancel action. Not a ModelSerializer on purpose: cancelling takes
+    a reason, not an appointment. Declaring it also stops the schema from
+    advertising a whole Appointment as the payload, which is what drf-spectacular
+    infers for a custom action from the viewset's serializer_class.
+    """
+
+    reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+
+
 class AppointmentSerializer(serializers.ModelSerializer):
     """
     Every relation is scoped to the request tenant, so the four tenant paths
     (own, professional, clients, service) always agree -- the database does not
     check that `end` is derived from the service duration, never sent.
+
+    The *_name fields exist so an agenda can render a slot without resolving
+    three ids per appointment: a calendar showing a week is hundreds of rows, and
+    the alternative is hundreds of round trips from a browser. They are read-only
+    labels; the ids remain the writable contract.
+
+    `clients` writes, `attendees` reads. The same people either way: one is the
+    list of ids a booking is made from, the other is those people with their
+    names and whether they turned up.
     """
 
+    # Write-only: `attendees` already carries these people on the way out, with
+    # their names and their attendance. Serialising the bare ids too would send
+    # the same roster twice and cost a query per slot to do it.
     clients = serializers.PrimaryKeyRelatedField(
-        many=True, allow_empty=False, queryset=Client.objects.none()
+        many=True, allow_empty=False, queryset=Client.objects.none(), write_only=True
     )
+    professional_name = serializers.CharField(source='professional.display_name', read_only=True)
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
 
     class Meta:
         model = Appointment
         fields = (
-            'id', 'professional', 'clients', 'service', 'start', 'end', 'status',
+            'id', 'professional', 'professional_name', 'clients', 'attendees',
+            'service', 'service_name', 'start', 'end', 'status',
             'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
         )
         read_only_fields = (
@@ -103,13 +216,25 @@ class AppointmentSerializer(serializers.ModelSerializer):
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             # Only active, bookable memberships of this tenant may be the professional.
-            self.fields['professional'].queryset = Membership.objects.filter(
-                tenant=tenant,
-                status=Membership.Status.ACTIVE,
-                attends_appointments=True,
-            )
+            self.fields['professional'].queryset = Membership.professionals_for(tenant)
             self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
             self.fields['service'].queryset = Service.objects.for_tenant(tenant)
+
+    def validate_professional(self, professional):
+        """
+        Whose day this appointment lands in.
+
+        Staff book for themselves; owner, admin and coordinator book for the
+        whole team. Enforced here rather than in the view because it is a fact
+        about the payload, so it holds for a create and for a PATCH that
+        reassigns an existing slot alike.
+        """
+        membership = self.context['request'].membership
+        if professional != membership and not membership.can_schedule_for_others():
+            raise serializers.ValidationError(
+                'Your role only allows booking appointments for yourself.'
+            )
+        return professional
 
     def validate(self, attrs):
         tenant = self.context['request'].tenant

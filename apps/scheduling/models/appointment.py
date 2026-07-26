@@ -28,10 +28,15 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     """
 
     class Status(models.TextChoices):
+        """
+        What happened to the BOOKING, not to the people in it. Whether a given
+        client turned up is `AppointmentClient.attendance`: a slot can hold a
+        group, and one absence there does not describe the other three.
+        """
+
         SCHEDULED = 'scheduled', 'Scheduled'
         COMPLETED = 'completed', 'Completed'
         CANCELLED = 'cancelled', 'Cancelled'
-        NO_SHOW = 'no_show', 'No show'
 
     professional = models.ForeignKey(
         'accounts.Membership',
@@ -112,15 +117,24 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         self.status = self.Status.COMPLETED
         self.save(update_fields=['status', 'updated_at'])
 
-    def mark_no_show(self):
-        self._require_scheduled()
-        self.status = self.Status.NO_SHOW
-        self.save(update_fields=['status', 'updated_at'])
-
 
 class AppointmentClient(models.Model):
-    """Through row for Appointment.clients. Its only job is the PROTECT on the
-    client side; deleting the appointment (CASCADE) takes its own links."""
+    """
+    Through row for Appointment.clients. Keeps the PROTECT on the client side --
+    deleting the appointment (CASCADE) takes its own links -- and carries whether
+    that particular person turned up.
+    """
+
+    class Attendance(models.TextChoices):
+        # Nobody has said anything yet. The honest state for an appointment that
+        # has not happened, and the one a fresh booking starts in.
+        PENDING = 'pending', 'Pending'
+        ATTENDED = 'attended', 'Attended'
+        NO_SHOW = 'no_show', 'No show'
+        # Told us they were not coming, too late to give the slot away. Worth
+        # separating from a silent absence: the same outcome, different courtesy,
+        # and a business that charges for one may not charge for the other.
+        LATE_CANCEL = 'late_cancel', 'Late cancellation'
 
     appointment = models.ForeignKey(
         'scheduling.Appointment',
@@ -132,6 +146,21 @@ class AppointmentClient(models.Model):
         on_delete=models.PROTECT,
         related_name='appointment_links',
     )
+    attendance = models.CharField(
+        max_length=20,
+        choices=Attendance.choices,  # type: ignore
+        default=Attendance.PENDING,
+    )
+
+    def mark(self, attendance):
+        """
+        A cancelled booking never ran, so nobody in it attended or failed to:
+        recording either would invent an event that did not happen.
+        """
+        if self.appointment.status == Appointment.Status.CANCELLED:
+            raise ValidationError('A cancelled appointment has no attendance to record.')
+        self.attendance = attendance
+        self.save(update_fields=['attendance'])
 
     class Meta:
         db_table = 'tb_appointment_client'

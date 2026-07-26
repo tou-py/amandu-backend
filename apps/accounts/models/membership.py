@@ -15,6 +15,12 @@ class Membership(models.Model):
     class Role(models.TextChoices):
         OWNER = 'owner', 'Owner'
         ADMIN = 'admin', 'Admin'
+        # Runs the diary without running the business: attends clients like
+        # staff, and books for the whole team like an admin, but holds none of
+        # an admin's authority over who belongs to the tenant. The senior hand
+        # at the front desk who also works the floor -- a real job that neither
+        # the roles above nor the one below describes.
+        COORDINATOR = 'coordinator', 'Coordinator'
         STAFF = 'staff', 'Staff'
 
     class Status(models.TextChoices):
@@ -61,6 +67,37 @@ class Membership(models.Model):
                 name='unique_membership_per_user_tenant',
             ),
         ]
+
+    @classmethod
+    def professionals_for(cls, tenant):
+        """
+        Who may be booked in this tenant's agenda. One definition on purpose: the
+        answer is needed both to validate an appointment's professional and to
+        list them for the agenda, and two copies of the same filter drift apart.
+        """
+        return cls.objects.filter(
+            tenant=tenant,
+            status=cls.Status.ACTIVE,
+            attends_appointments=True,
+        )
+
+    def can_schedule_for_others(self):
+        """
+        May this member book an appointment under someone else's name.
+
+        One definition on purpose: the serializer enforces it and the front end
+        mirrors it to decide whether the professional field is editable, and two
+        copies of the same rule drift apart.
+
+        Staff are excluded deliberately. Booking for a colleague fills THEIR day,
+        which they are the one accountable for, so it takes a role that answers
+        for the diary as a whole.
+        """
+        return self.role in (self.Role.OWNER, self.Role.ADMIN, self.Role.COORDINATOR)
+
+    def display_name(self):
+        """Label for the agenda. Falls back to the email, which always exists."""
+        return self.user.get_full_name().strip() or self.user.email
 
     def __str__(self):
         return f'{self.user} @ {self.tenant} ({self.role})'

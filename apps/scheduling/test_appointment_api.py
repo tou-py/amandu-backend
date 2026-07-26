@@ -46,9 +46,13 @@ def clinic(db):
 
 @pytest.fixture
 def receptionist(db, django_user_model, salon):
-    """Acts for the tenant but does not attend appointments (attends default False)."""
+    """
+    Books the team's diary but does not attend appointments (attends default
+    False). Coordinator, not staff: booking someone else's day is what this
+    fixture exists to do, and staff may only book their own.
+    """
     user = django_user_model.objects.create_user(email='r@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon)
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
     return user
 
 
@@ -196,6 +200,56 @@ def test_a_booked_client_cannot_be_deleted(salon, stylist, client_, haircut):
         client_.delete()
 
 
+def test_deleting_a_booked_client_is_a_conflict_not_a_crash(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    The ORM guard above is correct but was reaching the API as an unhandled
+    ProtectedError, i.e. a 500: an operator's ordinary mistake reported as a
+    server fault, with nothing in it to act on.
+    """
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    appointment.clients.add(client_)
+
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:client-detail', args=[client_.pk])
+    )
+
+    assert res.status_code == 409
+    assert Client.objects.filter(pk=client_.pk).exists()
+
+
+def test_deleting_a_service_in_use_is_a_conflict_not_a_crash(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Same defect, different resource: the guard belongs to the shared base."""
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    appointment.clients.add(client_)
+
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:service-detail', args=[haircut.pk])
+    )
+
+    assert res.status_code == 409
+    assert Service.objects.filter(pk=haircut.pk).exists()
+
+
+def test_an_unreferenced_client_still_deletes(receptionist, salon, client_):
+    """The guard must only fire on real references."""
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:client-detail', args=[client_.pk])
+    )
+
+    assert res.status_code == 204
+    assert not Client.objects.filter(pk=client_.pk).exists()
+
+
 def test_cancel_keeps_the_row_visible_with_a_reason(receptionist, salon, stylist, client_, haircut):
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
@@ -209,6 +263,21 @@ def test_cancel_keeps_the_row_visible_with_a_reason(receptionist, salon, stylist
     assert appointment.cancelled_at is not None
     assert appointment.cancellation_reason == 'client called off'
     assert Appointment.objects.filter(pk=appointment.pk).exists()
+
+
+def test_a_cancellation_reason_must_be_text(receptionist, salon, stylist, client_, haircut):
+    """`reason` is free text that lands in the record, so it goes through a field
+    like any other input instead of being read raw off request.data."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(action_url(appointment, 'cancel'), {'reason': ['not', 'text']}, format='json')
+
+    assert res.status_code == 400
+    assert 'reason' in res.data
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
 
 
 def test_a_terminal_appointment_cannot_be_cancelled_again(receptionist, salon, stylist, client_, haircut):
@@ -247,6 +316,107 @@ def test_a_past_appointment_can_be_completed(receptionist, salon, stylist, clien
     assert appointment.status == Appointment.Status.COMPLETED
 
 
+def test_a_new_booking_starts_with_everyone_pending(receptionist, salon, stylist, client_, haircut):
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+    assert [a['attendance'] for a in res.data['attendees']] == ['pending']
+
+
+def test_attendance_is_recorded_per_person(receptionist, salon, stylist, client_, haircut):
+    """The whole reason the fact moved off the appointment: one absence in a
+    group says nothing about the people who did turn up."""
+    bob = Client.objects.create(tenant=salon, name='Bob')
+    http = api(receptionist, salon)
+    created = http.post(
+        LIST_URL, booking(stylist, [client_, bob], haircut, TOMORROW), format='json'
+    )
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'no_show'},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    recorded = {a['name']: a['attendance'] for a in res.data['attendees']}
+    assert recorded == {'Ada': 'no_show', 'Bob': 'pending'}
+    # The booking itself still only says what happened to the booking.
+    assert res.data['status'] == Appointment.Status.SCHEDULED
+
+
+def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'late_cancel'},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    assert res.data['attendees'][0]['attendance'] == 'late_cancel'
+
+
+def test_a_client_outside_the_appointment_cannot_be_marked(
+    receptionist, salon, stylist, client_, haircut
+):
+    stranger = Client.objects.create(tenant=salon, name='Stranger')
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(stranger.pk), 'attendance': 'attended'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'client' in res.data
+
+
+def test_a_cancelled_booking_has_no_attendance_to_record(
+    receptionist, salon, stylist, client_, haircut
+):
+    """It never ran, so nobody in it attended or failed to."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    http.post(action_url(appointment, 'cancel'))
+
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'attended'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert appointment.client_links.get().attendance == 'pending'
+
+
+def test_an_unknown_attendance_value_is_rejected(receptionist, salon, stylist, client_, haircut):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'maybe'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'attendance' in res.data
+
+
 def test_the_database_itself_forbids_an_overlap(salon, stylist, client_, haircut):
     """The ExclusionConstraint, not the serializer, is the real guarantee: a
     direct insert bypassing every check still cannot double-book."""
@@ -274,7 +444,7 @@ def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircu
 
 def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
     """N+1 guard: the query count for the list must not grow with the number of
-    appointments. Fails if `clients` stops being prefetched."""
+    appointments. Fails if `client_links__client` stops being prefetched."""
     ada = Client.objects.create(tenant=salon, name='Ada')
     bob = Client.objects.create(tenant=salon, name='Bob')
 
@@ -396,3 +566,58 @@ def test_another_tenants_appointment_is_not_reachable(receptionist, salon, styli
     res = api(receptionist, salon).get(detail_url(foreign))
 
     assert res.status_code == 404
+
+
+def test_staff_may_book_their_own_day(salon, stylist, client_, haircut):
+    """The one professional a staff member is accountable for is themselves."""
+    res = api(stylist.user, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+
+
+def test_staff_may_not_book_a_colleagues_day(db, django_user_model, salon, stylist, client_, haircut):
+    """
+    Booking for a colleague fills THEIR day, which they answer for. It takes a
+    role that answers for the diary as a whole: owner, admin or coordinator.
+    """
+    user = django_user_model.objects.create_user(email='other@example.com', password='pw')
+    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+
+    res = api(other.user, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 400
+    assert 'professional' in res.data
+    assert not Appointment.objects.exists()
+
+
+def test_a_coordinator_may_book_for_the_whole_team(receptionist, salon, stylist, client_, haircut):
+    """Coordinator attends clients like staff but keeps the team's diary."""
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+
+
+def test_staff_may_not_reassign_an_appointment_to_someone_else(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    """The rule lives in the serializer, so a PATCH cannot walk around it."""
+    user = django_user_model.objects.create_user(email='other2@example.com', password='pw')
+    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(other.user, salon).patch(
+        detail_url(appointment), {'professional': stylist.pk}, format='json'
+    )
+
+    assert res.status_code == 400
+    appointment.refresh_from_db()
+    assert appointment.professional == other
