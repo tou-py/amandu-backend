@@ -14,6 +14,8 @@ from datetime import timedelta
 from pathlib import Path
 import environ
 
+from corsheaders.defaults import default_headers
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env = environ.Env()
@@ -193,6 +195,13 @@ LOGGING = {
 
 # CORS
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS')
+
+# X-Tenant-ID is not one of the six headers django-cors-headers allows by
+# default, so a browser client cannot select a tenant without this: the preflight
+# succeeds but omits the header, and the real request is blocked before it is
+# sent. Server-to-server callers never hit this, which is why the API worked
+# everywhere except in a browser.
+CORS_ALLOW_HEADERS = (*default_headers, 'x-tenant-id')
 
 # Cache and Celery broker
 
