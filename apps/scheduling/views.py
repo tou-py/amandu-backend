@@ -16,6 +16,7 @@ from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSerializer,
+    AttendanceSerializer,
     CategorySerializer,
     ClientSerializer,
     ProfessionalSerializer,
@@ -103,7 +104,9 @@ class AppointmentViewSet(TenantScopedModelViewSet):
     queryset = (
         Appointment.objects
         .select_related('professional__user', 'service')
-        .prefetch_related('clients')
+        # The links, not the clients: the serializer reads attendance off the
+        # through row, and prefetching only `clients` would query it per slot.
+        .prefetch_related('client_links__client')
     )
     serializer_class = AppointmentSerializer
 
@@ -174,8 +177,29 @@ class AppointmentViewSet(TenantScopedModelViewSet):
         appointment = self.get_object()
         return self._transition(appointment, appointment.complete)
 
-    @extend_schema(request=None, responses=AppointmentSerializer)
+    @extend_schema(request=AttendanceSerializer, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
-    def no_show(self, request, pk=None):
+    def attendance(self, request, pk=None):
+        """
+        Record whether ONE person in the slot turned up. Deliberately not a
+        transition on the appointment: a booking for four has four answers, and
+        the booking's own status has nothing to say about any of them.
+        """
         appointment = self.get_object()
-        return self._transition(appointment, appointment.mark_no_show)
+        body = AttendanceSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+
+        # .filter on the related manager, not the prefetched cache, so an id that
+        # belongs to another appointment cannot be silently accepted.
+        link = appointment.client_links.filter(client_id=body.validated_data['client']).first()
+        if link is None:
+            raise ValidationError({'client': 'That client is not in this appointment.'})
+
+        try:
+            link.mark(body.validated_data['attendance'])
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+
+        # Re-read: the instance fetched above carries a prefetched client_links
+        # cache still holding the value that was just replaced.
+        return Response(self.get_serializer(self.get_object()).data)

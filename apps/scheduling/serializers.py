@@ -2,7 +2,13 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.accounts.models import Membership
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import (
+    Appointment,
+    AppointmentClient,
+    Category,
+    Client,
+    Service,
+)
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -90,6 +96,35 @@ class ProfessionalSerializer(serializers.ModelSerializer):
         fields = ('id', 'name')
 
 
+class AttendeeSerializer(serializers.ModelSerializer):
+    """
+    One person in the slot, with whether they turned up. Flattens the through row
+    so a client reads `{id, name, attendance}` and never has to know a join table
+    sits underneath.
+    """
+
+    id = serializers.UUIDField(source='client_id', read_only=True)
+    name = serializers.CharField(source='client.name', read_only=True)
+
+    class Meta:
+        model = AppointmentClient
+        # Read-only here: attendance is recorded through its own action, so it
+        # cannot ride along on an edit that was only meant to move the time.
+        fields = ('id', 'name', 'attendance')
+        read_only_fields = fields
+
+
+class AttendanceSerializer(serializers.Serializer):
+    """
+    Body of the attendance action: one person, one verdict. Not a list -- the
+    receptionist marks people as they walk in, and a whole-roster payload would
+    make every partial update overwrite the ones already recorded.
+    """
+
+    client = serializers.UUIDField()
+    attendance = serializers.ChoiceField(choices=AppointmentClient.Attendance.choices)
+
+
 class AppointmentCancelSerializer(serializers.Serializer):
     """
     Body of the cancel action. Not a ModelSerializer on purpose: cancelling takes
@@ -111,19 +146,26 @@ class AppointmentSerializer(serializers.ModelSerializer):
     three ids per appointment: a calendar showing a week is hundreds of rows, and
     the alternative is hundreds of round trips from a browser. They are read-only
     labels; the ids remain the writable contract.
+
+    `clients` writes, `attendees` reads. The same people either way: one is the
+    list of ids a booking is made from, the other is those people with their
+    names and whether they turned up.
     """
 
+    # Write-only: `attendees` already carries these people on the way out, with
+    # their names and their attendance. Serialising the bare ids too would send
+    # the same roster twice and cost a query per slot to do it.
     clients = serializers.PrimaryKeyRelatedField(
-        many=True, allow_empty=False, queryset=Client.objects.none()
+        many=True, allow_empty=False, queryset=Client.objects.none(), write_only=True
     )
     professional_name = serializers.CharField(source='professional.display_name', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
-    client_names = serializers.SerializerMethodField()
+    attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
 
     class Meta:
         model = Appointment
         fields = (
-            'id', 'professional', 'professional_name', 'clients', 'client_names',
+            'id', 'professional', 'professional_name', 'clients', 'attendees',
             'service', 'service_name', 'start', 'end', 'status',
             'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
         )
@@ -131,9 +173,6 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'id', 'end', 'status', 'cancelled_at', 'cancellation_reason',
             'created_at', 'updated_at',
         )
-
-    def get_client_names(self, appointment) -> list[str]:
-        return [client.name for client in appointment.clients.all()]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
