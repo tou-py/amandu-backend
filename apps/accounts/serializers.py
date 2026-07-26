@@ -20,6 +20,7 @@ def active_memberships(user):
             'tenant_id': m.tenant_id,
             'tenant_slug': m.tenant.slug,
             'tenant_name': m.tenant.name,
+            'tenant_country': str(m.tenant.country),
             'role': m.role,
         }
         for m in user.memberships.select_related('tenant').filter(
@@ -36,6 +37,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_id = serializers.IntegerField()
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
+    tenant_country = serializers.CharField()
     role = serializers.CharField()
 
 

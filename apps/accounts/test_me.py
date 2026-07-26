@@ -186,3 +186,19 @@ def test_a_superuser_has_no_memberships(db, django_user_model):
 
     assert res.status_code == 200
     assert res.data['memberships'] == []
+
+
+def test_me_carries_the_tenant_country(db, django_user_model):
+    """
+    The country a tenant's phone numbers are normalised against travels with the
+    membership, so a client form can offer the right dialling code rather than
+    reading the browser's clock -- which says where the device is, not where the
+    business is.
+    """
+    peru = Tenant.objects.create(name='Estudio', slug='estudio', country='PE')
+    user = django_user_model.objects.create_user(email='p@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=peru)
+
+    res = api(user).get(ME_URL)
+
+    assert res.data['memberships'][0]['tenant_country'] == 'PE'
