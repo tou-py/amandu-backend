@@ -1,3 +1,4 @@
+import phonenumbers
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
@@ -38,27 +39,26 @@ class ClientSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """
-        The database constraint is what actually guarantees uniqueness; this only
-        turns the ordinary case into a 400 with a field error instead of an
-        IntegrityError surfacing as a 500. DRF cannot generate the validator itself
-        because the constraint spans `tenant`, which is not a serializer field.
+        The database constraint still guarantees exact uniqueness; this is the
+        wider net in front of it, and it stays check-then-insert, so two
+        concurrent creates can both pass here and the constraint decides.
         """
         phone = attrs.get('phone')
         if not phone:
             return attrs
 
-        duplicates = Client.objects.for_tenant(
-            self.context['request'].tenant
-        ).filter(phone=phone)
+        others = Client.objects.for_tenant(self.context['request'].tenant)
         if self.instance is not None:
-            duplicates = duplicates.exclude(pk=self.instance.pk)
+            others = others.exclude(pk=self.instance.pk)
 
-        # check-then-insert, so two concurrent creates can still both pass
-        # here and the constraint decides.
-        if duplicates.exists():
-            raise serializers.ValidationError(
-                {'phone': 'A client with this phone already exists.'}
-            )
+        tail = str(phone.national_number)[-7:]
+
+        for other in others.filter(phone__endswith=tail).iterator():
+            match = phonenumbers.is_number_match(str(phone), str(other.phone))
+            if match != phonenumbers.MatchType.NO_MATCH:
+                raise serializers.ValidationError(
+                    {'phone': 'A client with this phone already exists.'}
+                )
         return attrs
 
 

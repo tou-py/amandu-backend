@@ -82,6 +82,50 @@ def test_same_person_typed_two_ways_is_rejected_as_duplicate(receptionist, salon
     assert 'phone' in res.data
 
 
+def test_a_mobile_and_its_landline_form_are_the_same_person(receptionist, salon):
+    """
+    E.164 storage alone does not catch this: `+54 11 2345-6789` is a Buenos Aires
+    landline and `+54 9 11 2345-6789` a mobile, so both are valid, both store
+    verbatim, and an equality lookup sees two unrelated strings. A receptionist
+    who omits the mobile 9 was creating a second record for an existing client.
+    """
+    http = api(receptionist, salon)
+    landline = http.post(LIST_URL, {'name': 'Ada', 'phone': '11 2345-6789'}, format='json')
+    assert landline.status_code == 201
+    assert Client.objects.get(name='Ada').phone == '+541123456789'
+
+    res = http.post(
+        LIST_URL, {'name': 'Ada otra vez', 'phone': '+54 9 11 2345-6789'}, format='json'
+    )
+
+    assert res.status_code == 400
+    assert 'phone' in res.data
+    assert Client.objects.count() == 1
+
+
+def test_a_genuinely_different_number_is_still_allowed(receptionist, salon):
+    """The guard must not collapse everything that ends alike into one person."""
+    http = api(receptionist, salon)
+    http.post(LIST_URL, {'name': 'Ada', 'phone': '11 2345-6789'}, format='json')
+
+    res = http.post(LIST_URL, {'name': 'Grace', 'phone': '11 2345-6780'}, format='json')
+
+    assert res.status_code == 201
+    assert Client.objects.count() == 2
+
+
+def test_a_client_keeps_its_own_phone_on_edit(receptionist, salon):
+    """Its own row must not be read as a duplicate of itself."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, {'name': 'Ada', 'phone': '11 2345-6789'}, format='json')
+    client = Client.objects.get(pk=created.data['id'])
+
+    res = http.patch(detail_url(client), {'name': 'Ada Lovelace'}, format='json')
+
+    assert res.status_code == 200
+    assert Client.objects.get(pk=client.pk).name == 'Ada Lovelace'
+
+
 def test_the_same_phone_may_exist_in_another_tenant(receptionist, salon, clinic):
     Membership.objects.create(user=receptionist, tenant=clinic)
     http = api(receptionist, salon)

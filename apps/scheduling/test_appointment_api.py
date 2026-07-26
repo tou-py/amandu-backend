@@ -196,6 +196,56 @@ def test_a_booked_client_cannot_be_deleted(salon, stylist, client_, haircut):
         client_.delete()
 
 
+def test_deleting_a_booked_client_is_a_conflict_not_a_crash(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    The ORM guard above is correct but was reaching the API as an unhandled
+    ProtectedError, i.e. a 500: an operator's ordinary mistake reported as a
+    server fault, with nothing in it to act on.
+    """
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    appointment.clients.add(client_)
+
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:client-detail', args=[client_.pk])
+    )
+
+    assert res.status_code == 409
+    assert Client.objects.filter(pk=client_.pk).exists()
+
+
+def test_deleting_a_service_in_use_is_a_conflict_not_a_crash(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Same defect, different resource: the guard belongs to the shared base."""
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    appointment.clients.add(client_)
+
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:service-detail', args=[haircut.pk])
+    )
+
+    assert res.status_code == 409
+    assert Service.objects.filter(pk=haircut.pk).exists()
+
+
+def test_an_unreferenced_client_still_deletes(receptionist, salon, client_):
+    """The guard must only fire on real references."""
+    res = api(receptionist, salon).delete(
+        reverse('scheduling:client-detail', args=[client_.pk])
+    )
+
+    assert res.status_code == 204
+    assert not Client.objects.filter(pk=client_.pk).exists()
+
+
 def test_cancel_keeps_the_row_visible_with_a_reason(receptionist, salon, stylist, client_, haircut):
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
