@@ -82,7 +82,7 @@ class InvitationSerializer(serializers.ModelSerializer):
             status=Invitation.Status.PENDING,
         ).first()
         if existing is not None:
-            existing.role = validated_data['role']
+            existing.role = validated_data.get('role', existing.role)
             existing.refresh()
             return existing
         return super().create(validated_data)
