@@ -90,6 +90,17 @@ class ProfessionalSerializer(serializers.ModelSerializer):
         fields = ('id', 'name')
 
 
+class AppointmentCancelSerializer(serializers.Serializer):
+    """
+    Body of the cancel action. Not a ModelSerializer on purpose: cancelling takes
+    a reason, not an appointment. Declaring it also stops the schema from
+    advertising a whole Appointment as the payload, which is what drf-spectacular
+    infers for a custom action from the viewset's serializer_class.
+    """
+
+    reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+
+
 class AppointmentSerializer(serializers.ModelSerializer):
     """
     Every relation is scoped to the request tenant, so the four tenant paths

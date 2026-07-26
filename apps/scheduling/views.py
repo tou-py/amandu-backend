@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from apps.accounts.models import Membership
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.serializers import (
+    AppointmentCancelSerializer,
     AppointmentSerializer,
     CategorySerializer,
     ClientSerializer,
@@ -155,18 +156,25 @@ class AppointmentViewSet(TenantScopedModelViewSet):
             raise ValidationError(exc.messages)
         return Response(self.get_serializer(appointment).data)
 
+    @extend_schema(request=AppointmentCancelSerializer, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         appointment = self.get_object()
-        return self._transition(
-            appointment, lambda: appointment.cancel(request.data.get('reason', ''))
-        )
+        # Validated rather than read raw off request.data: `reason` is free text
+        # that lands in the record, so it goes through a field like any other.
+        body = AppointmentCancelSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        reason = body.validated_data.get('reason', '')
+        return self._transition(appointment, lambda: appointment.cancel(reason))
 
+    # No body: the URL already names the transition.
+    @extend_schema(request=None, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         appointment = self.get_object()
         return self._transition(appointment, appointment.complete)
 
+    @extend_schema(request=None, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
     def no_show(self, request, pk=None):
         appointment = self.get_object()

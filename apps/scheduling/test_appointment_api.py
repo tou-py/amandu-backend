@@ -211,6 +211,21 @@ def test_cancel_keeps_the_row_visible_with_a_reason(receptionist, salon, stylist
     assert Appointment.objects.filter(pk=appointment.pk).exists()
 
 
+def test_a_cancellation_reason_must_be_text(receptionist, salon, stylist, client_, haircut):
+    """`reason` is free text that lands in the record, so it goes through a field
+    like any other input instead of being read raw off request.data."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.post(action_url(appointment, 'cancel'), {'reason': ['not', 'text']}, format='json')
+
+    assert res.status_code == 400
+    assert 'reason' in res.data
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
+
+
 def test_a_terminal_appointment_cannot_be_cancelled_again(receptionist, salon, stylist, client_, haircut):
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
