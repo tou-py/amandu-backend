@@ -11,9 +11,10 @@ from apps.accounts.models import Invitation
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
+    ChangePasswordSerializer,
     InvitationSerializer,
+    MeSerializer,
     TenantAwareTokenObtainPairSerializer,
-    active_memberships,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -50,28 +51,47 @@ class MeView(APIView):
     X-Tenant-ID on the next request, and HasActiveMembership re-validates it.
     Requires only authentication, never an active tenant -- picking one is the
     whole point.
+
+    PATCH edits the caller's own profile, and only ever theirs: the serializer is
+    bound to request.user, so there is no id in the payload to point elsewhere.
     """
 
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(
-        responses=inline_serializer(
-            name='Me',
-            fields={
-                'id': serializers.IntegerField(),
-                'email': serializers.EmailField(),
-                'memberships': ActiveMembershipSerializer(many=True),
-            },
-        )
-    )
+    @extend_schema(responses=MeSerializer)
     def get(self, request):
-        return Response(
-            {
-                'id': request.user.id,
-                'email': request.user.email,
-                'memberships': active_memberships(request.user),
-            }
+        return Response(MeSerializer(request.user).data)
+
+    @extend_schema(request=MeSerializer, responses=MeSerializer)
+    def patch(self, request):
+        serializer = MeSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ChangePasswordView(APIView):
+    """
+    Separate from the profile PATCH on purpose: this one needs the current
+    password as proof, returns no body, and is the endpoint worth throttling.
+    Folding it into the profile would put a credential check on every name edit.
+    """
+
+    permission_classes = (IsAuthenticated,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'change-password'
+
+    @extend_schema(
+        request=ChangePasswordSerializer,
+        responses={204: OpenApiResponse(description='Password changed; no body.')},
+    )
+    def post(self, request):
+        serializer = ChangePasswordSerializer(
+            data=request.data, context={'request': request}
         )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InvitationViewSet(TenantScopedModelViewSet):

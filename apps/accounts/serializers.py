@@ -1,5 +1,6 @@
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -36,6 +37,70 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
     role = serializers.CharField()
+
+
+class MeSerializer(serializers.ModelSerializer):
+    """
+    The signed-in user's own view of themselves, and the only writable one: a
+    person edits their own profile here, never anyone else's, because the view
+    always binds it to request.user.
+
+    `email` stays read-only. It is the USERNAME_FIELD, the address every
+    invitation was sent to, and the key `Invitation.accept` matches on -- moving
+    it is an account migration with its own verification, not a profile edit.
+
+    The name is not per tenant on purpose: `Membership.display_name` reads
+    `get_full_name()`, so editing it here relabels this person in every agenda
+    they appear in. That is the intent -- it is their name, not their job title.
+    """
+
+    memberships = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = ('id', 'email', 'first_name', 'last_name', 'memberships')
+        read_only_fields = ('id', 'email')
+
+    @extend_schema_field(ActiveMembershipSerializer(many=True))
+    def get_memberships(self, user):
+        return active_memberships(user)
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """
+    The current password is demanded even though the caller already holds a
+    valid token. An access token proves the session was started by the owner at
+    some point; it does not prove the person typing right now IS the owner, and
+    a stolen token must not be enough to take the account over for good.
+
+    Note what this does NOT do: the API has no token revocation yet, so sessions
+    already open elsewhere keep working with their existing refresh token until
+    it expires. Changing a password is not yet 'sign out everywhere'.
+    """
+
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_current_password(self, value):
+        if not self.context['request'].user.check_password(value):
+            raise serializers.ValidationError('Current password is incorrect.')
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        try:
+            # The user is passed so the similarity validator can compare against
+            # their own email and name, which is most of what it is for.
+            validate_password(value, user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+    def save(self):
+        user = self.context['request'].user
+        user.set_password(self.validated_data['new_password'])
+        user.save(update_fields=['password', 'updated_at'])
+        return user
 
 
 class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):

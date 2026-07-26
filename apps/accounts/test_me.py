@@ -6,6 +6,8 @@ from apps.accounts.models import Membership
 from apps.tenancy.models import Tenant
 
 ME_URL = reverse('accounts:me')
+PASSWORD_URL = reverse('accounts:change-password')
+STRONG_PASSWORD = 'sup3r-secret-pw'
 
 
 def api(user=None):
@@ -79,6 +81,100 @@ def test_me_hides_a_suspended_tenant(db, django_user_model, salon):
     res = api(user).get(ME_URL)
 
     assert [m['tenant_slug'] for m in res.data['memberships']] == ['salon']
+
+
+def test_editing_the_name_relabels_the_person_in_every_agenda(
+    db, django_user_model, salon, clinic
+):
+    """
+    `Membership.display_name` reads `get_full_name()`, so the profile name is the
+    label every tenant's agenda shows. Editing it is deliberately not per tenant.
+    """
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    salon_membership = Membership.objects.create(user=user, tenant=salon)
+    clinic_membership = Membership.objects.create(user=user, tenant=clinic)
+
+    res = api(user).patch(
+        ME_URL, {'first_name': 'Ada', 'last_name': 'Lovelace'}, format='json'
+    )
+
+    assert res.status_code == 200
+    assert res.data['first_name'] == 'Ada'
+    assert salon_membership.display_name() == 'Ada Lovelace'
+    assert clinic_membership.display_name() == 'Ada Lovelace'
+
+
+def test_the_profile_cannot_change_its_own_email(db, django_user_model):
+    """email is the USERNAME_FIELD and what invitations were addressed to, so it
+    is read-only: DRF drops it rather than failing, and the address must stand."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+
+    res = api(user).patch(ME_URL, {'email': 'someone.else@example.com'}, format='json')
+
+    assert res.status_code == 200
+    user.refresh_from_db()
+    assert user.email == 'u@example.com'
+
+
+def test_editing_a_profile_requires_authentication(db):
+    assert api().patch(ME_URL, {'first_name': 'X'}, format='json').status_code == 401
+
+
+def test_changing_the_password_replaces_the_one_that_logs_in(db, django_user_model):
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'old-pw', 'new_password': STRONG_PASSWORD},
+        format='json',
+    )
+
+    assert res.status_code == 204
+    user.refresh_from_db()
+    assert user.check_password(STRONG_PASSWORD)
+    assert not user.check_password('old-pw')
+
+
+def test_the_current_password_is_required_to_change_it(db, django_user_model):
+    """A valid token proves the session was opened by the owner once; it must not
+    be enough to take the account over."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'not-the-password', 'new_password': STRONG_PASSWORD},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'current_password' in res.data
+    user.refresh_from_db()
+    assert user.check_password('old-pw')
+
+
+def test_a_weak_new_password_is_refused(db, django_user_model):
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'old-pw', 'new_password': '123'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'new_password' in res.data
+    user.refresh_from_db()
+    assert user.check_password('old-pw')
+
+
+def test_changing_a_password_requires_authentication(db):
+    res = api().post(
+        PASSWORD_URL,
+        {'current_password': 'x', 'new_password': STRONG_PASSWORD},
+        format='json',
+    )
+
+    assert res.status_code == 401
 
 
 def test_a_superuser_has_no_memberships(db, django_user_model):

@@ -250,6 +250,9 @@ REST_FRAMEWORK = {
         'login': '5/min',
         # Token guessing on the public accept endpoint.
         'accept-invitation': '10/min',
+        # Guessing the CURRENT password from inside a session someone else
+        # opened. Always a deliberate act, so it can be tighter than login.
+        'change-password': '5/min',
     },
 }
 
