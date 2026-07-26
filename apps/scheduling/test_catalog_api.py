@@ -119,6 +119,63 @@ def test_service_list_only_returns_the_active_tenants_services(receptionist, sal
     assert [s['name'] for s in res.data['results']] == ['Haircut']
 
 
+def test_a_duplicate_name_is_a_400_not_a_crash(receptionist, salon):
+    """
+    (tenant, name) is unique, but `tenant` is not a serializer field, so DRF
+    builds no UniqueTogetherValidator for it and the duplicate used to reach the
+    database as an IntegrityError -- a 500 for an ordinary typo.
+    """
+    Category.objects.create(tenant=salon, name='Hair')
+    Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
+
+    category = api(receptionist, salon).post(CATEGORY_LIST, {'name': 'Hair'}, format='json')
+    service = api(receptionist, salon).post(
+        SERVICE_LIST, {'name': 'Haircut', 'duration': '00:45:00'}, format='json'
+    )
+
+    assert category.status_code == 400
+    assert 'name' in category.data
+    assert service.status_code == 400
+    assert 'name' in service.data
+
+
+def test_a_name_that_differs_only_in_case_is_refused(receptionist, salon):
+    """Stricter than the constraint on purpose: nobody can tell the two apart."""
+    Category.objects.create(tenant=salon, name='Hair')
+
+    res = api(receptionist, salon).post(CATEGORY_LIST, {'name': 'hair'}, format='json')
+
+    assert res.status_code == 400
+
+
+def test_saving_a_row_under_its_own_name_is_not_a_duplicate(receptionist, salon):
+    """The check must exclude the instance being edited, or no edit could save."""
+    service = Service.objects.create(
+        tenant=salon, name='Haircut', duration=timedelta(minutes=30)
+    )
+
+    res = api(receptionist, salon).patch(
+        reverse('scheduling:service-detail', args=[service.pk]),
+        {'name': 'Haircut', 'duration': '00:45:00'},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    service.refresh_from_db()
+    assert service.duration == timedelta(minutes=45)
+
+
+def test_another_tenants_name_is_not_a_duplicate(receptionist, salon, clinic):
+    """The uniqueness is per tenant; the check must be scoped the same way."""
+    Service.objects.create(tenant=clinic, name='Haircut', duration=timedelta(minutes=30))
+
+    res = api(receptionist, salon).post(
+        SERVICE_LIST, {'name': 'Haircut', 'duration': '00:30:00'}, format='json'
+    )
+
+    assert res.status_code == 201
+
+
 def test_another_tenants_service_is_not_reachable_by_id(receptionist, salon, clinic):
     foreign = Service.objects.create(
         tenant=clinic, name='Massage', duration=timedelta(minutes=60)

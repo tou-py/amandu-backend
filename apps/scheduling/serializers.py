@@ -62,14 +62,51 @@ class ClientSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class TenantUniqueNameMixin:
+    """
+    Turns `UniqueConstraint(fields=['tenant', 'name'])` into a 400 instead of a 500.
+
+    DRF would normally build a UniqueTogetherValidator from that constraint, but
+    it skips any constraint whose sources the serializer does not all map
+    (rest_framework/serializers.py, `get_unique_together_validators`) -- and
+    `tenant` is never one, because TenantOwnedMixin marks it `editable=False` so
+    no payload can reassign a row to another tenant. So the duplicate used to
+    reach the database as an unhandled IntegrityError: a 500 reporting an
+    operator's ordinary typo as a server fault.
+
+    Deliberately stricter than the constraint, which is case-sensitive: two
+    categories called "Hair" and "hair" would be two rows the database accepts
+    and no human can tell apart in a select.
+
+    Like ClientSerializer.validate, this stays check-then-insert -- two
+    concurrent creates can both pass here and the constraint decides. It is the
+    wider, kinder net in front of the guarantee, not the guarantee itself.
+    """
+
+    def validate_name(self, value):
+        request = self.context.get('request')
+        tenant = getattr(request, 'tenant', None)
+        if tenant is None:
+            return value
+
+        others = self.Meta.model.objects.for_tenant(tenant).filter(name__iexact=value)
+        if self.instance is not None:
+            others = others.exclude(pk=self.instance.pk)
+
+        if others.exists():
+            label = self.Meta.model._meta.verbose_name
+            raise serializers.ValidationError(f'A {label} with this name already exists.')
+        return value
+
+
+class CategorySerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ('id', 'name', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_at', 'updated_at')
 
 
-class ServiceSerializer(serializers.ModelSerializer):
+class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Service
         fields = ('id', 'name', 'duration', 'category', 'created_at', 'updated_at')
