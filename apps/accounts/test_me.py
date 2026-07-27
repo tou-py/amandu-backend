@@ -46,6 +46,18 @@ def test_me_returns_identity_and_every_active_tenant(db, django_user_model, salo
     }
 
 
+def test_me_carries_the_membership_id_the_agenda_uses(db, django_user_model, salon):
+    """The id must be the Membership's own, because that is what
+    ProfessionalSerializer emits -- a client joins the two to know which of the
+    bookable professionals is the person holding the session."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    membership = Membership.objects.create(user=user, tenant=salon, role=Membership.Role.STAFF)
+
+    res = api(user).get(ME_URL)
+
+    assert res.data['memberships'][0]['membership_id'] == membership.id
+
+
 def test_me_does_not_require_a_selected_tenant(db, django_user_model, salon, clinic):
     """No X-Tenant-ID header: /me must still answer, because it is how the client
     learns which tenant to select in the first place."""
