@@ -17,6 +17,7 @@ def active_memberships(user):
     """
     return [
         {
+            'membership_id': m.id,
             'tenant_id': m.tenant_id,
             'tenant_slug': m.tenant.slug,
             'tenant_name': m.tenant.name,
@@ -34,6 +35,10 @@ class ActiveMembershipSerializer(serializers.Serializer):
     """Documents the active_memberships() dict shape for the login and /me
     responses. Read-only: the payload is built by hand, this only describes it."""
 
+    # The same id ProfessionalSerializer emits, so a client can tell which of the
+    # bookable professionals is the person holding the session without matching
+    # display names -- which is ambiguous the moment two people share one.
+    membership_id = serializers.IntegerField()
     tenant_id = serializers.IntegerField()
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
