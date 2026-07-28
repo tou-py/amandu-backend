@@ -1,10 +1,11 @@
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.accounts.models import CustomUser, Invitation, Membership
+from apps.accounts.models import CustomUser, Invitation, Membership, PushSubscription
 from apps.tenancy.models import Tenant
 
 
@@ -86,15 +87,90 @@ class MeSerializer(serializers.ModelSerializer):
     """
 
     memberships = serializers.SerializerMethodField()
+    vapid_public_key = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
-        fields = ('id', 'email', 'first_name', 'last_name', 'memberships')
-        read_only_fields = ('id', 'email')
+        fields = (
+            'id',
+            'email',
+            'first_name',
+            'last_name',
+            'reminder_lead',
+            'memberships',
+            'vapid_public_key',
+        )
+        read_only_fields = ('id', 'email', 'vapid_public_key')
 
     @extend_schema_field(ActiveMembershipSerializer(many=True))
     def get_memberships(self, user):
         return active_memberships(user)
+
+    @extend_schema_field(serializers.CharField)
+    def get_vapid_public_key(self, user):
+        """
+        Not a fact about the user, and it rides here anyway.
+
+        The browser has to pass this key to pushManager.subscribe() before any
+        subscription exists, so the client needs it at boot -- and /me is the one
+        request it already makes at boot. The alternative is baking it into the
+        front-end build, which would make the key a second source of truth able
+        to disagree silently with the private half this server signs with. Read
+        from the server that holds the pair, it cannot drift.
+
+        Public by definition -- RFC 8292 calls it "a stable identifier for the
+        server" -- so returning it to an authenticated client exposes nothing.
+        Empty when push is unconfigured, which the client reads as "do not offer
+        reminders at all".
+        """
+        return settings.VAPID_PUBLIC_KEY
+
+
+class PushSubscriptionSerializer(serializers.ModelSerializer):
+    """
+    What the browser's PushSubscription.toJSON() produces, flattened onto the
+    model. The nested `keys` object is unpacked here rather than in the view, so
+    the shape the client actually sends is what the schema documents.
+
+    Write-only throughout: `endpoint` is a secret (MDN), and a client that just
+    sent one has no use for it back. Hence no list endpoint and no response body.
+    """
+
+    # validators=[] strips the UniqueValidator ModelSerializer infers from the
+    # model's unique=True. Without this, a browser re-subscribing -- which it does
+    # routinely, after a pushsubscriptionchange or simply on the next visit -- is
+    # answered 400 for sending the endpoint it was given, and create() below never
+    # runs. Uniqueness is still enforced by the column; here it means "upsert".
+    endpoint = serializers.URLField(max_length=500, validators=[])
+    keys = serializers.DictField(child=serializers.CharField(), write_only=True)
+
+    class Meta:
+        model = PushSubscription
+        fields = ('endpoint', 'keys')
+
+    def validate_keys(self, value):
+        missing = {'p256dh', 'auth'} - value.keys()
+        if missing:
+            raise serializers.ValidationError(
+                f'Missing key material: {", ".join(sorted(missing))}.'
+            )
+        return value
+
+    def create(self, validated_data):
+        keys = validated_data.pop('keys')
+        # Upsert, not create: a browser that re-subscribes hands back the same
+        # endpoint, and a second row for it would push the same person the same
+        # notification twice. The user is overwritten too -- on a shared device,
+        # whoever logs in next must not keep notifying the previous account.
+        subscription, _ = PushSubscription.objects.update_or_create(
+            endpoint=validated_data['endpoint'],
+            defaults={
+                'user': self.context['request'].user,
+                'p256dh': keys['p256dh'],
+                'auth': keys['auth'],
+            },
+        )
+        return subscription
 
 
 class ChangePasswordSerializer(serializers.Serializer):
