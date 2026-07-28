@@ -72,10 +72,26 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     cancelled_at = models.DateTimeField(null=True, blank=True, editable=False)
     cancellation_reason = models.TextField(blank=True)
     notes = models.TextField(blank=True)
+    # When the professional was pushed a reminder for this appointment. Null means
+    # not yet, and that is the whole idempotency mechanism: the sweep can run as
+    # often as it likes, and re-run after being down, without notifying twice.
+    #
+    # A column and not a table because an appointment has exactly one recipient --
+    # its professional. A reminders table would earn its place the day a second
+    # person is notified about the same slot.
+    #
+    # ponytail: never cleared. Moving an already-reminded appointment does not
+    # re-notify. Clear it in the reschedule path if that turns out to matter.
+    reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
         db_table = 'tb_appointment'
         ordering = ('start',)
+        indexes = [
+            # The agenda filters a date range and the reminder sweep runs every few
+            # minutes forever; both walk this column and nothing else indexes it.
+            models.Index(fields=['start'], name='appointment_start_idx'),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(end__gt=models.F('start')),

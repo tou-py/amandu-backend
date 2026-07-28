@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -28,6 +30,16 @@ class CustomUser(AbstractUser, TimestampMixin):
         related_name='users',
         blank=True,
     )
+
+    # How far ahead this person wants to be reminded of an appointment they are
+    # about to give. A duration, not a number of minutes, because that is what it
+    # is: the sweep subtracts it from `start` directly in the database, with no
+    # unit to agree on between Python, Postgres and the client.
+    #
+    # It has no "off" value. Whether reminders arrive at all is answered by
+    # PushSubscription -- see the note there on why a second flag would only be a
+    # copy of the browser's answer.
+    reminder_lead = models.DurationField(default=timedelta(minutes=30))
 
     USERNAME_FIELD = 'email'
     # USERNAME_FIELD and password are always prompted for; listing either here

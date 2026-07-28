@@ -9,6 +9,7 @@ from apps.accounts.views import (
     LoginView,
     MemberListView,
     MeView,
+    PushSubscriptionView,
 )
 
 app_name = 'accounts'
@@ -22,6 +23,7 @@ urlpatterns = [
     path('me/', MeView.as_view(), name='me'),
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
     path('members/', MemberListView.as_view(), name='member-list'),
+    path('push/subscriptions/', PushSubscriptionView.as_view(), name='push-subscription'),
     # Before the router: 'accept' must not be captured as an invitation pk.
     path('invitations/accept/', AcceptInvitationView.as_view(), name='invitation-accept'),
 ] + router.urls

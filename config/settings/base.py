@@ -203,7 +203,10 @@ CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS')
 # everywhere except in a browser.
 CORS_ALLOW_HEADERS = (*default_headers, 'x-tenant-id')
 
-# Cache and Celery broker
+# Cache. Also where DRF keeps its throttle counters, which is why it has to be
+# shared: per-process state would let a brute force get one allowance per worker.
+# No broker: there is no queue in this project. The one recurring job -- the
+# appointment reminder sweep -- is a management command on a cron.
 
 CACHES = {
     'default': {
@@ -211,6 +214,24 @@ CACHES = {
         'LOCATION': env.str('REDIS_URL'),
     }
 }
+
+
+# Web Push (VAPID, RFC 8292). The key pair identifies THIS server to the push
+# services, and the public half is handed to the browser when it subscribes.
+#
+# Generate once with `python manage.py vapid_keys`, then never rotate: RFC 8292
+# says "Application servers need to remember the key that was used when
+# requesting the creation of a subscription", so a new pair orphans every
+# subscription already out there and every device has to opt in again.
+#
+# Empty by default -- against this file's own no-fallback rule -- because push is
+# optional: an API without keys must still boot and serve an agenda. The command
+# that sends refuses to run instead, which is where the mistake actually bites.
+VAPID_PUBLIC_KEY = env.str('VAPID_PUBLIC_KEY', default='')
+VAPID_PRIVATE_KEY = env.str('VAPID_PRIVATE_KEY', default='')
+# Who the push service operator contacts if this server misbehaves. RFC 8292
+# requires a mailto: or https: URI.
+VAPID_SUBJECT = env.str('VAPID_SUBJECT', default='')
 
 
 # Django REST Framework

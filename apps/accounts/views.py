@@ -16,6 +16,7 @@ from apps.accounts.serializers import (
     InvitationSerializer,
     MeSerializer,
     MemberSerializer,
+    PushSubscriptionSerializer,
     TenantAwareTokenObtainPairSerializer,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
@@ -89,6 +90,39 @@ class ChangePasswordView(APIView):
     )
     def post(self, request):
         serializer = ChangePasswordSerializer(
+            data=request.data, context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PushSubscriptionView(APIView):
+    """
+    A browser registering to receive push notifications.
+
+    No tenant: a subscription belongs to a device and the person using it, who
+    may work for several tenants and wants one reminder stream for all of them.
+
+    ONE verb, and no unsubscribe endpoint, because there is nothing for it to do.
+    A browser that turns reminders off calls PushSubscription.unsubscribe(), and
+    the push service then answers 404 for that endpoint (RFC 8030) -- which
+    `send_reminders` already has to handle, since a subscription can expire on
+    its own at any time. A DELETE here would be a second way to reach the state
+    the first one reaches anyway, on the next send.
+
+    Not a ViewSet either: the endpoint is a secret the client already holds, so
+    listing them back would only widen where it can leak.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        request=PushSubscriptionSerializer,
+        responses={204: OpenApiResponse(description='Subscription stored; no body.')},
+    )
+    def post(self, request):
+        serializer = PushSubscriptionSerializer(
             data=request.data, context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
