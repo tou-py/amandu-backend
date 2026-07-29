@@ -116,6 +116,8 @@ class Command(BaseCommand):
                 data=json.dumps(payload),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={'sub': settings.VAPID_SUBJECT},
+                # WNS (Edge/Windows) rejects TTL=0 with 400; FCM and Mozilla accept it.
+                ttl=1800,
             )
             return True
         except WebPushException as exc:
