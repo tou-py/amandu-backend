@@ -219,6 +219,12 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     serializer_class = NotificationSerializer
     permission_classes = (IsAuthenticated, HasActiveMembership)
 
+    # Schema-only: drf-spectacular needs a class queryset to derive the pk
+    # type for mark_read's path param, and get_queryset() below requires a
+    # real request (membership). .none() so nothing leaks if get_queryset()
+    # is ever bypassed; it never runs in normal request handling.
+    queryset = Notification.objects.none()
+
     def get_queryset(self):
         return (
             Notification.objects
