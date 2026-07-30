@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Membership
+from apps.accounts.models import Membership, Notification
 from apps.scheduling.models import Appointment, Client, Service
 from apps.tenancy.models import Tenant
 
@@ -289,6 +289,34 @@ def test_a_terminal_appointment_cannot_be_cancelled_again(receptionist, salon, s
     res = http.post(action_url(appointment, 'cancel'))
 
     assert res.status_code == 400
+
+
+def test_cancelling_a_teammates_appointment_notifies_them(
+    receptionist, salon, stylist, client_, haircut
+):
+    """The sibling of OwnsAppointmentOrActsForTheTeam: a coordinator may act on
+    a colleague's slot, and this is what tells the colleague it happened."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    http.post(action_url(appointment, 'cancel'))
+
+    notification = Notification.objects.get()
+    caller = Membership.objects.get(user__email='r@example.com', tenant=salon)
+    assert notification.recipient == stylist
+    assert notification.actor == caller
+    assert notification.verb == Notification.Verb.APPOINTMENT_CANCELLED
+
+
+def test_cancelling_your_own_appointment_does_not_notify_you(salon, stylist, client_, haircut):
+    http = api(stylist.user, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    http.post(action_url(appointment, 'cancel'))
+
+    assert not Notification.objects.exists()
 
 
 def test_a_future_appointment_cannot_be_completed(receptionist, salon, stylist, client_, haircut):

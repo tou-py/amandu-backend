@@ -1,5 +1,7 @@
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
-from rest_framework import serializers, status
+from rest_framework import mixins, serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -8,7 +10,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.accounts.emails import send_invitation_email
-from apps.accounts.models import Invitation, Membership
+from apps.accounts.models import Invitation, Membership, Notification
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
@@ -16,6 +18,7 @@ from apps.accounts.serializers import (
     InvitationSerializer,
     MeSerializer,
     MemberSerializer,
+    NotificationSerializer,
     PushSubscriptionSerializer,
     TenantAwareTokenObtainPairSerializer,
 )
@@ -204,3 +207,40 @@ class MemberListView(ListAPIView):
             .filter(tenant=self.request.tenant)
         )
         return sorted(members, key=lambda m: (rank.get(m.role, 99), m.display_name().lower()))
+
+
+class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    A membership's own feed of things it needs to see. List only -- nothing is
+    ever created through this API, only by a trigger elsewhere writing the row
+    directly (see AppointmentViewSet.cancel).
+    """
+
+    serializer_class = NotificationSerializer
+    permission_classes = (IsAuthenticated, HasActiveMembership)
+
+    def get_queryset(self):
+        return (
+            Notification.objects
+            .filter(recipient=self.request.membership)
+            .select_related('actor__user', 'appointment')
+        )
+
+    @extend_schema(request=None, responses=NotificationSerializer)
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Idempotent: read_at is set once and never overwritten by a later call."""
+        notification = self.get_object()
+        if notification.read_at is None:
+            notification.read_at = timezone.now()
+            notification.save(update_fields=['read_at'])
+        return Response(self.get_serializer(notification).data)
+
+    @extend_schema(
+        request=None,
+        responses={204: OpenApiResponse(description='Marked; no body.')},
+    )
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        self.get_queryset().filter(read_at__isnull=True).update(read_at=timezone.now())
+        return Response(status=status.HTTP_204_NO_CONTENT)
