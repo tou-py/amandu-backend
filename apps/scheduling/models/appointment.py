@@ -83,6 +83,17 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # ponytail: never cleared. Moving an already-reminded appointment does not
     # re-notify. Clear it in the reschedule path if that turns out to matter.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # Which recurring template produced this booking, if any. SET_NULL, not
+    # CASCADE or PROTECT: deleting the template must not delete history, and
+    # this row is already-happened fact independent of the template that
+    # spawned it (same reasoning as Notification.appointment).
+    template = models.ForeignKey(
+        'scheduling.AppointmentTemplate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='appointments',
+    )
 
     class Meta:
         db_table = 'tb_appointment'
@@ -180,6 +191,13 @@ class AppointmentClient(models.Model):
 
     class Meta:
         db_table = 'tb_appointment_client'
+        # `id` is assigned once, at INSERT, and never changes again -- unlike
+        # an unordered SELECT, which owes no ordering guarantee at all, so
+        # marking one person's attendance (an UPDATE touching only their row)
+        # could visibly reshuffle the roster on the next read even though
+        # nobody's position in the group changed. Ordering by `id` pins the
+        # roster to whatever order it was created in, permanently.
+        ordering = ('id',)
         constraints = [
             models.UniqueConstraint(
                 fields=['appointment', 'client'],
