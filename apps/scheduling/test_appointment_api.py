@@ -621,3 +621,140 @@ def test_staff_may_not_reassign_an_appointment_to_someone_else(
     assert res.status_code == 400
     appointment.refresh_from_db()
     assert appointment.professional == other
+
+
+def test_staff_may_not_reschedule_a_colleagues_appointment(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    """
+    validate_professional never runs here: a drag-to-reschedule PATCH sends
+    only `start`, so the old field-level check had nothing to look at. This is
+    the object-level permission's job instead.
+    """
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='other3@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(stylist.user, salon).patch(
+        detail_url(appointment), {'start': (TOMORROW + timedelta(hours=1)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 403
+    appointment.refresh_from_db()
+    assert appointment.start == TOMORROW
+
+
+def test_staff_may_reschedule_their_own_appointment(salon, stylist, client_, haircut):
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    new_start = TOMORROW + timedelta(hours=1)
+
+    res = api(stylist.user, salon).patch(
+        detail_url(appointment), {'start': new_start.isoformat()}, format='json'
+    )
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.start == new_start
+
+
+def test_a_coordinator_may_reschedule_anyones_appointment(receptionist, salon, stylist, haircut):
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    new_start = TOMORROW + timedelta(hours=1)
+
+    res = api(receptionist, salon).patch(
+        detail_url(appointment), {'start': new_start.isoformat()}, format='json'
+    )
+
+    assert res.status_code == 200
+
+
+def test_staff_may_not_cancel_a_colleagues_appointment(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='other4@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(stylist.user, salon).post(action_url(appointment, 'cancel'))
+
+    assert res.status_code == 403
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
+
+
+def test_staff_may_not_complete_a_colleagues_appointment(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='other5@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    past = timezone.now() - timedelta(hours=2)
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=past, end=past + timedelta(minutes=30),
+    )
+
+    res = api(stylist.user, salon).post(action_url(appointment, 'complete'))
+
+    assert res.status_code == 403
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
+
+
+def test_staff_may_not_mark_attendance_for_a_colleagues_appointment(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='other6@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    appointment.clients.add(client_)
+
+    res = api(stylist.user, salon).post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'attended'},
+        format='json',
+    )
+
+    assert res.status_code == 403
+    assert appointment.client_links.get().attendance == 'pending'
+
+
+def test_a_colleague_may_still_read_the_appointment(
+    db, django_user_model, salon, stylist, client_, haircut
+):
+    """The shared calendar is unaffected: only writes are scoped."""
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='other7@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=other, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+
+    res = api(stylist.user, salon).get(detail_url(appointment))
+
+    assert res.status_code == 200

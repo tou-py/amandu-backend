@@ -13,6 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.models import Membership
 from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSerializer,
@@ -101,6 +102,7 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     ),
 )
 class AppointmentViewSet(TenantScopedModelViewSet):
+    permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
     queryset = (
         Appointment.objects
         .select_related('professional__user', 'service')
