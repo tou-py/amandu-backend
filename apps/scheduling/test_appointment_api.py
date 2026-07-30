@@ -376,6 +376,44 @@ def test_attendance_is_recorded_per_person(receptionist, salon, stylist, client_
     assert res.data['status'] == Appointment.Status.SCHEDULED
 
 
+def test_marking_attendance_does_not_reorder_the_roster(
+    receptionist, salon, stylist, client_, haircut
+):
+    """People scan the roster positionally ("the second one is always Maria"),
+    so recording one person's attendance must never reshuffle the others --
+    an UPDATE to one through row is not license for an unordered SELECT to
+    hand back a different order on the next read.
+
+    Whichever order the roster is created in is not asserted here -- that
+    order is a separate concern (see AppointmentClient.Meta.ordering) -- only
+    that marking attendance, and any read after it, preserves it exactly."""
+    bob = Client.objects.create(tenant=salon, name='Bob')
+    mia = Client.objects.create(tenant=salon, name='Mia')
+    http = api(receptionist, salon)
+    created = http.post(
+        LIST_URL, booking(stylist, [client_, bob, mia], haircut, TOMORROW), format='json'
+    )
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    original_order = [a['name'] for a in created.data['attendees']]
+    assert set(original_order) == {'Ada', 'Bob', 'Mia'}
+
+    # Mark the client that is NOT first in the established order, whichever
+    # one that is -- marking the first would not exercise the reorder bug.
+    middle = next(name for name in original_order if name != original_order[0])
+    middle_pk = {'Ada': client_.pk, 'Bob': bob.pk, 'Mia': mia.pk}[middle]
+    res = http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(middle_pk), 'attendance': 'attended'},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    assert [a['name'] for a in res.data['attendees']] == original_order
+
+    refetched = http.get(detail_url(appointment))
+    assert [a['name'] for a in refetched.data['attendees']] == original_order
+
+
 def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
     receptionist, salon, stylist, client_, haircut
 ):
