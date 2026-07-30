@@ -9,6 +9,7 @@ from apps.accounts.views import (
     LoginView,
     MemberListView,
     MeView,
+    NotificationViewSet,
     PushSubscriptionView,
 )
 
@@ -16,6 +17,7 @@ app_name = 'accounts'
 
 router = DefaultRouter()
 router.register('invitations', InvitationViewSet, basename='invitation')
+router.register('notifications', NotificationViewSet, basename='notification')
 
 urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),

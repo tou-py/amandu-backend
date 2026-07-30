@@ -11,7 +11,7 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema
 from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
-from apps.accounts.models import Membership
+from apps.accounts.models import Membership, Notification
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
@@ -170,7 +170,18 @@ class AppointmentViewSet(TenantScopedModelViewSet):
         body = AppointmentCancelSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         reason = body.validated_data.get('reason', '')
-        return self._transition(appointment, lambda: appointment.cancel(reason))
+        response = self._transition(appointment, lambda: appointment.cancel(reason))
+        # Only a teammate cancelling on someone else's behalf is news to the
+        # professional -- cancelling your own slot is not something you need to
+        # be told about.
+        if request.membership.id != appointment.professional_id:
+            Notification.objects.create(
+                recipient=appointment.professional,
+                actor=request.membership,
+                appointment=appointment,
+                verb=Notification.Verb.APPOINTMENT_CANCELLED,
+            )
+        return response
 
     # No body: the URL already names the transition.
     @extend_schema(request=None, responses=AppointmentSerializer)

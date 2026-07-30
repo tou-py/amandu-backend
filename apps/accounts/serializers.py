@@ -5,7 +5,8 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.accounts.models import CustomUser, Invitation, Membership, PushSubscription
+from apps.accounts.models import CustomUser, Invitation, Membership, Notification, PushSubscription
+from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
 
 
@@ -290,3 +291,41 @@ class AcceptInvitationSerializer(serializers.Serializer):
 
     def save(self):
         return self.validated_data['invitation'].accept(self.validated_data.get('password'))
+
+
+class NotificationActorSerializer(serializers.ModelSerializer):
+    """Same minimal {id, name} shape ProfessionalSerializer already uses for a
+    membership -- a notification row needs no more than that to label who did it."""
+
+    name = serializers.CharField(source='display_name', read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'name')
+
+
+class NotificationAppointmentSerializer(serializers.ModelSerializer):
+    """Just enough to point at the slot -- the agenda already holds the rest."""
+
+    class Meta:
+        model = Appointment
+        fields = ('id', 'start')
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    """
+    Read-only: notifications are never created through this API, only through
+    the trigger that writes them server-side (AppointmentViewSet.cancel).
+    """
+
+    # allow_null on both: the model's actor/appointment FKs are SET_NULL, so a
+    # row outlives the acting membership or the booking being deleted, and the
+    # schema has to say so rather than claim a shape that then 500s never (DRF
+    # itself renders None safely) but silently lies to every client about it.
+    actor = NotificationActorSerializer(read_only=True, allow_null=True)
+    appointment = NotificationAppointmentSerializer(read_only=True, allow_null=True)
+
+    class Meta:
+        model = Notification
+        fields = ('id', 'verb', 'actor', 'appointment', 'read_at', 'created_at')
+        read_only_fields = fields
