@@ -6,6 +6,7 @@ from apps.accounts.models import Membership
 from apps.scheduling.models import (
     Appointment,
     AppointmentClient,
+    AppointmentTemplate,
     Category,
     Client,
     Service,
@@ -198,16 +199,17 @@ class AppointmentSerializer(serializers.ModelSerializer):
     professional_name = serializers.CharField(source='professional.display_name', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
     attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
+    template_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
         fields = (
             'id', 'professional', 'professional_name', 'clients', 'attendees',
-            'service', 'service_name', 'start', 'end', 'status',
+            'service', 'service_name', 'start', 'end', 'status', 'template', 'template_name',
             'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
         )
         read_only_fields = (
-            'id', 'end', 'status', 'cancelled_at', 'cancellation_reason',
+            'id', 'end', 'status', 'template', 'cancelled_at', 'cancellation_reason',
             'created_at', 'updated_at',
         )
 
@@ -219,6 +221,12 @@ class AppointmentSerializer(serializers.ModelSerializer):
             self.fields['professional'].queryset = Membership.professionals_for(tenant)
             self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
             self.fields['service'].queryset = Service.objects.for_tenant(tenant)
+
+    def get_template_name(self, obj) -> str | None:
+        # obj.template.name would AttributeError on the common case (no
+        # template): plain source= dies on the exact appointments most bookings
+        # are, so this reads the FK id already loaded on the instance instead.
+        return obj.template.name if obj.template_id else None
 
     def validate_professional(self, professional):
         """
@@ -258,3 +266,49 @@ class AppointmentSerializer(serializers.ModelSerializer):
                 'This professional already has an appointment in that time range.'
             )
         return attrs
+
+
+class AppointmentTemplateSerializer(serializers.ModelSerializer):
+    """The recurring shape a `generate` call turns into real appointments.
+    professional/service/clients follow the exact same tenant-scoping and
+    ownership rule as AppointmentSerializer -- see validate_professional."""
+
+    clients = serializers.PrimaryKeyRelatedField(
+        many=True, allow_empty=False, queryset=Client.objects.none()
+    )
+    professional_name = serializers.CharField(source='professional.display_name', read_only=True)
+    service_name = serializers.CharField(source='service.name', read_only=True)
+
+    class Meta:
+        model = AppointmentTemplate
+        fields = (
+            'id', 'name', 'professional', 'professional_name', 'service', 'service_name',
+            'clients', 'interval_days', 'weekdays', 'start_time', 'start_date', 'end_date',
+            'max_occurrences', 'status', 'auto_generate_on_complete', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['professional'].queryset = Membership.professionals_for(tenant)
+            self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
+            self.fields['service'].queryset = Service.objects.for_tenant(tenant)
+
+    def validate_professional(self, professional):
+        """Mirrors AppointmentSerializer.validate_professional exactly: staff
+        template only for themselves, owner/admin/coordinator for anyone."""
+        membership = self.context['request'].membership
+        if professional != membership and not membership.can_schedule_for_others():
+            raise serializers.ValidationError(
+                'Your role only allows creating templates for yourself.'
+            )
+        return professional
+
+
+class GenerateOccurrencesSerializer(serializers.Serializer):
+    """Body of the `generate` action. Capped at 12: this is a human clicking a
+    button, not a bulk import."""
+
+    count = serializers.IntegerField(required=False, default=1, min_value=1, max_value=12)

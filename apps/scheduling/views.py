@@ -12,14 +12,16 @@ from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import Appointment, AppointmentTemplate, Category, Client, Service
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSerializer,
+    AppointmentTemplateSerializer,
     AttendanceSerializer,
     CategorySerializer,
     ClientSerializer,
+    GenerateOccurrencesSerializer,
     ProfessionalSerializer,
     ServiceSerializer,
 )
@@ -105,7 +107,7 @@ class AppointmentViewSet(TenantScopedModelViewSet):
     permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
     queryset = (
         Appointment.objects
-        .select_related('professional__user', 'service')
+        .select_related('professional__user', 'service', 'template')
         # The links, not the clients: the serializer reads attendance off the
         # through row, and prefetching only `clients` would query it per slot.
         .prefetch_related('client_links__client')
@@ -188,7 +190,18 @@ class AppointmentViewSet(TenantScopedModelViewSet):
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         appointment = self.get_object()
-        return self._transition(appointment, appointment.complete)
+        response = self._transition(appointment, appointment.complete)
+        # The one automatic trigger in the whole templates feature, and it is
+        # not automatic in the cron sense: it only fires as the direct,
+        # synchronous consequence of this human clicking "complete".
+        template = appointment.template
+        if (
+            template is not None
+            and template.status == AppointmentTemplate.Status.ACTIVE
+            and template.auto_generate_on_complete
+        ):
+            template.generate_occurrences(count=1)
+        return response
 
     @extend_schema(request=AttendanceSerializer, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
@@ -216,3 +229,33 @@ class AppointmentViewSet(TenantScopedModelViewSet):
         # Re-read: the instance fetched above carries a prefetched client_links
         # cache still holding the value that was just replaced.
         return Response(self.get_serializer(self.get_object()).data)
+
+
+class AppointmentTemplateViewSet(TenantScopedModelViewSet):
+    """CRUD for the recurring shape, plus the one action that turns it into
+    real bookings. OwnsAppointmentOrActsForTheTeam applies unchanged: it only
+    reads obj.professional_id and can_schedule_for_others(), both of which
+    AppointmentTemplate has exactly like Appointment."""
+
+    permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
+    queryset = (
+        AppointmentTemplate.objects
+        .select_related('professional__user', 'service')
+        .prefetch_related('clients')
+    )
+    serializer_class = AppointmentTemplateSerializer
+
+    @extend_schema(request=GenerateOccurrencesSerializer, responses=AppointmentSerializer(many=True))
+    @action(detail=True, methods=['post'])
+    def generate(self, request, pk=None):
+        template = self.get_object()
+        body = GenerateOccurrencesSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+
+        result = template.generate_occurrences(count=body.validated_data['count'])
+        return Response({
+            'created': AppointmentSerializer(
+                result['created'], many=True, context=self.get_serializer_context()
+            ).data,
+            'skipped': result['skipped'],
+        })
