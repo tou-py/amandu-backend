@@ -68,8 +68,16 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Compresses every response body: mobile clients on cellular pay per byte
+    # and per radio-second, and the agenda/notification payloads are the ones
+    # polled most.
+    'django.middleware.gzip.GZipMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    # Turns a Last-Modified response header into a 304 when it matches the
+    # client's If-Modified-Since -- the win NotificationViewSet.list and
+    # AppointmentViewSet.list set that header up for.
+    'django.middleware.http.ConditionalGetMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',

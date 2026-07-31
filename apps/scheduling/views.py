@@ -12,6 +12,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
+from apps.commons.mixins import LastModifiedListMixin
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
@@ -101,7 +102,7 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         ],
     ),
 )
-class AppointmentViewSet(TenantScopedModelViewSet):
+class AppointmentViewSet(LastModifiedListMixin, TenantScopedModelViewSet):
     permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
     queryset = (
         Appointment.objects
