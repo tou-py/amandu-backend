@@ -1,7 +1,6 @@
 from rest_framework.routers import DefaultRouter
 
 from apps.scheduling.views import (
-    AppointmentTemplateViewSet,
     AppointmentViewSet,
     CategoryViewSet,
     ClientViewSet,
@@ -16,7 +15,6 @@ router.register('clients', ClientViewSet, basename='client')
 router.register('categories', CategoryViewSet, basename='category')
 router.register('services', ServiceViewSet, basename='service')
 router.register('appointments', AppointmentViewSet, basename='appointment')
-router.register('appointment-templates', AppointmentTemplateViewSet, basename='appointment-template')
 router.register('professionals', ProfessionalViewSet, basename='professional')
 
 urlpatterns = router.urls
