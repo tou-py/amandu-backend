@@ -83,17 +83,6 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # ponytail: never cleared. Moving an already-reminded appointment does not
     # re-notify. Clear it in the reschedule path if that turns out to matter.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
-    # Which recurring template produced this booking, if any. SET_NULL, not
-    # CASCADE or PROTECT: deleting the template must not delete history, and
-    # this row is already-happened fact independent of the template that
-    # spawned it (same reasoning as Notification.appointment).
-    template = models.ForeignKey(
-        'scheduling.AppointmentTemplate',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='appointments',
-    )
 
     class Meta:
         db_table = 'tb_appointment'
