@@ -1,3 +1,4 @@
+from django.db.models import Max
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from rest_framework import mixins, serializers, status, viewsets
@@ -22,6 +23,7 @@ from apps.accounts.serializers import (
     PushSubscriptionSerializer,
     TenantAwareTokenObtainPairSerializer,
 )
+from apps.commons.mixins import LastModifiedListMixin
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
@@ -209,7 +211,7 @@ class MemberListView(ListAPIView):
         return sorted(members, key=lambda m: (rank.get(m.role, 99), m.display_name().lower()))
 
 
-class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class NotificationViewSet(LastModifiedListMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     """
     A membership's own feed of things it needs to see. List only -- nothing is
     ever created through this API, only by a trigger elsewhere writing the row
@@ -231,6 +233,15 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             .filter(recipient=self.request.membership)
             .select_related('actor__user', 'appointment')
         )
+
+    # Notification has no `updated_at` (LastModifiedListMixin's default): a row
+    # is only ever created, then later has `read_at` set once by mark_read/
+    # mark_all_read. Either one is a real change to what this list looks like,
+    # so Last-Modified has to be the newer of the two, not just `created_at`.
+    def get_last_modified(self, queryset):
+        latest = queryset.aggregate(created=Max('created_at'), read=Max('read_at'))
+        candidates = [value for value in latest.values() if value is not None]
+        return max(candidates) if candidates else timezone.now()
 
     @extend_schema(request=None, responses=NotificationSerializer)
     @action(detail=True, methods=['post'])

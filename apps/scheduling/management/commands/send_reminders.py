@@ -18,6 +18,7 @@ import json
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import DateTimeField, ExpressionWrapper, F
 from django.utils import timezone
@@ -29,6 +30,17 @@ from apps.scheduling.models import Appointment
 # answer 410 for one that was removed at the other end. Both mean the same thing
 # here: that browser is gone and the row is now garbage.
 DEAD_SUBSCRIPTION = (404, 410)
+
+# A single unresponsive push endpoint used to hang this command forever (no
+# request timeout was set), and the schedule keeps firing every 5
+# minutes regardless -- each overlapping run held its own DB connection open,
+# so delay crept up run after run until connections were exhausted and
+# reminders stopped outright. The lock makes an overlapping tick a no-op
+# instead of another process piling on top of the stuck one; the timeout
+# below is what stops a run from getting stuck in the first place.
+LOCK_KEY = 'send_reminders_lock'
+LOCK_TIMEOUT = 240  # seconds -- expires before the next tick even if a run wedges
+PUSH_TIMEOUT = 10  # seconds -- passed straight to requests.post via pywebpush
 
 
 class Command(BaseCommand):
@@ -43,6 +55,15 @@ class Command(BaseCommand):
                 'VAPID_PRIVATE_KEY and VAPID_SUBJECT are unset; push is not configured.'
             )
 
+        if not cache.add(LOCK_KEY, True, LOCK_TIMEOUT):
+            self.stdout.write('Another send_reminders run is still in progress; skipping.')
+            return
+        try:
+            self._run()
+        finally:
+            cache.delete(LOCK_KEY)
+
+    def _run(self):
         now = timezone.now()
         due = (
             Appointment.objects.filter(
@@ -118,6 +139,10 @@ class Command(BaseCommand):
                 vapid_claims={'sub': settings.VAPID_SUBJECT},
                 # WNS (Edge/Windows) rejects TTL=0 with 400; FCM and Mozilla accept it.
                 ttl=1800,
+                # Unset, this waited on the TCP connection forever: one endpoint
+                # that accepts the connection and never answers used to freeze
+                # the whole sweep, appointment after appointment, run after run.
+                timeout=PUSH_TIMEOUT,
             )
             return True
         except WebPushException as exc:
@@ -130,5 +155,14 @@ class Command(BaseCommand):
             # The endpoint is a secret, so it never reaches this line.
             self.stderr.write(
                 f'Push to user {subscription.user_id} failed with {status or exc}.'
+            )
+            return False
+        except Exception as exc:
+            # A timeout, DNS failure, or any other transport error raises here,
+            # not as a WebPushException -- and used to propagate straight out
+            # of this loop, aborting every appointment still waiting behind it.
+            # This subscription stays intact and gets retried next run.
+            self.stderr.write(
+                f'Push to user {subscription.user_id} errored with {exc!r}.'
             )
             return False

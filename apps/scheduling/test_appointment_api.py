@@ -549,6 +549,26 @@ def test_the_list_is_paginated(receptionist, salon, stylist, haircut):
     assert 'results' in res.data
 
 
+def test_the_list_answers_304_when_nothing_changed_since(receptionist, salon, stylist, haircut):
+    """
+    Last-Modified/If-Modified-Since round trip: a mobile client polling the
+    agenda should get a cheap 304 instead of the full page when nothing in the
+    filtered queryset changed since its last poll.
+    """
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    http = api(receptionist, salon)
+
+    first = http.get(LIST_URL)
+    assert first.status_code == 200
+    assert first.headers.get('Last-Modified')
+
+    second = http.get(LIST_URL, HTTP_IF_MODIFIED_SINCE=first.headers['Last-Modified'])
+    assert second.status_code == 304
+
+
 def test_filter_by_professional(receptionist, salon, stylist, haircut, django_user_model):
     other = Membership.objects.create(
         user=django_user_model.objects.create_user(email='o2@example.com', password='pw'),
