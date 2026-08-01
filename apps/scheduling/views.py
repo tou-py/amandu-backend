@@ -2,13 +2,14 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
@@ -26,6 +27,24 @@ from apps.scheduling.serializers import (
 )
 from apps.tenancy.permissions import HasActiveMembership
 from apps.tenancy.viewsets import TenantScopedModelViewSet
+
+
+class Overlaps(APIException):
+    """
+    409, not the serializer's 400: nothing was wrong with the request when it was
+    made. validate() looked and the slot WAS free -- another transaction took it
+    between that look and this insert. That is state, not input, which is the
+    same distinction Referenced draws for a protected delete.
+
+    Deliberately the same sentence the serializer raises when it does see the
+    clash: one rule, one message, whichever of the two paths gets there first.
+    The frontend matches on that text (errors.ts, translateAppointment), so a
+    reword here has to be made in both places.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = 'This professional already has an appointment in that time range.'
+    default_code = 'overlaps'
 
 
 class ClientViewSet(TenantScopedModelViewSet):
@@ -145,6 +164,41 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             queryset = queryset.filter(start__lt=day_to + timedelta(days=1))
 
         return queryset
+
+    # AppointmentSerializer.validate() checks for a clash and cannot hold what it
+    # found free: between its .exists() and the INSERT, another transaction can
+    # book the same range. no_overlap_per_professional (appointment.py) is what
+    # actually stops the double booking, and uncaught it reached the handler as
+    # an IntegrityError -- a 500 telling two receptionists working at once that
+    # the server broke, when the correct answer is "somebody beat you to it".
+    #
+    # Both hooks, and only these two: cancel() takes a row OUT of the constraint's
+    # condition and complete() leaves its range untouched, so neither can raise it.
+    def perform_create(self, serializer):
+        self._save_or_conflict(super().perform_create, serializer)
+
+    def perform_update(self, serializer):
+        self._save_or_conflict(super().perform_update, serializer)
+
+    @staticmethod
+    def _save_or_conflict(save, serializer):
+        try:
+            # atomic() and not a bare try: a failed statement marks the whole
+            # surrounding transaction for rollback, so catching the error and
+            # carrying on is only safe from inside a savepoint of its own. It
+            # costs nothing today (no ATOMIC_REQUESTS, so this IS the
+            # transaction) and is what keeps this correct if that ever changes
+            # or a caller wraps a batch of bookings -- which §2.4's recurring
+            # series will.
+            with transaction.atomic():
+                save(serializer)
+        except IntegrityError as exc:
+            # By constraint name: any other integrity failure here is a real
+            # fault and has to keep surfacing as one instead of being dressed up
+            # as an ordinary scheduling clash.
+            if 'no_overlap_per_professional' not in str(exc):
+                raise
+            raise Overlaps() from exc
 
     @staticmethod
     def _parse_day(value, tz, field):
