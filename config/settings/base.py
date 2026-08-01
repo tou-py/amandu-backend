@@ -317,6 +317,13 @@ EMAIL_HOST_USER = env.str('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env.str('EMAIL_HOST_PASSWORD', default='')
 EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=False)
 DEFAULT_FROM_EMAIL = env.str('DEFAULT_FROM_EMAIL', default='no-reply@amandu.local')
+# Django's default is None, which hands the socket its own default: an SMTP host
+# that accepts the connection and then says nothing blocks forever. Sending is
+# synchronous inside the invitation POST (InvitationViewSet.perform_create), so
+# that hang is one of three gunicorn workers gone until --timeout 60 kills it --
+# a third of the API's capacity spent waiting on somebody else's mail server.
+# Not env-configurable on purpose: this is a safety bound, not a deployment knob.
+EMAIL_TIMEOUT = 10  # seconds
 
 # The invited person opens this frontend page, which reads the token from the query
 # string and POSTs it to the accept endpoint. That frontend is not ours, so its URL
