@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -11,6 +12,8 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
 from apps.scheduling.models import Appointment, Client, Service
+from apps.scheduling.serializers import AppointmentSerializer
+from apps.scheduling.views import AppointmentViewSet
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('scheduling:appointment-list')
@@ -124,6 +127,50 @@ def test_overlap_for_the_same_professional_is_rejected(receptionist, salon, styl
     )
 
     assert res.status_code == 400
+
+
+def test_a_clash_that_beats_the_python_check_is_a_409_not_a_500(
+    receptionist, salon, stylist, client_, haircut,
+):
+    """
+    The race the serializer cannot close: it checks, finds the slot free, and by
+    the time it inserts somebody else has taken it. Reproduced deterministically
+    by letting validate() see nothing -- which is exactly what it sees while the
+    competing INSERT is still uncommitted -- with the row really there.
+
+    409, not 500: the request was valid when it was made.
+    """
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    # Everything validate() does except look for the clash. `end` still has to
+    # be derived here: it is read-only on the way in and the model requires it.
+    blind = lambda self, attrs: {**attrs, 'end': attrs['start'] + attrs['service'].duration}  # noqa: E731
+
+    with mock.patch.object(AppointmentSerializer, 'validate', blind):
+        res = api(receptionist, salon).post(
+            LIST_URL,
+            booking(stylist, [client_], haircut, TOMORROW + timedelta(minutes=15)),
+            format='json',
+        )
+
+    assert res.status_code == 409
+    # The wording the frontend matches on, shared with the serializer's own 400.
+    assert 'already has an appointment' in str(res.data)
+    assert Appointment.objects.count() == 1
+
+
+def test_an_unrelated_integrity_error_still_surfaces_as_a_fault(db):
+    """
+    The guard is by constraint name. Anything else failing on the way in is a
+    real bug and must not be dressed up as an ordinary scheduling clash.
+    """
+    def save(_serializer):
+        raise IntegrityError('duplicate key value violates unique constraint "something_else"')
+
+    with pytest.raises(IntegrityError):
+        AppointmentViewSet._save_or_conflict(save, None)
 
 
 def test_back_to_back_appointments_are_allowed(receptionist, salon, stylist, client_, haircut):
