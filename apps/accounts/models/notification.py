@@ -50,6 +50,14 @@ class Notification(models.Model):
         choices=Verb.choices,  # type: ignore
     )
     read_at = models.DateTimeField(null=True, blank=True)
+    # When this row was pushed to the recipient's devices. Null means not yet,
+    # and that is the whole idempotency mechanism -- the same one
+    # Appointment.reminder_sent_at uses, for the same reason: the sweep can run
+    # as often as it likes, and catch up after being down, without notifying
+    # twice. Distinct from `read_at`, which is about the bell in the app; a
+    # notification can be pushed and never read, or read in the app and never
+    # pushed (nobody had a subscription at the time).
+    pushed_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

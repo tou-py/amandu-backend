@@ -6,16 +6,18 @@ What is being proven is the SELECTION -- which appointments come due, whose
 devices hear about it, and what stops a second reminder -- because that is where
 the behaviour lives. pywebpush's own encryption is its business.
 """
+import json
 from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.utils import timezone
 from pywebpush import WebPushException
 
-from apps.accounts.models import Membership, PushSubscription
+from apps.accounts.models import Membership, Notification, PushSubscription
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.tenancy.models import Tenant
 
@@ -257,3 +259,120 @@ def test_keeps_the_subscription_when_the_push_service_merely_errors(
     call_command('send_reminders')
 
     assert PushSubscription.objects.filter(pk=subscription.pk).exists()
+
+
+# --------------------------------------------------------------- notifications
+#
+# The other half of the same tick. Same shape of proof: selection and
+# idempotency, with the HTTP call faked.
+
+
+@pytest.fixture
+def cancellation(salon, stylist, booking):
+    """A slot of the stylist's, called off by somebody else on the team."""
+
+    # One manager for the whole fixture: created inside _cancel it would collide
+    # on the unique email the second time a test calls it.
+    manager = Membership.objects.create(
+        user=get_user_model().objects.create_user(email='m@example.com', password='pw'),
+        tenant=salon,
+        role=Membership.Role.COORDINATOR,
+    )
+
+    def _cancel(minutes=600):
+        # Far enough out to stay clear of the reminder lead window, so these
+        # tests count notification pushes and nothing else. `minutes` exists
+        # because two of them must not overlap on the same professional.
+        appointment = booking(minutes)
+        return Notification.objects.create(
+            recipient=stylist.memberships.get(),
+            actor=manager,
+            appointment=appointment,
+            verb=Notification.Verb.APPOINTMENT_CANCELLED,
+        )
+
+    return _cancel
+
+
+def test_pushes_a_notification_nobody_has_been_told_about(cancellation, subscription, sent):
+    notification = cancellation()
+
+    call_command('send_reminders')
+
+    assert sent.call_count == 1
+    notification.refresh_from_db()
+    assert notification.pushed_at is not None
+
+
+def test_never_pushes_the_same_notification_twice(cancellation, subscription, sent):
+    cancellation()
+
+    call_command('send_reminders')
+    call_command('send_reminders')
+
+    assert sent.call_count == 1
+
+
+def test_a_notification_waits_for_a_device_instead_of_being_marked_pushed(cancellation, sent):
+    """No subscription yet: allowing them later must still deliver what waited."""
+    notification = cancellation()
+
+    call_command('send_reminders')
+
+    assert sent.call_count == 0
+    notification.refresh_from_db()
+    assert notification.pushed_at is None
+
+
+def test_the_push_says_who_cancelled_and_which_slot(cancellation, subscription, sent):
+    cancellation()
+
+    call_command('send_reminders')
+
+    payload = json.loads(sent.call_args.kwargs['data'])
+    assert payload['title'] == 'Turno cancelado'
+    assert 'canceló' in payload['body']
+    assert 'Corte' in payload['body']
+
+
+def test_survives_the_appointment_being_deleted_underneath_it(cancellation, subscription, sent):
+    """`appointment` is SET_NULL, so the row outlives the booking it describes."""
+    notification = cancellation()
+    notification.appointment.delete()
+
+    call_command('send_reminders')
+
+    assert sent.call_count == 1
+    payload = json.loads(sent.call_args.kwargs['data'])
+    assert payload['title'] == 'Turno cancelado'
+
+
+def test_two_cancellations_do_not_replace_each_other_on_the_device(
+    cancellation, subscription, sent,
+):
+    """A shared tag means 'replace'. Distinct rows need distinct tags."""
+    cancellation(minutes=600)
+    cancellation(minutes=700)
+
+    call_command('send_reminders')
+
+    tags = {json.loads(call.kwargs['data'])['tag'] for call in sent.call_args_list}
+    assert len(tags) == 2
+
+
+def test_two_reminders_due_at_once_do_not_replace_each_other(
+    booking, subscription, sent, stylist,
+):
+    """Same rule for reminders, which used to share one constant tag."""
+    # A wide lead so both fall due on one sweep. They cannot simply be minutes
+    # apart: no_overlap_per_professional forbids two 30-minute slots inside the
+    # default 30-minute window for the same person.
+    stylist.reminder_lead = timedelta(hours=3)
+    stylist.save(update_fields=['reminder_lead'])
+    booking(minutes=10)
+    booking(minutes=70)
+
+    call_command('send_reminders')
+
+    tags = {json.loads(call.kwargs['data'])['tag'] for call in sent.call_args_list}
+    assert len(tags) == 2
