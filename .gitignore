@@ -380,3 +380,6 @@ pyrightconfig.json
 
 .atl
 staticfiles/
+
+# Planning notes, deliberately untracked
+roadmap-agenda-saas.md
