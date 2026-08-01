@@ -203,7 +203,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
         model = Appointment
         fields = (
             'id', 'professional', 'professional_name', 'clients', 'attendees',
-            'service', 'service_name', 'start', 'end', 'status',
+            'service', 'service_name', 'start', 'end', 'status', 'capacity',
             'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
         )
         read_only_fields = (
@@ -257,4 +257,46 @@ class AppointmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 'This professional already has an appointment in that time range.'
             )
+
+        self._check_capacity(attrs)
         return attrs
+
+    def _check_capacity(self, attrs):
+        """
+        The roster may not exceed the slot's ceiling.
+
+        Here and not in a CheckConstraint because the roster lives in
+        AppointmentClient: no constraint can count rows in a second table. So
+        this is the only enforcement, which is why it has to cover BOTH ways the
+        two can cross -- adding people, and lowering the ceiling under the people
+        already booked. A PATCH that sends only `capacity` never touches
+        `clients`, and one that sends only `clients` never touches `capacity`;
+        each side falls back to the instance for the half it did not send.
+
+        ponytail: two writes at once can still cross it -- one lowering capacity
+        while the other fills the roster, each reading a value the other is about
+        to change. Both are validated in isolation, so the result is an
+        over-full slot that refuses the next edit until somebody widens it.
+        A select_for_update on the appointment in the update path closes it, the
+        day that stops being a curiosity.
+        """
+        if 'clients' in attrs:
+            booked = len(attrs['clients'])
+        elif self.instance is not None:
+            booked = self.instance.client_links.count()
+        else:
+            booked = 0
+
+        capacity = attrs.get('capacity')
+        if capacity is None:
+            # A create that omits the field is not unlimited -- it takes the
+            # model default, so the check has to read it from the same place the
+            # row is about to. getattr on a None instance would silently skip.
+            capacity = getattr(
+                self.instance, 'capacity', Appointment._meta.get_field('capacity').default,
+            )
+
+        if booked > capacity:
+            raise serializers.ValidationError(
+                f'This appointment holds {capacity} people and {booked} were booked.'
+            )

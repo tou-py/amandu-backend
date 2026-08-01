@@ -927,3 +927,77 @@ def test_a_colleague_may_still_read_the_appointment(
     res = api(stylist.user, salon).get(detail_url(appointment))
 
     assert res.status_code == 200
+
+
+def test_a_booking_defaults_to_five_places(receptionist, salon, stylist, client_, haircut):
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['capacity'] == 5
+
+
+def test_a_roster_over_capacity_is_refused(receptionist, salon, stylist, haircut):
+    people = [Client.objects.create(tenant=salon, name=f'P{i}') for i in range(6)]
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, people, haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 400
+    assert 'holds 5 people and 6 were booked' in str(res.data)
+    assert Appointment.objects.count() == 0
+
+
+def test_capacity_can_be_raised_to_fit_a_bigger_group(receptionist, salon, stylist, haircut):
+    people = [Client.objects.create(tenant=salon, name=f'P{i}') for i in range(6)]
+
+    res = api(receptionist, salon).post(
+        LIST_URL,
+        {**booking(stylist, people, haircut, TOMORROW), 'capacity': 8},
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert Appointment.objects.get(pk=res.data['id']).clients.count() == 6
+
+
+def test_capacity_cannot_be_lowered_under_the_people_already_booked(
+    receptionist, salon, stylist, haircut,
+):
+    """The other direction of the same rule. A PATCH sending only `capacity`
+    never touches `clients`, so the count has to come off the instance."""
+    people = [Client.objects.create(tenant=salon, name=f'P{i}') for i in range(4)]
+    http = api(receptionist, salon)
+    created = http.post(
+        LIST_URL, booking(stylist, people, haircut, TOMORROW), format='json'
+    )
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.patch(detail_url(appointment), {'capacity': 2}, format='json')
+
+    assert res.status_code == 400
+    assert 'holds 2 people and 4 were booked' in str(res.data)
+    appointment.refresh_from_db()
+    assert appointment.capacity == 5
+
+
+def test_adding_one_person_too_many_to_an_existing_slot_is_refused(
+    receptionist, salon, stylist, haircut,
+):
+    people = [Client.objects.create(tenant=salon, name=f'P{i}') for i in range(6)]
+    http = api(receptionist, salon)
+    created = http.post(
+        LIST_URL, booking(stylist, people[:5], haircut, TOMORROW), format='json'
+    )
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.patch(
+        detail_url(appointment),
+        {'clients': [str(c.pk) for c in people]},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert appointment.clients.count() == 5
