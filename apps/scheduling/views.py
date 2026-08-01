@@ -122,6 +122,16 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     ),
 )
 class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
+    """
+    The agenda: booking slots, moving them, and closing them out.
+
+    A docstring of its own is not decoration. drf-spectacular describes an
+    endpoint with `inspect.getdoc(view)`, which walks the MRO -- so without one
+    here the public API documentation showed whatever the first base class
+    happened to say about its own internals. That is how a note about
+    Cache-Control ended up describing "list appointments".
+    """
+
     permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
     queryset = (
         Appointment.objects
