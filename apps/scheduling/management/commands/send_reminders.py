@@ -10,9 +10,16 @@ cron entry lives in Dokploy's UI, not in this repo, and a second command means a
 second entry somebody has to remember to create. One tick, one lock, one place
 that can be misconfigured. `help` below says what it actually does.
 
-Run from cron -- Dokploy's Schedule Jobs execs it inside the API container --
-every few minutes. It is a sweep, not a queue: it asks the database what is due
-and sends it. There is no job per appointment, on purpose:
+WHERE THE SCHEDULE LIVES, because it is not in this repo and nothing here will
+tell you it is missing: Dokploy > the API application > Schedule Jobs, running
+`python manage.py send_reminders` inside the container every 5 minutes. That
+cadence is what LOCK_TIMEOUT below is sized against, and a redeploy from scratch
+does NOT recreate it -- an empty schedule looks exactly like a working one from
+in here, silently. If reminders stop, check that entry exists before reading a
+line of this file.
+
+It is a sweep, not a queue: it asks the database what is due and sends it. There
+is no job per appointment, on purpose:
 
   * the agenda lets anyone drag an appointment to a new time, and a scheduled job
     would have to be found and rewritten on every move;
