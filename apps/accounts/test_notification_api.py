@@ -1,9 +1,5 @@
-from datetime import timedelta
-
 import pytest
 from django.urls import reverse
-from django.utils import timezone
-from django.utils.http import http_date
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
@@ -33,38 +29,42 @@ def stylist(db, django_user_model, salon):
 
 
 def test_the_list_answers_304_when_nothing_changed_since(stylist):
-    """
-    Same Last-Modified/If-Modified-Since contract as AppointmentViewSet, but
-    Notification has no `updated_at` -- get_last_modified must fall back to the
-    newer of `created_at`/`read_at` instead of the mixin's default field.
-    """
+    """Same ETag/If-None-Match contract as AppointmentViewSet."""
     Notification.objects.create(
         recipient=stylist, verb=Notification.Verb.APPOINTMENT_CANCELLED,
     )
     http = api(stylist.user, stylist.tenant)
 
-    first = http.get(LIST_URL)
+    first = http.get(LIST_URL, HTTP_ACCEPT_ENCODING='gzip')
     assert first.status_code == 200
-    assert first.headers.get('Last-Modified')
+    assert first.headers.get('ETag')
+    assert first.headers['Cache-Control'] == 'private, no-cache'
 
-    second = http.get(LIST_URL, HTTP_IF_MODIFIED_SINCE=first.headers['Last-Modified'])
+    second = http.get(
+        LIST_URL, HTTP_ACCEPT_ENCODING='gzip', HTTP_IF_NONE_MATCH=first.headers['ETag'],
+    )
     assert second.status_code == 304
 
 
-def test_last_modified_reflects_read_at_when_its_newer_than_created_at(stylist):
+def test_marking_read_is_visible_on_the_very_next_poll(stylist):
     """
-    read_at is the only field mark_read touches -- if Last-Modified only looked
-    at created_at (the mixin's default field), a client would keep getting 304
-    after marking a notification read and never see its own read state
-    confirmed on the next poll. Set directly (bypassing auto_now_add) so the
-    two timestamps are unambiguously ordered instead of racing the clock.
+    read_at is the only field mark_read touches, and it moves no `updated_at`.
+    A timestamp-derived validator had to be taught about that column by hand;
+    a body-derived ETag cannot miss it, in the same second or any other.
     """
     notification = Notification.objects.create(
         recipient=stylist, verb=Notification.Verb.APPOINTMENT_CANCELLED,
     )
-    read_later = timezone.now() + timedelta(hours=1)
-    Notification.objects.filter(pk=notification.pk).update(read_at=read_later)
+    http = api(stylist.user, stylist.tenant)
 
-    res = api(stylist.user, stylist.tenant).get(LIST_URL)
+    first = http.get(LIST_URL, HTTP_ACCEPT_ENCODING='gzip')
+    assert first.data['results'][0]['read_at'] is None
 
-    assert res.headers['Last-Modified'] == http_date(read_later.timestamp())
+    read_url = reverse('accounts:notification-mark-read', args=[notification.pk])
+    assert http.post(read_url).status_code == 200
+
+    second = http.get(
+        LIST_URL, HTTP_ACCEPT_ENCODING='gzip', HTTP_IF_NONE_MATCH=first.headers['ETag'],
+    )
+    assert second.status_code == 200
+    assert second.data['results'][0]['read_at'] is not None

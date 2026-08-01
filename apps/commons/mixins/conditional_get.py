@@ -1,47 +1,38 @@
-from django.db.models import Max
-from django.utils import timezone
-from django.utils.http import http_date
-
-
-class LastModifiedListMixin:
+class NoHeuristicCacheMixin:
     """
-    Stamps a `list()` response with a Last-Modified header computed from the
-    filtered queryset, so ConditionalGetMiddleware can turn a matching
-    If-Modified-Since into a cheap 304 instead of resending the page -- the
-    payoff a mobile client polling a feed on a metered connection actually
-    wants.
+    Stamps `Cache-Control: private, no-cache` on a `list()` response.
 
-    Falls back to `now()` when the queryset is empty: an empty result must
-    never read as "unchanged since forever" to a client that later gets its
-    first row -- that row would otherwise arrive with an ETag/Last-Modified
-    older than the request that's supposed to reveal it.
+    That is ALL this does. The 304 itself is already handled, correctly and for
+    free, by ConditionalGetMiddleware: it hashes the rendered body into an ETag
+    and answers a matching If-None-Match with an empty 304. GZipMiddleware
+    downgrades that ETag to weak, which Django's own comparison accounts for, so
+    the round trip survives compression -- the polling win this mixin was
+    originally written for is kept without computing anything here.
 
-    Default aggregates `last_modified_field` (a plain `updated_at`, as given by
-    TimestampMixin). Override `get_last_modified` for a model that tracks
-    freshness through more than one column.
+    Why the header is still needed: a response with neither Cache-Control nor an
+    explicit expiry lets a cache invent freshness of its own (RFC 9111 4.2.2),
+    and serve the next several polls off disk without asking the server at all.
+    That is silent, not a 304. `no-cache` forces revalidation every time -- still
+    a cheap 304 when nothing changed, just never skipped -- and `private` keeps a
+    tenant's agenda out of any shared cache between the browser and this API.
 
-    Also stamps `Cache-Control: private, no-cache`. Without it, a browser that
-    sees Last-Modified but no explicit freshness directive is entitled to
-    invent one (RFC 7234 4.2.2, heuristic freshness -- ~10% of the age of
-    Last-Modified) and serve the NEXT several polls straight from disk cache
-    without asking the server at all. That is silent, not a 304: a poller can
-    sit on a stale week for as long as its heuristic window lasts, which grows
-    with how old the row was when it was first cached. `no-cache` forces
-    revalidation on every request -- still a cheap 304 on no change, just never
-    skipped -- and `private` keeps a tenant's agenda out of any shared cache
-    sitting between the browser and this API.
+    What used to live here, and why it is gone: a `Last-Modified` header built
+    from `Max(updated_at)` over the filtered queryset. Two defects, one fatal.
+
+    1. HTTP dates have one-second resolution, so `http_date()` truncates. A write
+       landing in the same second as the previous maximum produced an identical
+       Last-Modified, If-Modified-Since matched, and the client got a 304 for a
+       row that HAD changed -- permanently, because a 304 never advances the
+       validator the client stored. Dragging an appointment moments after
+       another edit is exactly that window.
+    2. `Max()` over a filtered set can move BACKWARDS when a row leaves the
+       filter, which reads to a client as "older than what I already have".
+
+    Both were an extra aggregate query per request buying nothing the body hash
+    did not already do exactly.
     """
-
-    last_modified_field = 'updated_at'
-
-    def get_last_modified(self, queryset):
-        latest = queryset.aggregate(value=Max(self.last_modified_field))['value']
-        return latest or timezone.now()
 
     def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        last_modified = self.get_last_modified(queryset)
         response = super().list(request, *args, **kwargs)
-        response['Last-Modified'] = http_date(last_modified.timestamp())
         response['Cache-Control'] = 'private, no-cache'
         return response
