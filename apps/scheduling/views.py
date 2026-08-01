@@ -12,7 +12,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
-from apps.commons.mixins import LastModifiedListMixin
+from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling.models import Appointment, Category, Client, Service
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
@@ -94,7 +94,7 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 description='Membership id of the professional attending.',
             ),
             OpenApiParameter(
-                'status',
+                 'status',
                 OpenApiTypes.STR,
                 enum=Appointment.Status.values,
                 description='Only appointments in this status.',
@@ -102,7 +102,7 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         ],
     ),
 )
-class AppointmentViewSet(LastModifiedListMixin, TenantScopedModelViewSet):
+class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
     queryset = (
         Appointment.objects

@@ -551,9 +551,10 @@ def test_the_list_is_paginated(receptionist, salon, stylist, haircut):
 
 def test_the_list_answers_304_when_nothing_changed_since(receptionist, salon, stylist, haircut):
     """
-    Last-Modified/If-Modified-Since round trip: a mobile client polling the
-    agenda should get a cheap 304 instead of the full page when nothing in the
-    filtered queryset changed since its last poll.
+    ETag/If-None-Match round trip: a mobile client polling the agenda should get
+    a cheap 304 instead of the full page when nothing changed. Sent with
+    Accept-Encoding: gzip, as a browser does -- GZipMiddleware downgrades the
+    ETag to weak, and the round trip has to survive that.
     """
     Appointment.objects.create(
         tenant=salon, professional=stylist, service=haircut,
@@ -561,12 +562,47 @@ def test_the_list_answers_304_when_nothing_changed_since(receptionist, salon, st
     )
     http = api(receptionist, salon)
 
-    first = http.get(LIST_URL)
+    first = http.get(LIST_URL, HTTP_ACCEPT_ENCODING='gzip')
     assert first.status_code == 200
-    assert first.headers.get('Last-Modified')
+    assert first.headers.get('ETag')
+    assert first.headers['Cache-Control'] == 'private, no-cache'
 
-    second = http.get(LIST_URL, HTTP_IF_MODIFIED_SINCE=first.headers['Last-Modified'])
+    second = http.get(
+        LIST_URL, HTTP_ACCEPT_ENCODING='gzip', HTTP_IF_NONE_MATCH=first.headers['ETag'],
+    )
     assert second.status_code == 304
+
+
+def test_a_reschedule_in_the_same_second_is_still_visible(receptionist, salon, stylist, haircut):
+    """
+    The regression that a Last-Modified validator could not express. HTTP dates
+    have one-second resolution, so a move landing in the same second as the
+    previous poll used to hash to an identical validator and come back 304 --
+    and stay 304, because a 304 never advances what the client stored. Dragging
+    a block moments after any other edit is exactly that window.
+    """
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+    )
+    http = api(receptionist, salon)
+
+    first = http.get(LIST_URL, HTTP_ACCEPT_ENCODING='gzip')
+    moved = TOMORROW + timedelta(hours=3)
+    assert http.patch(
+        detail_url(appointment), {'start': moved.isoformat()}, format='json',
+    ).status_code == 200
+
+    # Both validators the browser stored, replayed together, with no clock
+    # advanced in between: the response must carry the new start, not a 304.
+    second = http.get(
+        LIST_URL,
+        HTTP_ACCEPT_ENCODING='gzip',
+        HTTP_IF_NONE_MATCH=first.headers['ETag'],
+        HTTP_IF_MODIFIED_SINCE=first.headers.get('Last-Modified', ''),
+    )
+    assert second.status_code == 200
+    assert datetime.fromisoformat(second.data['results'][0]['start']) == moved
 
 
 def test_filter_by_professional(receptionist, salon, stylist, haircut, django_user_model):

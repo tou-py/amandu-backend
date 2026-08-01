@@ -1,10 +1,10 @@
-from .conditional_get import LastModifiedListMixin
+from .conditional_get import NoHeuristicCacheMixin
 from .identity import PublicIdentifierMixin
 from .timestamp import TimestampMixin
 
 
 __all__ = [
-    'LastModifiedListMixin',
+    'NoHeuristicCacheMixin',
     'PublicIdentifierMixin',
     'TimestampMixin',
 ]
