@@ -71,6 +71,18 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # carries when and why it was called off.
     cancelled_at = models.DateTimeField(null=True, blank=True, editable=False)
     cancellation_reason = models.TextField(blank=True)
+    # How many people this slot can hold. On the appointment and not on the
+    # Service because the ceiling is physical, not commercial: it is how many
+    # reformers are on the floor, how many chairs the room has -- and one of them
+    # being broken this Tuesday is a fact about Tuesday, not about the service.
+    #
+    # Enforced in AppointmentSerializer, not by a constraint: the roster lives in
+    # a second table, and no CheckConstraint can count rows there.
+    #
+    # 5 because the first tenant is a pilates studio, which is the only real
+    # answer available. It is per appointment and editable, so a tenant whose
+    # room holds twelve sets twelve and never thinks about this default again.
+    capacity = models.PositiveSmallIntegerField(default=5)
     notes = models.TextField(blank=True)
     # When the professional was pushed a reminder for this appointment. Null means
     # not yet, and that is the whole idempotency mechanism: the sweep can run as
