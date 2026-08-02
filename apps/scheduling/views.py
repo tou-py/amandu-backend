@@ -10,22 +10,35 @@ from rest_framework.response import Response
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
 from apps.commons.mixins import NoHeuristicCacheMixin
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import (
+    Appointment,
+    AppointmentClient,
+    AppointmentSeries,
+    Category,
+    Client,
+    ClientField,
+    Service,
+)
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
+    AppointmentSeriesSerializer,
     AppointmentSerializer,
     AttendanceSerializer,
     CategorySerializer,
+    ClientFieldSerializer,
     ClientSerializer,
+    MovedFollowingSerializer,
     ProfessionalSerializer,
+    RescheduleFollowingSerializer,
     ServiceSerializer,
+    VisitSerializer,
 )
-from apps.tenancy.permissions import HasActiveMembership
+from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -48,8 +61,118 @@ class Overlaps(APIException):
 
 
 class ClientViewSet(TenantScopedModelViewSet):
+    """The client file: who they are, whatever this tenant asks about them, and
+    every appointment they have ever been on the roster of."""
+
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
+
+    @extend_schema(responses=VisitSerializer(many=True))
+    @action(detail=True, methods=['get'])
+    def timeline(self, request, pk=None):
+        """
+        This client's visits, most recent first, with what was written down on
+        each one. Future bookings included: the receptionist opening the file
+        wants to know the next appointment as much as the last one.
+
+        A read over rows that already exist -- no new storage. What a visit note
+        is today is `Appointment.notes`, one text field per slot, shared by the
+        group in it. A note per person, with an author and its own timestamp,
+        stays deferred until somebody needs to know who wrote what.
+
+        Paginated: a client of three years has hundreds of these.
+        """
+        client = self.get_object()
+        visits = (
+            AppointmentClient.objects
+            # Scoped by BOTH sides on purpose. get_object() already proved the
+            # client is this tenant's, but a relation traversed from here reaches
+            # the appointment table unscoped (TenantOwnedMixin, rule 3), and this
+            # is a client file -- the one place a leak would be read as history.
+            .filter(client=client, appointment__tenant=request.tenant)
+            .select_related('appointment__service', 'appointment__professional__user')
+            .order_by('-appointment__start')
+        )
+        page = self.paginate_queryset(visits)
+        serializer = VisitSerializer(page if page is not None else visits, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+
+class ClientFieldViewSet(TenantScopedModelViewSet):
+    """
+    What this tenant asks about its clients, over and above name and phone.
+
+    Reading is open to any active membership -- the client form cannot be drawn
+    without it -- while defining, renaming and removing a field is an owner/admin
+    decision: it reshapes the form for the whole business, and a delete throws
+    away every answer already given.
+    """
+
+    queryset = ClientField.objects.all()
+    serializer_class = ClientFieldSerializer
+    # Bounded by how many questions a business asks about a client, and read to
+    # build a form, so a second page would render half of it.
+    pagination_class = None
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def perform_destroy(self, instance):
+        """
+        Take the answers with the question.
+
+        Left behind, they are keys no definition explains: ClientSerializer
+        rejects unknown keys, so every later edit of those clients would 400 on
+        data the operator never typed and cannot see. Deleting a field is
+        deliberate and rare, and it has to leave the files consistent.
+
+        ponytail: one UPDATE per client holding the key. `has_key` keeps that to
+        the clients actually affected; batch it if a tenant ever has enough of
+        them for this to be felt.
+        """
+        with transaction.atomic():
+            holders = Client.objects.for_tenant(instance.tenant).filter(
+                custom_data__has_key=instance.key
+            )
+            for client in holders:
+                del client.custom_data[instance.key]
+                client.save(update_fields=['custom_data', 'updated_at'])
+            super().perform_destroy(instance)
+
+
+class AppointmentSeriesViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Recurring arrangements: every Monday and Wednesday at seven, a control every
+    six months.
+
+    Create only, plus reading back what a rule produced. There is deliberately
+    no update and no delete here, and that is the design rather than a gap: the
+    appointments are the truth and the rule is a record of what was asked for.
+    Changing the arrangement means acting on the bookings -- `cancel-following`
+    and `reschedule-following` on an occurrence -- so that a rewritten rule can
+    never disagree with the diary anybody is actually reading.
+    """
+
+    permission_classes = (IsAuthenticated, HasActiveMembership)
+    queryset = AppointmentSeries.objects.prefetch_related(
+        'appointments__professional__user',
+        'appointments__service',
+        'appointments__client_links__client',
+    )
+    serializer_class = AppointmentSeriesSerializer
+
+    def get_queryset(self):
+        return super().get_queryset().for_tenant(self.request.tenant)
 
 
 class CategoryViewSet(TenantScopedModelViewSet):
@@ -254,6 +377,121 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     def complete(self, request, pk=None):
         appointment = self.get_object()
         return self._transition(appointment, appointment.complete)
+
+    def _following(self, appointment):
+        """
+        This occurrence and every later one in the same arrangement.
+
+        From `start` and not from the id: an occurrence moved to another day is
+        still where it now sits, and "the following ones" means the ones that
+        come after it in time. Cancelled ones are already out of the way, and a
+        completed one is history nothing may rewrite.
+        """
+        return (
+            Appointment.objects.for_tenant(self.request.tenant)
+            .filter(
+                series_id=appointment.series_id,
+                start__gte=appointment.start,
+                status=Appointment.Status.SCHEDULED,
+            )
+            .select_related('service')
+            .order_by('start')
+        )
+
+    @staticmethod
+    def _require_series(appointment):
+        if appointment.series_id is None:
+            raise ValidationError('This appointment is not part of a series.')
+
+    @extend_schema(request=AppointmentCancelSerializer, responses=AppointmentSerializer(many=True))
+    @action(detail=True, methods=['post'], url_path='cancel-following')
+    def cancel_following(self, request, pk=None):
+        """
+        Cancel this occurrence and the rest of the arrangement from here on.
+
+        The client left the term; the past stays exactly as it happened. Earlier
+        occurrences are untouched, and so is any later one already cancelled or
+        completed.
+        """
+        appointment = self.get_object()
+        self._require_series(appointment)
+
+        body = AppointmentCancelSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        reason = body.validated_data.get('reason', '')
+
+        cancelled = list(self._following(appointment))
+        for one in cancelled:
+            one.cancel(reason)
+
+        # ONE notification for the whole run, not one per occurrence: the
+        # professional needs to know the arrangement ended, and forty rows
+        # saying so is a bell nobody will ever open again.
+        if cancelled and request.membership.id != appointment.professional_id:
+            Notification.objects.create(
+                recipient=appointment.professional,
+                actor=request.membership,
+                appointment=appointment,
+                verb=Notification.Verb.APPOINTMENT_CANCELLED,
+            )
+
+        return Response(self.get_serializer(cancelled, many=True).data)
+
+    @extend_schema(
+        request=RescheduleFollowingSerializer,
+        responses=MovedFollowingSerializer,
+    )
+    @action(detail=True, methods=['post'], url_path='reschedule-following')
+    def reschedule_following(self, request, pk=None):
+        """
+        Move this occurrence and the rest to a new time of day, keeping each on
+        its own date. Optionally hand them to another professional.
+
+        A clash leaves that one occurrence where it was rather than failing the
+        move: the class changed hour, and the one week the room was already
+        taken is a thing the receptionist has to see, not a reason to abandon
+        the other thirty-nine. Which ones stayed behind is in `skipped`.
+        """
+        appointment = self.get_object()
+        self._require_series(appointment)
+
+        body = RescheduleFollowingSerializer(data=request.data, context={'request': request})
+        body.is_valid(raise_exception=True)
+        professional = body.validated_data.get('professional')
+        if professional is not None and professional != request.membership:
+            if not request.membership.can_schedule_for_others():
+                raise ValidationError(
+                    'Your role only allows booking appointments for yourself.'
+                )
+
+        zone = ZoneInfo(request.tenant.timezone)
+        new_time = body.validated_data['time']
+        moved, skipped = [], []
+
+        for one in self._following(appointment):
+            local_day = one.start.astimezone(zone).date()
+            # Rebuilt from the local date plus the new wall-clock time, the same
+            # way the series was generated: adding an offset to a UTC instant
+            # would move an occurrence on the far side of a DST boundary to the
+            # wrong hour.
+            one.start = datetime.combine(local_day, new_time).replace(tzinfo=zone)
+            one.end = one.start + one.service.duration
+            if professional is not None:
+                one.professional = professional
+            try:
+                with transaction.atomic():
+                    one.save(update_fields=['start', 'end', 'professional', 'updated_at'])
+            except IntegrityError as exc:
+                if 'no_overlap_per_professional' not in str(exc):
+                    raise
+                skipped.append(local_day)
+                continue
+            moved.append(one)
+
+        return Response({
+            'appointments': self.get_serializer(moved, many=True).data,
+            'skipped': [day.isoformat() for day in skipped],
+        })
 
     @extend_schema(request=AttendanceSerializer, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])
