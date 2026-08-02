@@ -1,4 +1,5 @@
 import phonenumbers
+from django.core.exceptions import ValidationError as DjangoValidationError
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
@@ -8,8 +9,113 @@ from apps.scheduling.models import (
     AppointmentClient,
     Category,
     Client,
+    ClientField,
     Service,
 )
+
+
+class ClientFieldSerializer(serializers.ModelSerializer):
+    """
+    The definition of one extra question, not an answer to it.
+
+    `key` is create-only: it is what every stored answer is filed under, so
+    changing it would orphan them all silently. Editing the wording is what
+    `label` is for; actually renaming the key is a data migration.
+    """
+
+    # Declared rather than inferred from the model's JSONField, which has no shape
+    # and therefore documents itself as "any JSON at all" -- a generated client
+    # gets `unknown` and has to cast its way back to the list this always is.
+    # It also does the list-of-strings checking that validate() would otherwise
+    # repeat by hand.
+    options = serializers.ListField(child=serializers.CharField(), required=False)
+
+    class Meta:
+        model = ClientField
+        fields = (
+            'id', 'key', 'label', 'kind', 'options', 'required', 'position',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance is not None:
+            self.fields['key'].read_only = True
+
+    def validate_key(self, value):
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is None:
+            return value
+        # Mirrors TenantUniqueNameMixin: the constraint guarantees it, this turns
+        # the operator's duplicate into a 400 instead of a 500.
+        if ClientField.objects.for_tenant(tenant).filter(key=value).exists():
+            raise serializers.ValidationError('A field with this key already exists.')
+        return value
+
+    def validate(self, attrs):
+        """
+        A choice field with nothing to choose from is a broken form, and options
+        on a text field is a promise nothing keeps. On a PATCH either half may be
+        missing, so both fall back to the instance.
+        """
+        kind = attrs.get('kind') or getattr(self.instance, 'kind', ClientField.Kind.TEXT)
+        options = attrs.get('options')
+        if options is None:
+            options = getattr(self.instance, 'options', [])
+
+        if kind == ClientField.Kind.SELECT:
+            if not options:
+                raise serializers.ValidationError(
+                    {'options': 'A choice field needs at least one option.'}
+                )
+            if len(set(options)) != len(options):
+                raise serializers.ValidationError({'options': 'Options must be distinct.'})
+        elif options:
+            raise serializers.ValidationError(
+                {'options': f'Only a choice field takes options, this one is {kind}.'}
+            )
+
+        self._check_answers_survive(kind, options)
+        return attrs
+
+    def _check_answers_survive(self, kind, options):
+        """
+        An edit may not invalidate answers already given.
+
+        Two ways it can. Changing the kind leaves every stored value in the old
+        shape -- text answers under a field now declared a number -- and removing
+        an option leaves answers pointing at a choice that no longer exists.
+        Either way ClientSerializer refuses those clients on their next save, so
+        the file becomes uneditable over data nobody can see or fix from the form.
+        Same failure the orphaned key would cause after a delete, arriving through
+        a different door.
+
+        Only blocked once somebody has actually answered: correcting a field
+        minutes after creating it is exactly what an owner should be able to do.
+        Widening a choice list is always fine -- it invalidates nothing.
+        """
+        if self.instance is None:
+            return
+
+        removed = set(self.instance.options or []) - set(options or [])
+        if kind == self.instance.kind and not removed:
+            return
+
+        answered = Client.objects.for_tenant(self.instance.tenant).filter(
+            custom_data__has_key=self.instance.key
+        )
+        if not answered.exists():
+            return
+
+        problem = (
+            'type' if kind != self.instance.kind
+            else f'options ({", ".join(sorted(removed))})'
+        )
+        raise serializers.ValidationError(
+            f'Clients have already answered this field, so its {problem} cannot change. '
+            'Create a new field instead.'
+        )
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -20,10 +126,18 @@ class ClientSerializer(serializers.ModelSerializer):
     """
 
     phone = PhoneNumberField(required=False, allow_blank=True)
+    # Same reason as ClientField.options: the model's JSONField documents itself
+    # as any JSON whatsoever, so a generated client sees `unknown` where this is
+    # always an object keyed by field key. DictField also rejects a list or a
+    # string before validate() ever runs.
+    custom_data = serializers.DictField(required=False)
 
     class Meta:
         model = Client
-        fields = ('id', 'name', 'phone', 'email', 'notes', 'created_at', 'updated_at')
+        fields = (
+            'id', 'name', 'phone', 'email', 'notes', 'custom_data',
+            'created_at', 'updated_at',
+        )
         read_only_fields = ('id', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):
@@ -38,6 +152,11 @@ class ClientSerializer(serializers.ModelSerializer):
             self.fields['phone'].region = tenant.country
 
     def validate(self, attrs):
+        self._check_phone(attrs)
+        self._check_custom_data(attrs)
+        return attrs
+
+    def _check_phone(self, attrs):
         """
         The database constraint still guarantees exact uniqueness; this is the
         wider net in front of it, and it stays check-then-insert, so two
@@ -45,7 +164,7 @@ class ClientSerializer(serializers.ModelSerializer):
         """
         phone = attrs.get('phone')
         if not phone:
-            return attrs
+            return
 
         others = Client.objects.for_tenant(self.context['request'].tenant)
         if self.instance is not None:
@@ -59,7 +178,60 @@ class ClientSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'phone': 'A client with this phone already exists.'}
                 )
-        return attrs
+
+    def _check_custom_data(self, attrs):
+        """
+        Every answer must match a question this tenant actually asks, and answer
+        it in the right shape. The column is schemaless jsonb, so this is the only
+        thing standing between a form and a file full of garbage.
+
+        `custom_data` is replaced whole, never merged: a form submits the answers
+        it has, and merging would make clearing an answer impossible -- the key
+        would simply be missing, which is indistinguishable from "not touched".
+        So the required check runs on a create and on any write that sends the
+        field, and a PATCH that omits it leaves the answers exactly as they were.
+        That is also what keeps adding a required field later from freezing every
+        client edited for another reason.
+
+        Unknown keys are rejected rather than dropped: silently discarding text
+        somebody typed is the one outcome nobody can debug. Orphans left behind
+        by a deleted definition cannot reach here -- ClientFieldViewSet strips
+        them from the stored data at delete time.
+        """
+        if 'custom_data' not in attrs and self.instance is not None:
+            return
+
+        # Already known to be a dict if present: the DictField above rejects
+        # anything else before this runs.
+        data = attrs.get('custom_data') or {}
+        tenant = self.context['request'].tenant
+        definitions = {f.key: f for f in ClientField.objects.for_tenant(tenant)}
+
+        unknown = sorted(set(data) - set(definitions))
+        if unknown:
+            raise serializers.ValidationError(
+                {'custom_data': f'No such field for this tenant: {", ".join(unknown)}.'}
+            )
+
+        cleaned = {}
+        errors = {}
+        for key, definition in definitions.items():
+            value = data.get(key)
+            # None and '' both mean unanswered. Storing either would be a key
+            # that reads as an answer and is not one, so the pair is dropped.
+            if value is None or value == '':
+                if definition.required:
+                    errors[key] = 'This field is required.'
+                continue
+            try:
+                cleaned[key] = definition.clean_value(value)
+            except DjangoValidationError as exc:
+                errors[key] = exc.messages
+
+        if errors:
+            raise serializers.ValidationError({'custom_data': errors})
+
+        attrs['custom_data'] = cleaned
 
 
 class TenantUniqueNameMixin:
@@ -148,6 +320,36 @@ class AttendeeSerializer(serializers.ModelSerializer):
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
         fields = ('id', 'name', 'attendance')
+        read_only_fields = fields
+
+
+class VisitSerializer(serializers.ModelSerializer):
+    """
+    One appointment as it appears on a client's file: when, for what, with whom,
+    whether they turned up and what was written down afterwards.
+
+    Built on the through row and not on Appointment because the file is one
+    person's history -- `attendance` is the answer for THIS client, and a slot
+    holding four people has four different ones. Reading it from here also means
+    the whole timeline is a single query with no per-visit lookup for the roster.
+    """
+
+    id = serializers.UUIDField(source='appointment_id', read_only=True)
+    start = serializers.DateTimeField(source='appointment.start', read_only=True)
+    end = serializers.DateTimeField(source='appointment.end', read_only=True)
+    status = serializers.CharField(source='appointment.status', read_only=True)
+    service_name = serializers.CharField(source='appointment.service.name', read_only=True)
+    professional_name = serializers.CharField(
+        source='appointment.professional.display_name', read_only=True
+    )
+    notes = serializers.CharField(source='appointment.notes', read_only=True)
+
+    class Meta:
+        model = AppointmentClient
+        fields = (
+            'id', 'start', 'end', 'status', 'service_name', 'professional_name',
+            'attendance', 'notes',
+        )
         read_only_fields = fields
 
 

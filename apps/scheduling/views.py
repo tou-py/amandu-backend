@@ -10,22 +10,31 @@ from rest_framework.response import Response
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 
 from apps.accounts.models import Membership, Notification
 from apps.commons.mixins import NoHeuristicCacheMixin
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import (
+    Appointment,
+    AppointmentClient,
+    Category,
+    Client,
+    ClientField,
+    Service,
+)
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSerializer,
     AttendanceSerializer,
     CategorySerializer,
+    ClientFieldSerializer,
     ClientSerializer,
     ProfessionalSerializer,
     ServiceSerializer,
+    VisitSerializer,
 )
-from apps.tenancy.permissions import HasActiveMembership
+from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -48,8 +57,88 @@ class Overlaps(APIException):
 
 
 class ClientViewSet(TenantScopedModelViewSet):
+    """The client file: who they are, whatever this tenant asks about them, and
+    every appointment they have ever been on the roster of."""
+
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
+
+    @extend_schema(responses=VisitSerializer(many=True))
+    @action(detail=True, methods=['get'])
+    def timeline(self, request, pk=None):
+        """
+        This client's visits, most recent first, with what was written down on
+        each one. Future bookings included: the receptionist opening the file
+        wants to know the next appointment as much as the last one.
+
+        A read over rows that already exist -- no new storage. What a visit note
+        is today is `Appointment.notes`, one text field per slot, shared by the
+        group in it. A note per person, with an author and its own timestamp,
+        stays deferred until somebody needs to know who wrote what.
+
+        Paginated: a client of three years has hundreds of these.
+        """
+        client = self.get_object()
+        visits = (
+            AppointmentClient.objects
+            # Scoped by BOTH sides on purpose. get_object() already proved the
+            # client is this tenant's, but a relation traversed from here reaches
+            # the appointment table unscoped (TenantOwnedMixin, rule 3), and this
+            # is a client file -- the one place a leak would be read as history.
+            .filter(client=client, appointment__tenant=request.tenant)
+            .select_related('appointment__service', 'appointment__professional__user')
+            .order_by('-appointment__start')
+        )
+        page = self.paginate_queryset(visits)
+        serializer = VisitSerializer(page if page is not None else visits, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+
+class ClientFieldViewSet(TenantScopedModelViewSet):
+    """
+    What this tenant asks about its clients, over and above name and phone.
+
+    Reading is open to any active membership -- the client form cannot be drawn
+    without it -- while defining, renaming and removing a field is an owner/admin
+    decision: it reshapes the form for the whole business, and a delete throws
+    away every answer already given.
+    """
+
+    queryset = ClientField.objects.all()
+    serializer_class = ClientFieldSerializer
+    # Bounded by how many questions a business asks about a client, and read to
+    # build a form, so a second page would render half of it.
+    pagination_class = None
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def perform_destroy(self, instance):
+        """
+        Take the answers with the question.
+
+        Left behind, they are keys no definition explains: ClientSerializer
+        rejects unknown keys, so every later edit of those clients would 400 on
+        data the operator never typed and cannot see. Deleting a field is
+        deliberate and rare, and it has to leave the files consistent.
+
+        ponytail: one UPDATE per client holding the key. `has_key` keeps that to
+        the clients actually affected; batch it if a tenant ever has enough of
+        them for this to be felt.
+        """
+        with transaction.atomic():
+            holders = Client.objects.for_tenant(instance.tenant).filter(
+                custom_data__has_key=instance.key
+            )
+            for client in holders:
+                del client.custom_data[instance.key]
+                client.save(update_fields=['custom_data', 'updated_at'])
+            super().perform_destroy(instance)
 
 
 class CategoryViewSet(TenantScopedModelViewSet):

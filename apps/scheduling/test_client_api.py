@@ -1,9 +1,12 @@
+from datetime import timedelta
+
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
-from apps.scheduling.models import Client
+from apps.scheduling.models import Appointment, AppointmentClient, Client, Service
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('scheduling:client-list')
@@ -229,3 +232,80 @@ def test_without_a_tenant_country_a_local_number_is_rejected(db, django_user_mod
 
     assert local.status_code == 400
     assert international.status_code == 201
+
+
+# --- timeline ----------------------------------------------------------------
+
+def timeline_url(client):
+    return reverse('scheduling:client-timeline', args=[client.pk])
+
+
+@pytest.fixture
+def stylist(db, django_user_model, salon):
+    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
+    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+
+
+@pytest.fixture
+def haircut(db, salon):
+    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
+
+
+def book(salon, stylist, haircut, when, *clients, notes=''):
+    appointment = Appointment.objects.create(
+        tenant=salon,
+        professional=stylist,
+        service=haircut,
+        start=when,
+        end=when + haircut.duration,
+        notes=notes,
+    )
+    for client in clients:
+        AppointmentClient.objects.create(appointment=appointment, client=client)
+    return appointment
+
+
+def test_timeline_lists_the_clients_visits_newest_first(receptionist, salon, stylist, haircut):
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    now = timezone.now().replace(microsecond=0)
+    book(salon, stylist, haircut, now - timedelta(days=30), ada, notes='7.1 ash')
+    book(salon, stylist, haircut, now + timedelta(days=2), ada)
+
+    res = api(receptionist, salon).get(timeline_url(ada))
+
+    assert res.status_code == 200
+    visits = res.data['results']
+    assert len(visits) == 2
+    assert visits[0]['start'] > visits[1]['start']
+    assert visits[1]['notes'] == '7.1 ash'
+    assert visits[1]['service_name'] == 'Haircut'
+
+
+def test_timeline_carries_this_clients_own_attendance(receptionist, salon, stylist, haircut):
+    """A slot holding a group has one answer per person, not one for the booking."""
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    grace = Client.objects.create(tenant=salon, name='Grace')
+    appointment = book(salon, stylist, haircut, timezone.now() - timedelta(days=1), ada, grace)
+    appointment.client_links.filter(client=grace).update(attendance='no_show')
+
+    res = api(receptionist, salon).get(timeline_url(ada))
+
+    assert [v['attendance'] for v in res.data['results']] == ['pending']
+
+
+def test_timeline_shows_only_that_clients_visits(receptionist, salon, stylist, haircut):
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    grace = Client.objects.create(tenant=salon, name='Grace')
+    book(salon, stylist, haircut, timezone.now() - timedelta(days=1), grace)
+
+    res = api(receptionist, salon).get(timeline_url(ada))
+
+    assert res.data['results'] == []
+
+
+def test_timeline_of_another_tenants_client_is_not_reachable(receptionist, salon, clinic):
+    foreign = Client.objects.create(tenant=clinic, name='Grace')
+
+    res = api(receptionist, salon).get(timeline_url(foreign))
+
+    assert res.status_code == 404

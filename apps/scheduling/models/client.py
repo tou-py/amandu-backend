@@ -32,6 +32,16 @@ class Client(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # Deliberately a plain field, not a Note model: phase 1 notes are trivial. A
     # model earns its place when someone needs to know who wrote what and when.
     notes = models.TextField(blank=True)
+    # Answers to whatever this tenant decided to ask (see ClientField), keyed by
+    # ClientField.key. Here and not in a value table because a client file is
+    # always read whole and never searched across clients: one column, one read,
+    # no fan-out. jsonb, so a GIN index is available the day filtering by an
+    # answer is actually asked for.
+    #
+    # Nothing about the shape is enforced by the database. ClientSerializer
+    # validates every key and value against this tenant's field definitions, and
+    # is the only place that may write here.
+    custom_data = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = 'tb_client'
