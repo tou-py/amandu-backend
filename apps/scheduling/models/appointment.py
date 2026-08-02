@@ -57,6 +57,20 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         on_delete=models.PROTECT,
         related_name='appointments',
     )
+    # The arrangement this slot was generated from, if it was. Null is the
+    # normal case: most appointments are booked one at a time.
+    #
+    # SET_NULL, not CASCADE: deleting the rule must never delete the bookings it
+    # made. They happened. What is lost is only the knowledge that they were once
+    # part of a series, which is why nothing in the domain reads this except the
+    # two "and the following ones" actions.
+    series = models.ForeignKey(
+        'scheduling.AppointmentSeries',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='appointments',
+    )
     # Stored UTC (USE_TZ); the tenant timezone governs how it is shown, not stored.
     start = models.DateTimeField()
     # Derived from start + service.duration at write time and stored, so a later

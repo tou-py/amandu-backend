@@ -1,12 +1,19 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import phonenumbers
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
+from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.accounts.models import Membership
 from apps.scheduling.models import (
+    MAX_OCCURRENCES,
     Appointment,
     AppointmentClient,
+    AppointmentSeries,
     Category,
     Client,
     ClientField,
@@ -375,43 +382,18 @@ class AppointmentCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
-class AppointmentSerializer(serializers.ModelSerializer):
+class AppointmentTemplateMixin:
     """
-    Every relation is scoped to the request tenant, so the four tenant paths
-    (own, professional, clients, service) always agree -- the database does not
-    check that `end` is derived from the service duration, never sent.
+    The rules that describe a booking, wherever it comes from: one made by hand
+    and one generated fifty at a time by a series answer to the same three
+    questions -- may this tenant use these ids, may this caller book that
+    professional, and does the roster fit.
 
-    The *_name fields exist so an agenda can render a slot without resolving
-    three ids per appointment: a calendar showing a week is hundreds of rows, and
-    the alternative is hundreds of round trips from a browser. They are read-only
-    labels; the ids remain the writable contract.
-
-    `clients` writes, `attendees` reads. The same people either way: one is the
-    list of ids a booking is made from, the other is those people with their
-    names and whether they turned up.
+    Shared rather than repeated because a rule written twice is a rule that
+    disagrees with itself eventually. Declared fields stay on each serializer:
+    DRF collects those from the class and from serializer bases, not from a
+    plain mixin, so putting them here would silently drop them.
     """
-
-    # Write-only: `attendees` already carries these people on the way out, with
-    # their names and their attendance. Serialising the bare ids too would send
-    # the same roster twice and cost a query per slot to do it.
-    clients = serializers.PrimaryKeyRelatedField(
-        many=True, allow_empty=False, queryset=Client.objects.none(), write_only=True
-    )
-    professional_name = serializers.CharField(source='professional.display_name', read_only=True)
-    service_name = serializers.CharField(source='service.name', read_only=True)
-    attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
-
-    class Meta:
-        model = Appointment
-        fields = (
-            'id', 'professional', 'professional_name', 'clients', 'attendees',
-            'service', 'service_name', 'start', 'end', 'status', 'capacity',
-            'cancelled_at', 'cancellation_reason', 'notes', 'created_at', 'updated_at',
-        )
-        read_only_fields = (
-            'id', 'end', 'status', 'cancelled_at', 'cancellation_reason',
-            'created_at', 'updated_at',
-        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -428,8 +410,8 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
         Staff book for themselves; owner, admin and coordinator book for the
         whole team. Enforced here rather than in the view because it is a fact
-        about the payload, so it holds for a create and for a PATCH that
-        reassigns an existing slot alike.
+        about the payload, so it holds for a create, for a PATCH that reassigns
+        an existing slot, and for a whole series alike.
         """
         membership = self.context['request'].membership
         if professional != membership and not membership.can_schedule_for_others():
@@ -437,31 +419,6 @@ class AppointmentSerializer(serializers.ModelSerializer):
                 'Your role only allows booking appointments for yourself.'
             )
         return professional
-
-    def validate(self, attrs):
-        tenant = self.context['request'].tenant
-        # On a partial update the unchanged sides come from the instance.
-        professional = attrs.get('professional') or getattr(self.instance, 'professional', None)
-        service = attrs.get('service') or getattr(self.instance, 'service', None)
-        start = attrs.get('start') or getattr(self.instance, 'start', None)
-
-        end = start + service.duration
-        attrs['end'] = end
-
-        overlapping = (
-            Appointment.objects.for_tenant(tenant)
-            .filter(professional=professional, start__lt=end, end__gt=start)
-            .exclude(status=Appointment.Status.CANCELLED)
-        )
-        if self.instance is not None:
-            overlapping = overlapping.exclude(pk=self.instance.pk)
-        if overlapping.exists():
-            raise serializers.ValidationError(
-                'This professional already has an appointment in that time range.'
-            )
-
-        self._check_capacity(attrs)
-        return attrs
 
     def _check_capacity(self, attrs):
         """
@@ -502,3 +459,283 @@ class AppointmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 f'This appointment holds {capacity} people and {booked} were booked.'
             )
+
+
+class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerializer):
+    """
+    Every relation is scoped to the request tenant, so the four tenant paths
+    (own, professional, clients, service) always agree -- the database does not
+    check that `end` is derived from the service duration, never sent.
+
+    The *_name fields exist so an agenda can render a slot without resolving
+    three ids per appointment: a calendar showing a week is hundreds of rows, and
+    the alternative is hundreds of round trips from a browser. They are read-only
+    labels; the ids remain the writable contract.
+
+    `clients` writes, `attendees` reads. The same people either way: one is the
+    list of ids a booking is made from, the other is those people with their
+    names and whether they turned up.
+    """
+
+    # Write-only: `attendees` already carries these people on the way out, with
+    # their names and their attendance. Serialising the bare ids too would send
+    # the same roster twice and cost a query per slot to do it.
+    clients = serializers.PrimaryKeyRelatedField(
+        many=True, allow_empty=False, queryset=Client.objects.none(), write_only=True
+    )
+    professional_name = serializers.CharField(source='professional.display_name', read_only=True)
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
+
+    class Meta:
+        model = Appointment
+        fields = (
+            'id', 'professional', 'professional_name', 'clients', 'attendees',
+            'service', 'service_name', 'start', 'end', 'status', 'capacity',
+            'series', 'cancelled_at', 'cancellation_reason', 'notes',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = (
+            'id', 'end', 'status', 'series', 'cancelled_at', 'cancellation_reason',
+            'created_at', 'updated_at',
+        )
+
+    def validate(self, attrs):
+        tenant = self.context['request'].tenant
+        # On a partial update the unchanged sides come from the instance.
+        professional = attrs.get('professional') or getattr(self.instance, 'professional', None)
+        service = attrs.get('service') or getattr(self.instance, 'service', None)
+        start = attrs.get('start') or getattr(self.instance, 'start', None)
+
+        end = start + service.duration
+        attrs['end'] = end
+
+        overlapping = (
+            Appointment.objects.for_tenant(tenant)
+            .filter(professional=professional, start__lt=end, end__gt=start)
+            .exclude(status=Appointment.Status.CANCELLED)
+        )
+        if self.instance is not None:
+            overlapping = overlapping.exclude(pk=self.instance.pk)
+        if overlapping.exists():
+            raise serializers.ValidationError(
+                'This professional already has an appointment in that time range.'
+            )
+
+        self._check_capacity(attrs)
+        return attrs
+
+
+class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSerializer):
+    """
+    Books a whole arrangement at once: the rule, plus the appointment to repeat.
+
+    The write side carries a booking's own fields (`professional`, `clients`,
+    `service`, `start`, `capacity`, `notes`) because a series is not an object
+    anybody wants for itself -- it is fifty bookings somebody wants, described
+    once. `start` is the FIRST occurrence, instant included; everything after it
+    reuses that wall-clock time on the days the rule picks.
+
+    The read side answers with what actually landed: `appointments` and, just as
+    importantly, `skipped`.
+    """
+
+    # All write-only: none of them is a column on the series, they describe the
+    # booking to repeat. On the way out they are already on every occurrence in
+    # `appointments`, with names attached, so echoing bare ids here would be the
+    # same answer twice and a lookup for the reader either way.
+    professional = serializers.PrimaryKeyRelatedField(
+        queryset=Membership.objects.none(), write_only=True
+    )
+    clients = serializers.PrimaryKeyRelatedField(
+        many=True, allow_empty=False, queryset=Client.objects.none(), write_only=True
+    )
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=Service.objects.none(), write_only=True
+    )
+    start = serializers.DateTimeField(write_only=True)
+    capacity = serializers.IntegerField(min_value=1, required=False, write_only=True)
+    notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    appointments = AppointmentSerializer(many=True, read_only=True)
+    # The days the rule asked for and the diary would not give: the professional
+    # was already busy. Reported instead of failing the whole request, because a
+    # term of Mondays is not worth abandoning over one clash in week five, and a
+    # receptionist told WHICH days to look at can fix those in seconds.
+    skipped = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AppointmentSeries
+        fields = (
+            'id', 'professional', 'clients', 'service', 'start', 'capacity', 'notes',
+            'frequency', 'interval', 'weekdays', 'until',
+            'appointments', 'skipped', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    @extend_schema_field(serializers.ListField(child=serializers.DateField()))
+    def get_skipped(self, series):
+        # Formatted here rather than left to the JSON renderer, so `.data` is
+        # the wire format everywhere -- including for anything reading the
+        # response without rendering it.
+        return [day.isoformat() for day in getattr(series, 'skipped_days', [])]
+
+    def validate_interval(self, interval):
+        if interval < 1:
+            raise serializers.ValidationError('Repeat at least every one week or month.')
+        return interval
+
+    def validate_weekdays(self, weekdays):
+        if any(day < 0 or day > 6 for day in weekdays):
+            raise serializers.ValidationError('Days run from 0 (Monday) to 6 (Sunday).')
+        return sorted(set(weekdays))
+
+    def validate(self, attrs):
+        tenant = self.context['request'].tenant
+        first = attrs['start'].astimezone(ZoneInfo(tenant.timezone)).date()
+
+        if attrs['until'] < first:
+            raise serializers.ValidationError(
+                {'until': 'The series ends before its first appointment.'}
+            )
+        if attrs.get('weekdays') and attrs.get('frequency') == AppointmentSeries.Frequency.MONTHLY:
+            raise serializers.ValidationError(
+                {'weekdays': 'Only a weekly series repeats on chosen days.'}
+            )
+
+        # Asked before anything is written, using an unsaved row purely as the
+        # rule calculator. The generator caps itself, but a silent cap is a term
+        # that quietly stops in August and nobody knows why until a client turns
+        # up to a class that was never booked.
+        planned = AppointmentSeries(
+            frequency=attrs.get('frequency', AppointmentSeries.Frequency.WEEKLY),
+            interval=attrs.get('interval', 1),
+            weekdays=attrs.get('weekdays', []),
+            until=attrs['until'],
+        ).occurrence_dates(first)
+        if len(planned) >= MAX_OCCURRENCES:
+            raise serializers.ValidationError(
+                {'until': f'That is more than {MAX_OCCURRENCES} appointments. '
+                          'Book a shorter run and renew it.'}
+            )
+
+        self._check_capacity(attrs)
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Materialise the arrangement.
+
+        Each occurrence is inserted in a savepoint of its own so one clash
+        cannot take the rest of the term with it -- and a clash IS expected:
+        the exclusion constraint is the only thing that knows the professional's
+        diary, and it answers one insert at a time.
+        """
+        tenant = self.context['request'].tenant
+        booking = {
+            key: validated_data.pop(key)
+            for key in ('professional', 'service', 'start', 'clients')
+        }
+        booking['capacity'] = validated_data.pop(
+            'capacity', Appointment._meta.get_field('capacity').default
+        )
+        booking['notes'] = validated_data.pop('notes', '')
+
+        series = AppointmentSeries.objects.create(tenant=tenant, **validated_data)
+
+        # The wall-clock time, in the tenant's zone, is what repeats. Rebuilding
+        # each start from a local date plus that time is what keeps a 07:00 class
+        # at 07:00 after the clocks move; adding seven days to a UTC instant
+        # would quietly shift half the term by an hour.
+        zone = ZoneInfo(tenant.timezone)
+        local_first = booking['start'].astimezone(zone)
+        booked, skipped = [], []
+
+        for day in series.occurrence_dates(local_first.date()):
+            start = datetime.combine(day, local_first.time()).replace(tzinfo=zone)
+            appointment = self._book(series, booking, start)
+            (booked if appointment is not None else skipped).append(appointment or day)
+
+        if not booked:
+            # Nothing was booked, so there is no arrangement -- only a row
+            # claiming one. Rolled back rather than returned as an empty success
+            # nobody would read.
+            series.delete()
+            raise serializers.ValidationError(
+                'Every date in this series clashes with an existing appointment.'
+            )
+
+        series.skipped_days = skipped
+        series.appointments_created = booked
+        return series
+
+    @staticmethod
+    def _book(series, booking, start):
+        """The occurrence, or None if the professional was already busy then."""
+        try:
+            with transaction.atomic():
+                appointment = Appointment.objects.create(
+                    tenant=series.tenant,
+                    series=series,
+                    professional=booking['professional'],
+                    service=booking['service'],
+                    start=start,
+                    end=start + booking['service'].duration,
+                    capacity=booking['capacity'],
+                    notes=booking['notes'],
+                )
+                AppointmentClient.objects.bulk_create(
+                    AppointmentClient(appointment=appointment, client=client)
+                    for client in booking['clients']
+                )
+        except IntegrityError as exc:
+            # By constraint name: any other integrity failure here is a real
+            # fault and must keep surfacing as one.
+            if 'no_overlap_per_professional' not in str(exc):
+                raise
+            return None
+        return appointment
+
+    def to_representation(self, series):
+        data = super().to_representation(series)
+        # The prefetch-free path: create() already holds the rows it made, in
+        # order, and re-reading them would only risk showing a different set.
+        made = getattr(series, 'appointments_created', None)
+        if made is not None:
+            data['appointments'] = AppointmentSerializer(
+                made, many=True, context=self.context
+            ).data
+        return data
+
+
+class MovedFollowingSerializer(serializers.Serializer):
+    """
+    What a forward move actually did: the occurrences that took the new hour,
+    and the days that would not, because the professional was already booked
+    then. Declared so the schema says so instead of promising a bare list.
+    """
+
+    appointments = AppointmentSerializer(many=True, read_only=True)
+    skipped = serializers.ListField(child=serializers.DateField(), read_only=True)
+
+
+class RescheduleFollowingSerializer(serializers.Serializer):
+    """
+    Body of the "this one and the following" move: the new wall-clock time, and
+    optionally who attends from now on.
+
+    A time and not a datetime: what moves is the hour of a recurring class, on
+    each occurrence's own day. Sending an instant would ask which day it belongs
+    to and answer nothing about the other forty.
+    """
+
+    time = serializers.TimeField()
+    professional = serializers.PrimaryKeyRelatedField(
+        queryset=Membership.objects.none(), required=False
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['professional'].queryset = Membership.professionals_for(tenant)
