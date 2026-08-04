@@ -1,6 +1,7 @@
 """
-The push sweep. Two things come due on the same tick and share one run:
+The sweep. Three things come due on the same tick and share one run:
 
+  * a tenant whose paid period ran out, which loses access;
   * a reminder of the appointment a professional is about to give;
   * a Notification row nobody has been told about yet -- today, a teammate
     cancelling a slot that was not theirs (AppointmentViewSet.cancel).
@@ -42,6 +43,7 @@ from pywebpush import WebPushException, webpush
 
 from apps.accounts.models import Notification
 from apps.scheduling.models import Appointment
+from apps.tenancy.models import Tenant
 
 # RFC 8030 mandates 404 when the subscription has expired. Push services also
 # answer 410 for one that was removed at the other end. Both mean the same thing
@@ -67,6 +69,12 @@ class Command(BaseCommand):
     )
 
     def handle(self, *args, **options):
+        # First, and outside both the VAPID guard and the lock, on purpose:
+        # collecting money must not depend on push being configured, and a single
+        # idempotent UPDATE has nothing to serialise -- an overlapping tick
+        # matches zero rows the second time.
+        self._run_billing()
+
         if not (settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             # Loud here rather than at boot: the API must serve an agenda without
             # push configured, but a cron that silently sends nothing every five
@@ -83,6 +91,36 @@ class Command(BaseCommand):
             self._run_notifications()
         finally:
             cache.delete(LOCK_KEY)
+
+    def _run_billing(self):
+        """
+        Cut off tenants whose paid period ended. `paid_until` is a date in the
+        tenant's own calendar sense, so the comparison is against today, not now:
+        a tenant paid through the 31st works all of the 31st.
+
+        One direction only, and that asymmetry is the point. Suspending is safe
+        to automate because SUSPENDED keeps the data intact and a payment undoes
+        it. Reactivating is NOT: SUSPENDED also means "under review", so a rule
+        that restored access on a future `paid_until` would quietly hand the
+        platform back to a tenant we cut off for a reason that was never money.
+        Lifting it stays a human decision, made in the admin by the same person
+        who confirms the transfer.
+        """
+        # update() is deliberate over save(): it is one statement, it cannot race
+        # with whatever else is editing the tenant, and it never loads a row it
+        # only means to flag. auto_now does not fire on update(), hence the
+        # explicit updated_at -- without it a suspension leaves no trace in time.
+        suspended = Tenant.objects.filter(
+            status=Tenant.Status.ACTIVE,
+            # NULL never satisfies a comparison, which is exactly the wanted
+            # behaviour: a tenant with no paid_until is never swept.
+            paid_until__lt=timezone.localdate(),
+        ).update(status=Tenant.Status.SUSPENDED, updated_at=timezone.now())
+
+        if suspended:
+            # Silent on the ordinary tick (this runs every 5 minutes), loud when
+            # somebody actually lost access.
+            self.stdout.write(f'{suspended} tenant(s) suspended for non-payment.')
 
     def _run(self):
         now = timezone.now()
