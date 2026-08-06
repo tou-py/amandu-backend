@@ -71,6 +71,18 @@ class Tenant(TimestampMixin):
         default='',
         validators=[RegexValidator(r'^[A-Z]{2}$', 'Use an ISO 3166-1 alpha-2 code.')],
     )
+    # The last day this tenant has paid for, whatever grace we decided to give
+    # included -- a transfer that lands two days late is a phone call, not a
+    # second field. NULL is a defined state and the default one: "never
+    # expires", which is what every tenant onboarded before billing existed is,
+    # and what a courtesy account stays. Only a date in the past suspends, so a
+    # NULL is never swept (SQL comparisons against NULL are never true).
+    #
+    # Payment itself is manual for now: money arrives by bank transfer and a
+    # human confirms it in the admin. This field is the only thing the rest of
+    # the system needs to know about that, which is why there is no plan table,
+    # no price and no ledger yet.
+    paid_until = models.DateField(null=True, blank=True)
 
     class Meta:
         db_table = 'tb_tenant'

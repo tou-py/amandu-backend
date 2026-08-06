@@ -376,3 +376,79 @@ def test_two_reminders_due_at_once_do_not_replace_each_other(
 
     tags = {json.loads(call.kwargs['data'])['tag'] for call in sent.call_args_list}
     assert len(tags) == 2
+
+
+# --- The billing half of the sweep -----------------------------------------
+#
+# Same command, different subject: tenants whose paid period ran out lose access.
+# What is being proven here is the SELECTION again -- who gets cut off and, just
+# as importantly, who never does.
+
+
+@pytest.fixture
+def paid(db):
+    def make(days, status=Tenant.Status.ACTIVE, slug=None):
+        """A tenant paid through `days` from today; negative means lapsed."""
+        return Tenant.objects.create(
+            name=f'Tenant {days}',
+            slug=slug or f'tenant-{days}-{status}',
+            status=status,
+            paid_until=timezone.localdate() + timedelta(days=days),
+        )
+    return make
+
+
+def test_suspends_a_tenant_whose_paid_period_ended(paid, sent):
+    tenant = paid(days=-1)
+
+    call_command('send_reminders')
+
+    tenant.refresh_from_db()
+    assert tenant.status == Tenant.Status.SUSPENDED
+
+
+def test_leaves_a_tenant_paid_through_today_alone(paid, sent):
+    """The comparison is against a date, not an instant: paid through the 31st
+    means working all of the 31st, not until midnight of the 30th."""
+    tenant = paid(days=0)
+
+    call_command('send_reminders')
+
+    tenant.refresh_from_db()
+    assert tenant.status == Tenant.Status.ACTIVE
+
+
+def test_never_suspends_a_tenant_without_an_expiry(salon, sent):
+    """NULL paid_until is the default and means 'never expires' -- every tenant
+    onboarded before billing existed is one, and none of them may be cut off."""
+    assert salon.paid_until is None
+
+    call_command('send_reminders')
+
+    salon.refresh_from_db()
+    assert salon.status == Tenant.Status.ACTIVE
+
+
+def test_does_not_resurrect_a_closed_tenant(paid, sent):
+    """CLOSED is terminal: they left. Only ACTIVE tenants are swept, so the
+    status must survive untouched rather than be rewritten to SUSPENDED."""
+    tenant = paid(days=-30, status=Tenant.Status.CLOSED)
+
+    call_command('send_reminders')
+
+    tenant.refresh_from_db()
+    assert tenant.status == Tenant.Status.CLOSED
+
+
+def test_suspends_even_when_push_is_not_configured(paid, settings):
+    """The ordering guarantee: collecting money does not depend on VAPID keys.
+    The command still refuses to go on to the push half, and that is the point --
+    the suspension already happened before it did."""
+    settings.VAPID_PRIVATE_KEY = ''
+    tenant = paid(days=-1)
+
+    with pytest.raises(CommandError, match='not configured'):
+        call_command('send_reminders')
+
+    tenant.refresh_from_db()
+    assert tenant.status == Tenant.Status.SUSPENDED
