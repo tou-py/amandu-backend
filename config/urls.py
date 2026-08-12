@@ -24,11 +24,20 @@ from drf_spectacular.views import (
 from rest_framework.permissions import AllowAny
 
 from apps.commons.health import healthz
+from apps.scheduling.public_pages import booking_page
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('healthz/', healthz, name='healthz'),
+    # Not under /api/: this one is read by people and indexed by search engines,
+    # so it gets a URL a shop can print on a card. Spanish because its readers
+    # are, unlike the API.
+    path('reservar/<slug:slug>/', booking_page, name='booking-page'),
     path('api/auth/', include('apps.accounts.urls')),
+    # The only unauthenticated surface in the product. Its own prefix so that
+    # what a stranger can reach is visible here, at the routing table, instead
+    # of being a permission_classes line buried in a viewset.
+    path('api/public/', include('apps.scheduling.public_urls')),
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
     # API docs. AllowAny because DEFAULT_PERMISSION_CLASSES is IsAuthenticated and

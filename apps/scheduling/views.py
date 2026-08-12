@@ -407,7 +407,13 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     # Both hooks, and only these two: cancel() takes a row OUT of the constraint's
     # condition and complete() leaves its range untouched, so neither can raise it.
     def perform_create(self, serializer):
-        self._save_or_conflict(super().perform_create, serializer)
+        # Who booked it, recorded here and never taken from the payload. The
+        # public page leaves this null and says so through `source`, so the two
+        # ways a slot can enter the diary stay told apart.
+        self._save_or_conflict(
+            lambda s: s.save(tenant=self.request.tenant, created_by=self.request.membership),
+            serializer,
+        )
 
     def perform_update(self, serializer):
         self._save_or_conflict(super().perform_update, serializer)
@@ -476,6 +482,20 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     def complete(self, request, pk=None):
         appointment = self.get_object()
         return self._transition(appointment, appointment.complete)
+
+    # No body: the URL already names the transition.
+    @extend_schema(request=None, responses=AppointmentSerializer)
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        """
+        The shop accepting a request that came off the public page.
+
+        Turning one down has no action of its own: that is `cancel`, which is
+        already the transition that gives a slot back and already carries the
+        reason the shop typed.
+        """
+        appointment = self.get_object()
+        return self._transition(appointment, appointment.confirm)
 
     def _following(self, appointment):
         """

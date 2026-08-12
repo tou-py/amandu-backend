@@ -721,9 +721,45 @@ def test_a_malformed_date_filter_is_rejected(receptionist, salon):
 
 
 def test_an_unknown_status_filter_is_rejected(receptionist, salon):
-    res = api(receptionist, salon).get(LIST_URL, {'status': 'pending'})
+    # Not 'pending': that used to be the example of a status the domain does not
+    # have, and the public booking page gave it a meaning.
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'rescheduled'})
 
     assert res.status_code == 400
+
+
+def test_a_booking_records_who_made_it(receptionist, salon, stylist, haircut, client_):
+    """Recorded by the server, never taken from the payload: a body that could
+    set these could dress a public request up as a staff booking."""
+    res = api(receptionist, salon).post(LIST_URL, {
+        'professional': stylist.pk, 'service': haircut.pk,
+        'clients': [str(client_.pk)], 'start': TOMORROW.isoformat(),
+        'source': 'public', 'created_by': None,
+    }, format='json')
+
+    assert res.status_code == 201
+    appointment = Appointment.objects.get()
+    assert appointment.source == Appointment.Source.STAFF
+    assert appointment.created_by.user == receptionist
+
+
+def test_the_shop_can_filter_the_requests_waiting_on_it(receptionist, salon, stylist,
+                                                        haircut):
+    """The queue the shop actually works from: what the public page asked for
+    and nobody has answered yet."""
+    waiting = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+        status=Appointment.Status.PENDING, source=Appointment.Source.PUBLIC,
+    )
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW + timedelta(hours=2), end=TOMORROW + timedelta(hours=2, minutes=30),
+    )
+
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'pending'})
+
+    assert [row['id'] for row in res.json()['results']] == [str(waiting.pk)]
 
 
 def test_another_tenants_appointment_is_not_reachable(receptionist, salon, stylist, haircut, clinic):

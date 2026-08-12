@@ -34,5 +34,16 @@ class Service(TenantOwnedMixin, TimestampMixin):
             ),
         ]
 
+    @property
+    def duration_minutes(self):
+        """
+        The duration as a whole number, for anything that shows it to a person.
+
+        A template cannot divide, and a DurationField renders as '0:30:00',
+        which is a machine talking. One definition so the API and the public
+        page cannot disagree about what a thirty-minute haircut is.
+        """
+        return int(self.duration.total_seconds() // 60)
+
     def __str__(self):
         return self.name

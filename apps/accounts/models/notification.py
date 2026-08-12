@@ -27,6 +27,14 @@ class Notification(models.Model):
 
     class Verb(models.TextChoices):
         APPOINTMENT_CANCELLED = 'appointment_cancelled', 'Appointment cancelled'
+        # A stranger asked for a slot through the public booking page. The one
+        # verb with no actor: nobody inside the tenant did this.
+        #
+        # Worth pushing rather than leaving to the agenda's 30s poll, because a
+        # request holds the slot while it waits. Ignored overnight it is not a
+        # missed message, it is an hour of the diary nobody can sell and a
+        # person who never got an answer.
+        APPOINTMENT_REQUESTED = 'appointment_requested', 'Appointment requested'
 
     recipient = models.ForeignKey(
         'accounts.Membership',

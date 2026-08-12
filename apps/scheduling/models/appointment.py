@@ -34,9 +34,25 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         group, and one absence there does not describe the other three.
         """
 
+        # Asked for by a stranger through the public page, not yet accepted by
+        # the shop. Holds the slot -- the overlap constraint excludes only
+        # 'cancelled', so a request cannot be quietly double-booked while it
+        # waits -- but nobody has promised to be there yet.
+        PENDING = 'pending', 'Pending confirmation'
         SCHEDULED = 'scheduled', 'Scheduled'
         COMPLETED = 'completed', 'Completed'
         CANCELLED = 'cancelled', 'Cancelled'
+
+    class Source(models.TextChoices):
+        """
+        Who put this in the diary. Worth recording from the first public booking
+        onwards: "the shop booked it" and "someone off the street asked for it"
+        carry different trust, and the no-show statistics of §5.3 are meaningless
+        if the two are counted together.
+        """
+
+        STAFF = 'staff', 'Staff'
+        PUBLIC = 'public', 'Public page'
 
     professional = models.ForeignKey(
         'accounts.Membership',
@@ -109,6 +125,25 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # ponytail: never cleared. Moving an already-reminded appointment does not
     # re-notify. Clear it in the reschedule path if that turns out to matter.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,  # type: ignore
+        default=Source.STAFF,
+    )
+    # Which member of staff booked it. Null is not "unknown": it is the public
+    # page, where there is no member of staff, and Source says so explicitly
+    # rather than leaving the reader to infer it from a null.
+    #
+    # SET_NULL, not PROTECT: an appointment booked by someone who has since left
+    # is still an appointment, and the diary must not hold their membership row
+    # hostage.
+    created_by = models.ForeignKey(
+        'accounts.Membership',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='appointments_booked',
+    )
 
     class Meta:
         db_table = 'tb_appointment'
@@ -139,14 +174,34 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     def __str__(self):
         return f'{self.professional} at {self.start:%Y-%m-%d %H:%M}'
 
-    def _require_scheduled(self):
-        if self.status != self.Status.SCHEDULED:
+    def _require_not_terminal(self):
+        if self.status in (self.Status.COMPLETED, self.Status.CANCELLED):
             raise ValidationError(
                 f'A {self.get_status_display().lower()} appointment is terminal.'
             )
 
+    def _require_scheduled(self):
+        self._require_not_terminal()
+        if self.status != self.Status.SCHEDULED:
+            raise ValidationError(
+                'A booking still awaiting confirmation has not happened yet.'
+            )
+
+    def confirm(self):
+        """
+        The shop accepting a request that came off the public page. The only way
+        into SCHEDULED other than being booked there directly.
+        """
+        if self.status != self.Status.PENDING:
+            raise ValidationError('Only a pending appointment can be confirmed.')
+        self.status = self.Status.SCHEDULED
+        self.save(update_fields=['status', 'updated_at'])
+
     def cancel(self, reason=''):
-        self._require_scheduled()
+        # Turning down a request off the public page and cancelling a confirmed
+        # booking are the same transition: the slot is given back either way.
+        # Only the two terminal states are refused.
+        self._require_not_terminal()
         self.status = self.Status.CANCELLED
         self.cancelled_at = timezone.now()
         self.cancellation_reason = reason

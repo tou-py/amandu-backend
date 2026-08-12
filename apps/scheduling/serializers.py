@@ -551,6 +551,13 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
     professional_name = serializers.CharField(source='professional.display_name', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
     attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
+    # Null when the booking came off the public page, where there is no member
+    # of staff. `source` says which case it is outright, so a reader never has
+    # to infer "a stranger asked for this" from a null or from the status --
+    # which would stop being true the moment anything else creates a pending row.
+    created_by_name = serializers.CharField(
+        source='created_by.display_name', read_only=True, default=None,
+    )
 
     class Meta:
         model = Appointment
@@ -558,10 +565,15 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
             'id', 'professional', 'professional_name', 'clients', 'attendees',
             'service', 'service_name', 'start', 'end', 'status', 'capacity',
             'series', 'cancelled_at', 'cancellation_reason', 'notes',
+            'source', 'created_by', 'created_by_name',
             'created_at', 'updated_at',
         )
         read_only_fields = (
             'id', 'end', 'status', 'series', 'cancelled_at', 'cancellation_reason',
+            # Both are facts about how the row came to exist, recorded by the
+            # server. A payload that could set them could dress a public request
+            # up as a staff booking.
+            'source', 'created_by',
             'created_at', 'updated_at',
         )
 

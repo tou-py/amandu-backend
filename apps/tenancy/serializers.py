@@ -24,6 +24,11 @@ class TenantSerializer(serializers.ModelSerializer):
     the region local phone numbers are parsed against. Changing either does not
     move existing data -- the appointments keep their instants, the numbers keep
     their stored E.164 form -- it changes how the next ones are read.
+
+    So is `public_booking`, which decides whether the business has a public
+    booking page at all. Opening one and closing it again are the owner's calls
+    to make from a settings screen; the alternative is a support request for a
+    checkbox. It defaults to off for the reason on the model field.
     """
 
     # Declared rather than inferred so the model's `^[A-Z]{2}$` validator does
@@ -35,7 +40,10 @@ class TenantSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Tenant
-        fields = ('id', 'name', 'slug', 'status', 'timezone', 'country', 'created_at')
+        fields = (
+            'id', 'name', 'slug', 'status', 'timezone', 'country',
+            'public_booking', 'created_at',
+        )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
 
     def validate_name(self, value):
