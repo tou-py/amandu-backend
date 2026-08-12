@@ -18,6 +18,8 @@ from apps.scheduling.models import (
     Client,
     ClientField,
     Service,
+    TimeOff,
+    WorkSchedule,
 )
 
 
@@ -296,6 +298,69 @@ class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             self.fields['category'].queryset = Category.objects.for_tenant(tenant)
+
+
+class ProfessionalScopedMixin:
+    """
+    Scopes the `professional` field to this tenant's bookable staff.
+
+    Without it the field accepts any membership id in the database, which is how
+    one tenant writes a working week into another's diary. The queryset is the
+    same `professionals_for` the agenda validates against, so "who can be given
+    hours" and "who can be booked" cannot drift apart.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['professional'].queryset = Membership.professionals_for(tenant)
+
+
+class WorkScheduleSerializer(ProfessionalScopedMixin, serializers.ModelSerializer):
+    class Meta:
+        model = WorkSchedule
+        fields = (
+            'id', 'professional', 'weekday', 'start_time', 'end_time',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def validate(self, attrs):
+        """
+        Checked here as well as by the database constraint, because a 400 naming
+        the field is a usable answer and a 500 from an IntegrityError is not.
+        """
+        start = attrs.get('start_time', getattr(self.instance, 'start_time', None))
+        end = attrs.get('end_time', getattr(self.instance, 'end_time', None))
+        if start is not None and end is not None and end <= start:
+            raise serializers.ValidationError(
+                {'end_time': 'The end of a shift must come after its start.'}
+            )
+        return attrs
+
+
+class TimeOffSerializer(ProfessionalScopedMixin, serializers.ModelSerializer):
+    """
+    A stretch taken out of the working week. `professional` null on purpose
+    means the whole tenant is shut, so it stays writable rather than being
+    filled in from the request.
+    """
+
+    class Meta:
+        model = TimeOff
+        fields = ('id', 'professional', 'start', 'end', 'reason',
+                  'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def validate(self, attrs):
+        start = attrs.get('start', getattr(self.instance, 'start', None))
+        end = attrs.get('end', getattr(self.instance, 'end', None))
+        if start is not None and end is not None and end <= start:
+            raise serializers.ValidationError(
+                {'end': 'Time off must end after it starts.'}
+            )
+        return attrs
 
 
 class ProfessionalSerializer(serializers.ModelSerializer):

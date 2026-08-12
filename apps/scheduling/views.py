@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
@@ -22,6 +23,8 @@ from apps.scheduling.models import (
     Client,
     ClientField,
     Service,
+    TimeOff,
+    WorkSchedule,
 )
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
@@ -36,7 +39,9 @@ from apps.scheduling.serializers import (
     ProfessionalSerializer,
     RescheduleFollowingSerializer,
     ServiceSerializer,
+    TimeOffSerializer,
     VisitSerializer,
+    WorkScheduleSerializer,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -183,6 +188,100 @@ class CategoryViewSet(TenantScopedModelViewSet):
 class ServiceViewSet(TenantScopedModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                'professional', int,
+                description="Only this person's week. Omitted, the whole team's.",
+            ),
+        ],
+    ),
+)
+class WorkScheduleViewSet(TenantScopedModelViewSet):
+    """
+    The recurring week: when each professional is normally at work.
+
+    Readable by any active membership, because the agenda and the availability
+    calculation both need it. Writable only by owner/admin: these rows decide
+    what the public page offers to strangers, so widening them is a business
+    decision, not a personal one.
+    """
+
+    queryset = WorkSchedule.objects.all()
+    serializer_class = WorkScheduleSerializer
+    # Bounded by staff times days of the week, and read whole to draw the week.
+    pagination_class = None
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def get_queryset(self):
+        rows = super().get_queryset()
+        professional = self.request.query_params.get('professional')
+        if professional:
+            rows = rows.filter(professional_id=professional)
+        return rows
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter('from', OpenApiTypes.DATE, description='YYYY-MM-DD, inclusive.'),
+            OpenApiParameter('to', OpenApiTypes.DATE, description='YYYY-MM-DD, inclusive.'),
+        ],
+    ),
+)
+class TimeOffViewSet(TenantScopedModelViewSet):
+    """
+    Holidays, closures and absences: what comes out of the working week.
+
+    Same split as the schedule, for the same reason -- except that a row here
+    only ever REMOVES availability, which is why it is the one an owner reaches
+    for in a hurry and why it stays cheap to write.
+    """
+
+    queryset = TimeOff.objects.all()
+    serializer_class = TimeOffSerializer
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def get_queryset(self):
+        """
+        Defaults to what is still ahead. A shop opening this list wants the
+        closures it has to plan around, not every sick day since it opened --
+        and past rows only grow.
+        """
+        rows = super().get_queryset()
+        tz = ZoneInfo(self.request.tenant.timezone)
+        since = self._parse_day(self.request.query_params.get('from'), tz, 'from')
+        until = self._parse_day(self.request.query_params.get('to'), tz, 'to')
+
+        if since is None and until is None:
+            return rows.filter(end__gte=timezone.now())
+        if since is not None:
+            rows = rows.filter(end__gt=since)
+        if until is not None:
+            rows = rows.filter(start__lt=until + timedelta(days=1))
+        return rows
+
+    @staticmethod
+    def _parse_day(value, tz, field):
+        if value is None:
+            return None
+        try:
+            return datetime.strptime(value, '%Y-%m-%d').replace(tzinfo=tz)
+        except ValueError:
+            raise ValidationError({field: 'Use YYYY-MM-DD.'})
 
 
 class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
