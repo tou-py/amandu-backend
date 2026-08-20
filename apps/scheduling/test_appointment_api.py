@@ -560,11 +560,73 @@ def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircu
     assert Appointment.objects.get(pk=res.data['id']).id.version == 7
 
 
+def test_an_appointment_carries_the_plan_state_of_every_attendee(
+    receptionist, salon, stylist, haircut
+):
+    """
+    Per person, not per slot: a group class holds several people and each is
+    covered by a plan or not on their own. The charge step reads this to decide
+    whether to ask THIS attendee for money at all.
+    """
+    covered = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
+    )
+    lapsed = Client.objects.create(
+        tenant=salon,
+        name='Bob',
+        monthly_fee=300000,
+        paid_until=timezone.localdate() - timedelta(days=1),
+    )
+    per_session = Client.objects.create(tenant=salon, name='Grace')
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [covered, lapsed, per_session], haircut, TOMORROW),
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert {a['name']: a['plan_state'] for a in res.data['attendees']} == {
+        'Ada': 'active', 'Bob': 'expired', 'Grace': 'none',
+    }
+
+
+def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, stylist, client_):
+    """
+    Null when the service is not charged per session, the amount when it is. The
+    agenda never fetches the service catalogue, so this is the only place the
+    charge step can read it.
+    """
+    priced = Service.objects.create(
+        tenant=salon, name='Cut', duration=timedelta(minutes=30), price=120000
+    )
+    unpriced = Service.objects.create(
+        tenant=salon, name='Pilates', duration=timedelta(minutes=30)
+    )
+    http = api(receptionist, salon)
+
+    charged = http.post(
+        LIST_URL, booking(stylist, [client_], priced, TOMORROW), format='json'
+    )
+    covered = http.post(
+        LIST_URL, booking(stylist, [client_], unpriced, TOMORROW + timedelta(hours=2)),
+        format='json',
+    )
+
+    assert charged.data['service_price'] == 120000
+    assert covered.data['service_price'] is None
+
+
 def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
     """N+1 guard: the query count for the list must not grow with the number of
-    appointments. Fails if `client_links__client` stops being prefetched."""
-    ada = Client.objects.create(tenant=salon, name='Ada')
+    appointments. Fails if `client_links__client` stops being prefetched, and
+    equally if `attendees.plan_state` or `service_price` ever start resolving
+    through a relation the viewset does not already fetch."""
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
+    )
     bob = Client.objects.create(tenant=salon, name='Bob')
+    haircut.price = 120000
+    haircut.save(update_fields=['price'])
 
     def book(offset_minutes):
         start = TOMORROW + timedelta(minutes=offset_minutes)

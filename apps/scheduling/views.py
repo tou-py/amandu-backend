@@ -13,7 +13,14 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 
+# Safe in this direction only: accounting names scheduling by string and never
+# imports it, so there is no cycle to make here. Imported at all because taking a
+# month of a client's plan is ONE event at the counter -- the cover is extended
+# and the money is booked -- and two requests for it is what leaves a day's
+# takings disagreeing with its plans.
+from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership, Notification
+from apps.commons.dates import one_month_after
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling.models import (
     Appointment,
@@ -71,6 +78,50 @@ class ClientViewSet(TenantScopedModelViewSet):
 
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
+
+    @extend_schema(request=None, responses=ClientSerializer)
+    @action(detail=True, methods=['post'], url_path='register-payment')
+    def register_payment(self, request, pk=None):
+        """
+        A month of this client's plan, paid for at the counter.
+
+        Extends from whichever is later, today or the day already covered: paying
+        early stacks onto what is left instead of throwing it away, and paying
+        late starts today rather than back-dating time nobody could use. That is
+        the same rule the platform applies to a tenant, out of the same helper --
+        the month clamp is the part nobody gets right twice.
+
+        No role check, deliberately. The cash BOOK is owner/admin because the
+        shop's aggregate takings are the protected thing; taking one client's
+        monthly fee is what the front desk is there to do.
+        """
+        client = self.get_object()
+        if client.monthly_fee is None:
+            raise ValidationError(
+                {'monthly_fee': 'This client has no monthly plan, so there is nothing to charge.'}
+            )
+
+        today = timezone.localdate()
+        # Atomic because these are two halves of one fact. A cover extended
+        # without its entry is a month the shop gave away and cannot see in the
+        # book; an entry without the extension is money taken for nothing.
+        with transaction.atomic():
+            client.paid_until = one_month_after(max(client.paid_until or today, today))
+            client.save(update_fields=['paid_until', 'updated_at'])
+            CashEntry.objects.create(
+                tenant=request.tenant,
+                kind=CashEntry.Kind.INCOME,
+                amount=client.monthly_fee,
+                occurred_on=today,
+                # Spanish, unlike everything around it: this string is not an
+                # identifier, it is the line the shop reads in its cash book,
+                # sitting between entries the front end writes in Spanish. The
+                # separator matches those too.
+                concept=f'Mensualidad · {client.name} · hasta {client.paid_until:%d/%m/%Y}',
+                # No appointment: a plan is paid for the month, not for a slot.
+            )
+
+        return Response(self.get_serializer(client).data)
 
     @extend_schema(responses=VisitSerializer(many=True))
     @action(detail=True, methods=['get'])

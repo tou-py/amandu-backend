@@ -140,11 +140,17 @@ class ClientSerializer(serializers.ModelSerializer):
     # always an object keyed by field key. DictField also rejects a list or a
     # string before validate() ever runs.
     custom_data = serializers.DictField(required=False)
+    # Derived, never stored: Client.plan_state() answers it from `paid_until` and
+    # today's date. Sent alongside the two raw fields rather than instead of them
+    # because the form edits the plan and the file reads whether it covers today,
+    # and those are different questions about the same two columns.
+    plan_state = serializers.ChoiceField(choices=Client.PLAN_STATES, read_only=True)
 
     class Meta:
         model = Client
         fields = (
             'id', 'name', 'phone', 'email', 'notes', 'custom_data',
+            'monthly_fee', 'paid_until', 'plan_state',
             'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
@@ -290,7 +296,7 @@ class CategorySerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
 class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Service
-        fields = ('id', 'name', 'duration', 'category', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'price', 'duration', 'category', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):
@@ -379,19 +385,32 @@ class ProfessionalSerializer(serializers.ModelSerializer):
 
 class AttendeeSerializer(serializers.ModelSerializer):
     """
-    One person in the slot, with whether they turned up. Flattens the through row
-    so a client reads `{id, name, attendance}` and never has to know a join table
-    sits underneath.
+    One person in the slot, with whether they turned up and whether a monthly
+    plan covers them. Flattens the through row so a client reads
+    `{id, name, attendance, plan_state}` and never has to know a join table sits
+    underneath.
     """
 
     id = serializers.UUIDField(source='client_id', read_only=True)
     name = serializers.CharField(source='client.name', read_only=True)
+    # Per attendee and not per appointment: a group class holds four people and
+    # each one is covered or not on their own. The charge step reads this to
+    # decide whether to ask for money from this person at all, so it has to ride
+    # on the roster the agenda already has -- fetching the client file per name
+    # would be a round trip per person, per slot, per day on screen.
+    #
+    # Free of extra queries only because AppointmentViewSet prefetches
+    # `client_links__client`; reading it off `client.name`'s own object is what
+    # keeps it that way.
+    plan_state = serializers.ChoiceField(
+        choices=Client.PLAN_STATES, source='client.plan_state', read_only=True
+    )
 
     class Meta:
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'attendance')
+        fields = ('id', 'name', 'attendance', 'plan_state')
         read_only_fields = fields
 
 
@@ -550,6 +569,14 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
     )
     professional_name = serializers.CharField(source='professional.display_name', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
+    # Null when the service is not charged per session, which is the only signal
+    # for that (Service.price). Carried on the slot because the charge step lives
+    # on the appointment sheet and the agenda never fetches the service
+    # catalogue: without it here the front end cannot tell a free class from an
+    # unpriced one, and somebody ends up re-adding the business-type flag this
+    # design exists to avoid. Free of queries -- `service` is already
+    # select_related for `service_name`.
+    service_price = serializers.IntegerField(source='service.price', read_only=True, allow_null=True)
     attendees = AttendeeSerializer(source='client_links', many=True, read_only=True)
     # Null when the booking came off the public page, where there is no member
     # of staff. `source` says which case it is outright, so a reader never has
@@ -563,7 +590,7 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         model = Appointment
         fields = (
             'id', 'professional', 'professional_name', 'clients', 'attendees',
-            'service', 'service_name', 'start', 'end', 'status', 'capacity',
+            'service', 'service_name', 'service_price', 'start', 'end', 'status', 'capacity',
             'series', 'cancelled_at', 'cancellation_reason', 'notes',
             'rescheduled_from', 'source', 'created_by', 'created_by_name',
             'created_at', 'updated_at',

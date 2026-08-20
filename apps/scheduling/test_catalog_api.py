@@ -186,3 +186,28 @@ def test_another_tenants_service_is_not_reachable_by_id(receptionist, salon, cli
     )
 
     assert res.status_code == 404
+
+
+def test_a_service_round_trips_with_and_without_a_price(receptionist, salon):
+    """
+    The two shapes ARE the two billing modes: a priced service is charged per
+    session, a null price says this one is not. There is no flag saying which,
+    so both have to survive the round trip intact.
+    """
+    http = api(receptionist, salon)
+
+    priced = http.post(
+        SERVICE_LIST, {'name': 'Haircut', 'duration': '00:30:00', 'price': 120000},
+        format='json',
+    )
+    unpriced = http.post(
+        SERVICE_LIST, {'name': 'Pilates', 'duration': '01:00:00'}, format='json',
+    )
+
+    assert priced.status_code == 201
+    assert priced.data['price'] == 120000
+    assert Service.objects.get(name='Haircut').price == 120000
+
+    assert unpriced.status_code == 201
+    assert unpriced.data['price'] is None
+    assert Service.objects.get(name='Pilates').price is None

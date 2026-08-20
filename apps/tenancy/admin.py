@@ -1,6 +1,3 @@
-import calendar
-from datetime import date
-
 from django import forms
 from django.contrib import admin
 from django.db.models import Count
@@ -14,18 +11,8 @@ from django.utils.html import format_html
 # answer, and it cannot be answered without the join row. Models only; importing
 # apps.accounts.admin from here would be a real cycle.
 from apps.accounts.models import Invitation, Membership
+from apps.commons.dates import one_month_after
 from apps.tenancy.models import Tenant
-
-
-def one_month_after(day: date) -> date:
-    """
-    The same day next month, clamped to a day that exists there: a period paid on
-    the 31st ends on the 30th, not on the 1st of the month after. Written out
-    rather than pulled from dateutil, which is not a dependency of this project
-    and would be a whole package for these four lines.
-    """
-    year, month = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
-    return day.replace(year=year, month=month, day=min(day.day, calendar.monthrange(year, month)[1]))
 
 
 class TenantOwnedAdminForm(forms.ModelForm):
