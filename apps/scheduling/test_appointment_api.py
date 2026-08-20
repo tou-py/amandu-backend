@@ -1042,3 +1042,77 @@ def test_adding_one_person_too_many_to_an_existing_slot_is_refused(
 
     assert res.status_code == 400
     assert appointment.clients.count() == 5
+
+
+def test_a_new_booking_has_never_been_rescheduled(
+    receptionist, salon, stylist, client_, haircut
+):
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['rescheduled_from'] is None
+    assert Appointment.objects.get(pk=res.data['id']).rescheduled_from is None
+
+
+def test_moving_a_booking_records_the_hour_it_came_from(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.rescheduled_from == TOMORROW
+
+
+def test_moving_a_booking_twice_records_the_hour_it_last_came_from(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    It answers "where was this before?", not "where did it start life?" -- the
+    receptionist telephoning the client needs the time that person is currently
+    expecting, which is the one it was moved away from most recently.
+    """
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    second = TOMORROW + timedelta(hours=2)
+
+    http.patch(detail_url(appointment), {'start': second.isoformat()}, format='json')
+    http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=5)).isoformat()},
+        format='json',
+    )
+
+    appointment.refresh_from_db()
+    assert appointment.rescheduled_from == second
+
+
+def test_an_edit_that_leaves_the_hour_alone_is_not_a_reschedule(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    res = http.patch(detail_url(appointment), {'notes': 'brings her own towel'}, format='json')
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.notes == 'brings her own towel'
+    assert appointment.rescheduled_from == TOMORROW

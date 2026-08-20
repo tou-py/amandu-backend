@@ -588,7 +588,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         moved, skipped = [], []
 
         for one in self._following(appointment):
-            local_day = one.start.astimezone(zone).date()
+            was_at = one.start
+            local_day = was_at.astimezone(zone).date()
             # Rebuilt from the local date plus the new wall-clock time, the same
             # way the series was generated: adding an offset to a UTC instant
             # would move an occurrence on the far side of a DST boundary to the
@@ -597,9 +598,15 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             one.end = one.start + one.service.duration
             if professional is not None:
                 one.professional = professional
+            # Handing the series to someone else without changing the hour moves
+            # nobody's day, so it leaves the badge off.
+            if one.start != was_at:
+                one.rescheduled_from = was_at
             try:
                 with transaction.atomic():
-                    one.save(update_fields=['start', 'end', 'professional', 'updated_at'])
+                    one.save(update_fields=[
+                        'start', 'end', 'professional', 'rescheduled_from', 'updated_at',
+                    ])
             except IntegrityError as exc:
                 if 'no_overlap_per_professional' not in str(exc):
                     raise

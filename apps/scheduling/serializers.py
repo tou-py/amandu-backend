@@ -565,11 +565,14 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
             'id', 'professional', 'professional_name', 'clients', 'attendees',
             'service', 'service_name', 'start', 'end', 'status', 'capacity',
             'series', 'cancelled_at', 'cancellation_reason', 'notes',
-            'source', 'created_by', 'created_by_name',
+            'rescheduled_from', 'source', 'created_by', 'created_by_name',
             'created_at', 'updated_at',
         )
         read_only_fields = (
             'id', 'end', 'status', 'series', 'cancelled_at', 'cancellation_reason',
+            # Recorded by validate() when the start actually moves. A payload
+            # that could set it could claim a booking was moved when it never was.
+            'rescheduled_from',
             # Both are facts about how the row came to exist, recorded by the
             # server. A payload that could set them could dress a public request
             # up as a staff booking.
@@ -598,6 +601,12 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
             raise serializers.ValidationError(
                 'This professional already has an appointment in that time range.'
             )
+
+        # Only when the hour genuinely changes: a PATCH that sends the same
+        # start, or none at all, is not a reschedule, and stamping it would put
+        # a "was at 10:00" badge on a booking that has always been at 10:00.
+        if self.instance is not None and start != self.instance.start:
+            attrs['rescheduled_from'] = self.instance.start
 
         self._check_capacity(attrs)
         return attrs

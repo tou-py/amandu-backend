@@ -125,6 +125,15 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # ponytail: never cleared. Moving an already-reminded appointment does not
     # re-notify. Clear it in the reschedule path if that turns out to matter.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # The time this appointment was moved AWAY from, so the agenda can say
+    # "rescheduled -- was at 10:00" instead of only "rescheduled". A timestamp
+    # and not a boolean because the column costs the same either way, and the
+    # old hour is the half of the answer anyone asking the question wants.
+    #
+    # Overwritten on every move: it is where the booking came from, not where it
+    # started life. Never cleared -- moving it back to its old hour still means
+    # the people involved were told a different time at some point.
+    rescheduled_from = models.DateTimeField(null=True, blank=True, editable=False)
     source = models.CharField(
         max_length=20,
         choices=Source.choices,  # type: ignore

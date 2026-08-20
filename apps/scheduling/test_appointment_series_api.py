@@ -357,6 +357,22 @@ def test_reschedule_following_leaves_a_clashing_occurrence_where_it_was(
     assert local(stayed).strftime('%H:%M') == '07:00'
 
 
+def test_reschedule_following_marks_every_occurrence_it_moved(
+    receptionist, studio, teacher, reformer, ada
+):
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    booked = list(Appointment.objects.order_by('start'))
+    second = booked[1]
+    was_at = {a.pk: a.start for a in booked}
+
+    http.post(action_url(second, 'reschedule-following'), {'time': '19:30'}, format='json')
+
+    moved = list(Appointment.objects.order_by('start'))
+    assert moved[0].rescheduled_from is None  # before the pivot, never touched
+    assert [a.rescheduled_from for a in moved[1:]] == [was_at[a.pk] for a in moved[1:]]
+
+
 def test_reschedule_following_can_hand_the_run_to_someone_else(
     db, django_user_model, receptionist, studio, teacher, reformer, ada
 ):
