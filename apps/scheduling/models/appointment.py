@@ -228,10 +228,6 @@ class AppointmentClient(models.Model):
         PENDING = 'pending', 'Pending'
         ATTENDED = 'attended', 'Attended'
         NO_SHOW = 'no_show', 'No show'
-        # Told us they were not coming, too late to give the slot away. Worth
-        # separating from a silent absence: the same outcome, different courtesy,
-        # and a business that charges for one may not charge for the other.
-        LATE_CANCEL = 'late_cancel', 'Late cancellation'
 
     appointment = models.ForeignKey(
         'scheduling.Appointment',

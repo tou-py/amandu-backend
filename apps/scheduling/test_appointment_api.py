@@ -461,9 +461,14 @@ def test_marking_attendance_does_not_reorder_the_roster(
     assert [a['name'] for a in refetched.data['attendees']] == original_order
 
 
-def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
+def test_a_late_cancellation_is_no_longer_a_verdict_of_its_own(
     receptionist, salon, stylist, client_, haircut
 ):
+    """
+    The shops never charged it differently from a silent absence, so it went.
+    Anything still sending the old value gets told, rather than having it
+    quietly stored as something else.
+    """
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
     appointment = Appointment.objects.get(pk=created.data['id'])
@@ -474,8 +479,8 @@ def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
         format='json',
     )
 
-    assert res.status_code == 200
-    assert res.data['attendees'][0]['attendance'] == 'late_cancel'
+    assert res.status_code == 400
+    assert 'attendance' in res.data
 
 
 def test_a_client_outside_the_appointment_cannot_be_marked(
