@@ -54,6 +54,14 @@ def stylist(db, django_user_model, salon):
 
 
 @pytest.fixture
+def receptionist(db, django_user_model, salon):
+    """The front desk: takes the money all day, does not read the book."""
+    user = django_user_model.objects.create_user(email='c@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
+    return user
+
+
+@pytest.fixture
 def intruder(db, django_user_model, clinic):
     """
     Active membership in the OTHER tenant: a real caller, wrong shop.
@@ -405,3 +413,61 @@ def test_an_owner_is_not_shut_out_by_the_admin_check(db, django_user_model, salo
     Membership.objects.create(user=user, tenant=salon, role=Membership.Role.OWNER)
 
     assert api(user, salon).get(LIST_URL).status_code == 200
+
+
+def test_the_front_desk_may_file_an_entry(receptionist, salon):
+    """
+    The coordinator closes the turn and takes the payment. Letting them do the
+    first and not the second would only move the till into somebody's memory.
+    """
+    response = api(receptionist, salon).post(LIST_URL, {
+        'kind': 'income', 'amount': 90_000,
+        'occurred_on': '2026-08-20', 'concept': 'Corte · Ana',
+    }, format='json')
+
+    assert response.status_code == 201
+    assert CashEntry.objects.get().amount == 90_000
+
+
+def test_the_front_desk_may_not_read_the_book(receptionist, salon):
+    """The point of the split: writing a movement is not reading the figures."""
+    CashEntry.objects.create(
+        tenant=salon, kind=CashEntry.Kind.INCOME, amount=150_000,
+        occurred_on=date(2026, 8, 20), concept='Corte',
+    )
+    http = api(receptionist, salon)
+
+    assert http.get(LIST_URL).status_code == 403
+    assert http.get(SUMMARY_URL).status_code == 403
+
+
+def test_the_front_desk_may_not_correct_an_entry(receptionist, salon):
+    """Not even their own. Fixing a number means finding it first, and the book
+    is closed to them -- an authority reachable only by guessing an id is not
+    one worth granting."""
+    entry = CashEntry.objects.create(
+        tenant=salon, kind=CashEntry.Kind.INCOME, amount=90_000,
+        occurred_on=date(2026, 8, 20), concept='Corte',
+    )
+    http = api(receptionist, salon)
+
+    assert http.get(detail_url(entry)).status_code == 403
+    assert http.patch(detail_url(entry), {'amount': 1}, format='json').status_code == 403
+    assert http.delete(detail_url(entry)).status_code == 403
+    entry.refresh_from_db()
+    assert entry.amount == 90_000
+
+
+def test_a_coordinator_of_another_shop_may_not_file_here(db, django_user_model, salon, clinic):
+    """The looser role is still bounded by the tenant. Coordinator of their own
+    clinic, filing into the salon's book: the header selects, it never grants."""
+    user = django_user_model.objects.create_user(email='cc@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=clinic, role=Membership.Role.COORDINATOR)
+
+    response = api(user, salon).post(LIST_URL, {
+        'kind': 'income', 'amount': 90_000,
+        'occurred_on': '2026-08-20', 'concept': 'Corte',
+    }, format='json')
+
+    assert response.status_code == 403
+    assert not CashEntry.objects.exists()

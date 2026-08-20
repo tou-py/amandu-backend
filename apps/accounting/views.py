@@ -9,7 +9,7 @@ from rest_framework.response import Response
 
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer, CashSummarySerializer
-from apps.tenancy.permissions import IsTenantAdmin
+from apps.tenancy.permissions import IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -51,13 +51,30 @@ class CashEntryViewSet(TenantScopedModelViewSet):
     queryset = CashEntry.objects.all()
     serializer_class = CashEntrySerializer
 
-    # Owner and admin only, and READS included -- which is why this replaces the
-    # class-level tuple instead of appending to it in get_permissions() the way
-    # the schedule viewsets do. There the concern is who may change the shop's
-    # hours, so staff still read them; here the protected thing is the figures
-    # themselves. What the shop bills is the owner's business, not something
-    # every stylist is handed by opening a tab.
-    permission_classes = (*TenantScopedModelViewSet.permission_classes, IsTenantAdmin)
+    # Two different questions, two different answers -- which is why the split
+    # here is by action and not by SAFE_METHODS the way the schedule viewsets do
+    # it. There the concern is who may CHANGE the shop's hours, so staff still
+    # read them. Here it is inverted: filing one movement is an act of the day,
+    # and reading the book back is the shop's figures.
+    #
+    # The widest gate sits at class level; get_permissions narrows everything
+    # that is not a create.
+    permission_classes = (*TenantScopedModelViewSet.permission_classes, IsTenantCoordinator)
+
+    def get_permissions(self):
+        """
+        Filing an entry admits the coordinator; everything else stays owner and
+        admin, READS included.
+
+        `create` alone and not every write: correcting or deleting an entry
+        means finding it first, and the front desk cannot list the book. Opening
+        those too would grant an authority that can only be exercised by
+        guessing an id.
+        """
+        permissions = super().get_permissions()
+        if self.action != 'create':
+            permissions.append(IsTenantAdmin())
+        return permissions
 
     def get_queryset(self):
         """

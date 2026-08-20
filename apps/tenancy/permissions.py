@@ -102,3 +102,27 @@ class IsTenantOwner(BasePermission):
     def has_permission(self, request, view):
         membership = getattr(request, 'membership', None)
         return membership is not None and membership.role == Membership.Role.OWNER
+
+
+class IsTenantCoordinator(BasePermission):
+    """
+    Looser than IsTenantAdmin: owner, admin, or the coordinator at the front
+    desk. Layered AFTER HasActiveMembership, which set the membership.
+
+    For the acts a shop's day is made of rather than the figures it adds up to.
+    Recording that money came in is one of them: the receptionist closes the
+    turn and takes the payment, and a rule that let them do the first but not
+    the second would only teach them to leave the till to somebody else's
+    memory. Reading the book back is a different question and keeps its own,
+    stricter guard.
+    """
+
+    message = 'Requires a tenant owner, admin or coordinator role.'
+
+    def has_permission(self, request, view):
+        membership = getattr(request, 'membership', None)
+        return membership is not None and membership.role in (
+            Membership.Role.OWNER,
+            Membership.Role.ADMIN,
+            Membership.Role.COORDINATOR,
+        )
