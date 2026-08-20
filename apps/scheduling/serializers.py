@@ -629,8 +629,9 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
     once. `start` is the FIRST occurrence, instant included; everything after it
     reuses that wall-clock time on the days the rule picks.
 
-    The read side answers with what actually landed: `appointments` and, just as
-    importantly, `skipped`.
+    The read side answers with what actually landed: `appointments`, the
+    `joined` subset of them that were somebody else's class already, and, just
+    as importantly, `skipped`.
     """
 
     # All write-only: none of them is a column on the series, they describe the
@@ -650,19 +651,28 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
     capacity = serializers.IntegerField(min_value=1, required=False, write_only=True)
     notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
+    # Everywhere this enrolment now belongs, whether the occurrence was created
+    # for it or already existed. The caller asked to enrol somebody; the answer
+    # is where that landed, and which half it landed by is what `joined` is for.
     appointments = AppointmentSerializer(many=True, read_only=True)
     # The days the rule asked for and the diary would not give: the professional
-    # was already busy. Reported instead of failing the whole request, because a
-    # term of Mondays is not worth abandoning over one clash in week five, and a
-    # receptionist told WHICH days to look at can fix those in seconds.
+    # was already busy with something that is not this class. Reported instead of
+    # failing the whole request, because a term of Mondays is not worth abandoning
+    # over one clash in week five, and a receptionist told WHICH days to look at
+    # can fix those in seconds.
     skipped = serializers.SerializerMethodField()
+    # The subset of `appointments` that was already in the diary and took this
+    # roster on instead of being created. Told apart from the rest so the UI can
+    # say "added to 12 existing classes, created 4" -- two very different things
+    # to a receptionist, and indistinguishable from `appointments` alone.
+    joined = serializers.SerializerMethodField()
 
     class Meta:
         model = AppointmentSeries
         fields = (
             'id', 'professional', 'clients', 'service', 'start', 'capacity', 'notes',
             'frequency', 'interval', 'weekdays', 'until',
-            'appointments', 'skipped', 'created_at', 'updated_at',
+            'appointments', 'skipped', 'joined', 'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
 
@@ -672,6 +682,10 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         # the wire format everywhere -- including for anything reading the
         # response without rendering it.
         return [day.isoformat() for day in getattr(series, 'skipped_days', [])]
+
+    @extend_schema_field(serializers.ListField(child=serializers.DateField()))
+    def get_joined(self, series):
+        return [day.isoformat() for day in getattr(series, 'joined_days', [])]
 
     def validate_interval(self, interval):
         if interval < 1:
@@ -722,7 +736,8 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         Each occurrence is inserted in a savepoint of its own so one clash
         cannot take the rest of the term with it -- and a clash IS expected:
         the exclusion constraint is the only thing that knows the professional's
-        diary, and it answers one insert at a time.
+        diary, and it answers one insert at a time. A clash that turns out to be
+        the same class at the same hour is enrolled into rather than skipped.
         """
         tenant = self.context['request'].tenant
         booking = {
@@ -742,23 +757,30 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         # would quietly shift half the term by an hour.
         zone = ZoneInfo(tenant.timezone)
         local_first = booking['start'].astimezone(zone)
-        booked, skipped = [], []
+        booked, joined, skipped = [], [], []
 
         for day in series.occurrence_dates(local_first.date()):
             start = datetime.combine(day, local_first.time()).replace(tzinfo=zone)
             appointment = self._book(series, booking, start)
+            if appointment is None:
+                appointment = self._join(series, booking, start)
+                if appointment is not None:
+                    joined.append(day)
             (booked if appointment is not None else skipped).append(appointment or day)
 
         if not booked:
-            # Nothing was booked, so there is no arrangement -- only a row
-            # claiming one. Rolled back rather than returned as an empty success
-            # nobody would read.
+            # Nothing landed at all -- neither created nor joined -- so there is
+            # no arrangement, only a row claiming one. Rolled back rather than
+            # returned as an empty success nobody would read. A term that joined
+            # every one of its dates is not this case: the client is enrolled in
+            # every class they asked for, which is the whole point.
             series.delete()
             raise serializers.ValidationError(
                 'Every date in this series clashes with an existing appointment.'
             )
 
         series.skipped_days = skipped
+        series.joined_days = joined
         series.appointments_created = booked
         return series
 
@@ -778,7 +800,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                     notes=booking['notes'],
                 )
                 AppointmentClient.objects.bulk_create(
-                    AppointmentClient(appointment=appointment, client=client)
+                    AppointmentClient(appointment=appointment, client=client, series=series)
                     for client in booking['clients']
                 )
         except IntegrityError as exc:
@@ -788,6 +810,63 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                 raise
             return None
         return appointment
+
+    @staticmethod
+    def _join(series, booking, start):
+        """
+        The class already in the diary at that hour, now carrying this roster --
+        or None if the clash was a real one.
+
+        A recurring slot in a group business is ONE class, not one class per
+        client: the second person to want Mondays at 11:00 is enrolling, not
+        double-booking. Without this the whole term comes back as `skipped` and
+        the receptionist adds them by hand, occurrence by occurrence.
+
+        Only an exact match is a class. `start` must be equal to the second,
+        because a partial overlap is the appointment next door running long, and
+        the service must match, because two different things cannot happen in the
+        same room at once whatever the hour says. Only SCHEDULED qualifies:
+        joining a `pending` request would put a paying client into a booking the
+        shop has not accepted, and a `completed` or `cancelled` one is not a
+        class anybody can still walk into.
+
+        Nothing on the existing appointment is rewritten -- not `capacity`, not
+        `notes`. It belongs to whoever booked it; an enrolment asks for a place
+        in it, and the class's own ceiling is what decides whether there is one.
+        """
+        existing = Appointment.objects.filter(
+            tenant=series.tenant,
+            professional=booking['professional'],
+            service=booking['service'],
+            start=start,
+            status=Appointment.Status.SCHEDULED,
+        ).first()
+        if existing is None:
+            return None
+
+        # Anyone already on the roster is not joining again -- inserting them
+        # would only hit `unique_client_per_appointment` and lose the others in
+        # the same statement. Dropping them also keeps the head count honest:
+        # they are already inside the ceiling, not on top of it. If that empties
+        # the list the join still succeeded, because the end state asked for --
+        # these clients in this class -- already holds.
+        enrolled = set(existing.client_links.values_list('client_id', flat=True))
+        joining = [client for client in booking['clients'] if client.pk not in enrolled]
+        if len(enrolled) + len(joining) > existing.capacity:
+            return None
+
+        try:
+            # Its own savepoint because the row that blocked the insert can be
+            # cancelled, filled or moved between that failure and this lookup,
+            # and a term of Mondays must not die of one lost race.
+            with transaction.atomic():
+                AppointmentClient.objects.bulk_create(
+                    AppointmentClient(appointment=existing, client=client, series=series)
+                    for client in joining
+                )
+        except IntegrityError:
+            return None
+        return existing
 
     def to_representation(self, series):
         data = super().to_representation(series)

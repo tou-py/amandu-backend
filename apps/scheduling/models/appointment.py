@@ -260,6 +260,23 @@ class AppointmentClient(models.Model):
         choices=Attendance.choices,  # type: ignore
         default=Attendance.PENDING,
     )
+    # The arrangement that put THIS person on THIS slot, if one did.
+    #
+    # Separate from `Appointment.series` because a group class is booked once
+    # and enrolled into many times: when a second client joins an existing
+    # Monday class, the appointment keeps the series that created it -- someone
+    # else's -- so that column cannot answer "which rows came from this
+    # enrolment". This one can, on both paths, created and joined alike.
+    #
+    # SET_NULL for the same reason as the appointment side: dropping the rule
+    # must never drop the roster it built. The person still attended.
+    series = models.ForeignKey(
+        'scheduling.AppointmentSeries',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='enrolments',
+    )
 
     def mark(self, attendance):
         """
