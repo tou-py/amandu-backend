@@ -607,6 +607,13 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         # a "was at 10:00" badge on a booking that has always been at 10:00.
         if self.instance is not None and start != self.instance.start:
             attrs['rescheduled_from'] = self.instance.start
+            # The reminder for the OLD hour has already gone out, and
+            # `reminder_sent_at` is what guarantees the sweep never revisits
+            # this row -- so leaving it set would leave the professional holding
+            # a notification for a time that no longer exists, permanently.
+            # Clearing it puts the appointment back in front of the sweep, which
+            # recomputes `start - lead` and notifies again at the new hour.
+            attrs['reminder_sent_at'] = None
 
         self._check_capacity(attrs)
         return attrs

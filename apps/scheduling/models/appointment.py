@@ -122,8 +122,15 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # its professional. A reminders table would earn its place the day a second
     # person is notified about the same slot.
     #
-    # ponytail: never cleared. Moving an already-reminded appointment does not
-    # re-notify. Clear it in the reschedule path if that turns out to matter.
+    # Cleared by both reschedule paths, because otherwise the stamp that stops
+    # a second reminder also stops the CORRECTED one: a booking reminded at 09:00
+    # and then moved to 15:00 would leave its professional with a notification
+    # for an hour that no longer exists, and the sweep would never revisit it.
+    #
+    # ponytail: a booking moved EARLIER, to a start already inside the reminder
+    # lead, is notified on the next tick rather than at its proper lead time --
+    # and one moved to a start already past is never notified at all. Both are
+    # accepted: there is no time left to give back.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
     # The time this appointment was moved AWAY from, so the agenda can say
     # "rescheduled -- was at 10:00" instead of only "rescheduled". A timestamp

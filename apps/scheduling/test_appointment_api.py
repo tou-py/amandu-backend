@@ -1116,3 +1116,45 @@ def test_an_edit_that_leaves_the_hour_alone_is_not_a_reschedule(
     appointment.refresh_from_db()
     assert appointment.notes == 'brings her own towel'
     assert appointment.rescheduled_from == TOMORROW
+
+def test_moving_a_booking_puts_its_reminder_back_in_the_queue(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    The stamp that stops a second reminder must not also stop the corrected one.
+
+    Left set, it is a guarantee of silence: the sweep skips every stamped row,
+    so the professional keeps a notification for an hour that no longer exists
+    and nothing will ever contradict it.
+    """
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    Appointment.objects.filter(pk=appointment.pk).update(reminder_sent_at=timezone.now())
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=6)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.reminder_sent_at is None
+
+
+def test_an_edit_that_leaves_the_hour_alone_keeps_its_reminder_spent(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Otherwise every touch of the notes field would notify the whole team again."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    sent = timezone.now()
+    Appointment.objects.filter(pk=appointment.pk).update(reminder_sent_at=sent)
+
+    res = http.patch(detail_url(appointment), {'notes': 'brings her own towel'}, format='json')
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.reminder_sent_at == sent

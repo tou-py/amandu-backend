@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
@@ -394,3 +395,25 @@ def test_reschedule_following_can_hand_the_run_to_someone_else(
     assert res.status_code == 200
     handed = [a.professional_id for a in Appointment.objects.order_by('start')]
     assert handed == [teacher.pk, cover.pk, cover.pk, cover.pk]
+
+def test_moving_a_run_puts_every_reminder_it_moved_back_in_the_queue(
+    receptionist, studio, teacher, reformer, ada
+):
+    """
+    The sharpest edge of the stamp, and the reason it is cleared at all: one
+    POST moves a whole run, so an uncleared stamp would not lose one reminder
+    but a term of them, on exactly the imminent dates where being wrong is
+    worst. The occurrence before the pivot is untouched and must keep its own.
+    """
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    booked = list(Appointment.objects.order_by('start'))
+    sent = timezone.now()
+    Appointment.objects.update(reminder_sent_at=sent)
+
+    res = http.post(action_url(booked[1], 'reschedule-following'), {'time': '19:30'}, format='json')
+
+    assert res.status_code == 200
+    moved = list(Appointment.objects.order_by('start'))
+    assert moved[0].reminder_sent_at == sent, 'the occurrence before the pivot never moved'
+    assert [one.reminder_sent_at for one in moved[1:]] == [None, None, None]

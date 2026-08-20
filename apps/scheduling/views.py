@@ -602,10 +602,16 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             # nobody's day, so it leaves the badge off.
             if one.start != was_at:
                 one.rescheduled_from = was_at
+                # Same reason as the single-appointment path, and this is where
+                # it bites hardest: one POST moves an entire run, so a term of
+                # Mondays could go silent all at once, on exactly the imminent
+                # occurrences where a wrong reminder costs the most.
+                one.reminder_sent_at = None
             try:
                 with transaction.atomic():
                     one.save(update_fields=[
-                        'start', 'end', 'professional', 'rescheduled_from', 'updated_at',
+                        'start', 'end', 'professional', 'rescheduled_from',
+                        'reminder_sent_at', 'updated_at',
                     ])
             except IntegrityError as exc:
                 if 'no_overlap_per_professional' not in str(exc):
