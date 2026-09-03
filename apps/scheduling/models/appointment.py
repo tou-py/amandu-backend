@@ -34,9 +34,25 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         group, and one absence there does not describe the other three.
         """
 
+        # Asked for by a stranger through the public page, not yet accepted by
+        # the shop. Holds the slot -- the overlap constraint excludes only
+        # 'cancelled', so a request cannot be quietly double-booked while it
+        # waits -- but nobody has promised to be there yet.
+        PENDING = 'pending', 'Pending confirmation'
         SCHEDULED = 'scheduled', 'Scheduled'
         COMPLETED = 'completed', 'Completed'
         CANCELLED = 'cancelled', 'Cancelled'
+
+    class Source(models.TextChoices):
+        """
+        Who put this in the diary. Worth recording from the first public booking
+        onwards: "the shop booked it" and "someone off the street asked for it"
+        carry different trust, and the no-show statistics of §5.3 are meaningless
+        if the two are counted together.
+        """
+
+        STAFF = 'staff', 'Staff'
+        PUBLIC = 'public', 'Public page'
 
     professional = models.ForeignKey(
         'accounts.Membership',
@@ -106,9 +122,44 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # its professional. A reminders table would earn its place the day a second
     # person is notified about the same slot.
     #
-    # ponytail: never cleared. Moving an already-reminded appointment does not
-    # re-notify. Clear it in the reschedule path if that turns out to matter.
+    # Cleared by both reschedule paths, because otherwise the stamp that stops
+    # a second reminder also stops the CORRECTED one: a booking reminded at 09:00
+    # and then moved to 15:00 would leave its professional with a notification
+    # for an hour that no longer exists, and the sweep would never revisit it.
+    #
+    # ponytail: a booking moved EARLIER, to a start already inside the reminder
+    # lead, is notified on the next tick rather than at its proper lead time --
+    # and one moved to a start already past is never notified at all. Both are
+    # accepted: there is no time left to give back.
     reminder_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # The time this appointment was moved AWAY from, so the agenda can say
+    # "rescheduled -- was at 10:00" instead of only "rescheduled". A timestamp
+    # and not a boolean because the column costs the same either way, and the
+    # old hour is the half of the answer anyone asking the question wants.
+    #
+    # Overwritten on every move: it is where the booking came from, not where it
+    # started life. Never cleared -- moving it back to its old hour still means
+    # the people involved were told a different time at some point.
+    rescheduled_from = models.DateTimeField(null=True, blank=True, editable=False)
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,  # type: ignore
+        default=Source.STAFF,
+    )
+    # Which member of staff booked it. Null is not "unknown": it is the public
+    # page, where there is no member of staff, and Source says so explicitly
+    # rather than leaving the reader to infer it from a null.
+    #
+    # SET_NULL, not PROTECT: an appointment booked by someone who has since left
+    # is still an appointment, and the diary must not hold their membership row
+    # hostage.
+    created_by = models.ForeignKey(
+        'accounts.Membership',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='appointments_booked',
+    )
 
     class Meta:
         db_table = 'tb_appointment'
@@ -139,14 +190,34 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     def __str__(self):
         return f'{self.professional} at {self.start:%Y-%m-%d %H:%M}'
 
-    def _require_scheduled(self):
-        if self.status != self.Status.SCHEDULED:
+    def _require_not_terminal(self):
+        if self.status in (self.Status.COMPLETED, self.Status.CANCELLED):
             raise ValidationError(
                 f'A {self.get_status_display().lower()} appointment is terminal.'
             )
 
+    def _require_scheduled(self):
+        self._require_not_terminal()
+        if self.status != self.Status.SCHEDULED:
+            raise ValidationError(
+                'A booking still awaiting confirmation has not happened yet.'
+            )
+
+    def confirm(self):
+        """
+        The shop accepting a request that came off the public page. The only way
+        into SCHEDULED other than being booked there directly.
+        """
+        if self.status != self.Status.PENDING:
+            raise ValidationError('Only a pending appointment can be confirmed.')
+        self.status = self.Status.SCHEDULED
+        self.save(update_fields=['status', 'updated_at'])
+
     def cancel(self, reason=''):
-        self._require_scheduled()
+        # Turning down a request off the public page and cancelling a confirmed
+        # booking are the same transition: the slot is given back either way.
+        # Only the two terminal states are refused.
+        self._require_not_terminal()
         self.status = self.Status.CANCELLED
         self.cancelled_at = timezone.now()
         self.cancellation_reason = reason
@@ -173,10 +244,6 @@ class AppointmentClient(models.Model):
         PENDING = 'pending', 'Pending'
         ATTENDED = 'attended', 'Attended'
         NO_SHOW = 'no_show', 'No show'
-        # Told us they were not coming, too late to give the slot away. Worth
-        # separating from a silent absence: the same outcome, different courtesy,
-        # and a business that charges for one may not charge for the other.
-        LATE_CANCEL = 'late_cancel', 'Late cancellation'
 
     appointment = models.ForeignKey(
         'scheduling.Appointment',
@@ -192,6 +259,23 @@ class AppointmentClient(models.Model):
         max_length=20,
         choices=Attendance.choices,  # type: ignore
         default=Attendance.PENDING,
+    )
+    # The arrangement that put THIS person on THIS slot, if one did.
+    #
+    # Separate from `Appointment.series` because a group class is booked once
+    # and enrolled into many times: when a second client joins an existing
+    # Monday class, the appointment keeps the series that created it -- someone
+    # else's -- so that column cannot answer "which rows came from this
+    # enrolment". This one can, on both paths, created and joined alike.
+    #
+    # SET_NULL for the same reason as the appointment side: dropping the rule
+    # must never drop the roster it built. The person still attended.
+    series = models.ForeignKey(
+        'scheduling.AppointmentSeries',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='enrolments',
     )
 
     def mark(self, attendance):

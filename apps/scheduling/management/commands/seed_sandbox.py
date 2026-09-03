@@ -43,7 +43,6 @@ CANCELLED = Appointment.Status.CANCELLED
 PENDING = AppointmentClient.Attendance.PENDING
 ATTENDED = AppointmentClient.Attendance.ATTENDED
 NO_SHOW = AppointmentClient.Attendance.NO_SHOW
-LATE_CANCEL = AppointmentClient.Attendance.LATE_CANCEL
 
 # The address that belongs to three tenants at once. It is the only way to see
 # the space switcher in the header, so it is called out rather than buried.
@@ -411,7 +410,7 @@ class Command(BaseCommand):
             if not created:
                 continue
 
-            for position, guest in enumerate(guests):
+            for guest in guests:
                 link = AppointmentClient.objects.create(
                     appointment=appointment, client=clients[guest]
                 )
@@ -419,12 +418,10 @@ class Command(BaseCommand):
                 # cancelled one never did, so everyone in it stays pending.
                 if status != COMPLETED:
                     continue
-                # One finished day carries the awkward outcomes, so all four
-                # attendance values exist somewhere in the data instead of every
-                # past booking reading as a tidy "attended".
-                link.attendance = (
-                    (NO_SHOW, LATE_CANCEL)[position % 2] if offset == -3 else ATTENDED
-                )
+                # One finished day carries the awkward outcome, so an absence
+                # exists somewhere in the data instead of every past booking
+                # reading as a tidy "attended".
+                link.attendance = NO_SHOW if offset == -3 else ATTENDED
                 link.save(update_fields=['attendance'])
 
         for email, role in spec['invitations']:

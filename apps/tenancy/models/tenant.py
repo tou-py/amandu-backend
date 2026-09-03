@@ -83,6 +83,17 @@ class Tenant(TimestampMixin):
     # the system needs to know about that, which is why there is no plan table,
     # no price and no ledger yet.
     paid_until = models.DateField(null=True, blank=True)
+    # Whether strangers may see this tenant's free slots and book one.
+    #
+    # Default False, and that is the whole point: the studio already in
+    # production is an INTERNAL diary, and a feature that opened its calendar to
+    # the internet by being deployed would be a breach, not a release. Turning
+    # this on is a deliberate act per tenant.
+    #
+    # A column rather than a settings table because it is one boolean on a model
+    # with six fields; a table earns its place when there are enough of these to
+    # make Tenant unreadable.
+    public_booking = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'tb_tenant'

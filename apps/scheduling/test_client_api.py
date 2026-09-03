@@ -5,7 +5,9 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership
+from apps.commons.dates import one_month_after
 from apps.scheduling.models import Appointment, AppointmentClient, Client, Service
 from apps.tenancy.models import Tenant
 
@@ -309,3 +311,144 @@ def test_timeline_of_another_tenants_client_is_not_reachable(receptionist, salon
     res = api(receptionist, salon).get(timeline_url(foreign))
 
     assert res.status_code == 404
+
+
+def payment_url(client):
+    return reverse('scheduling:client-register-payment', args=[client.pk])
+
+
+def test_a_client_without_paid_until_has_no_plan_at_all(salon):
+    """
+    NULL is 'pays per session' here, the opposite of Tenant.paid_until, where it
+    means 'never expires'. Inverting it would grant a standing subscription to
+    every client who never bought one.
+    """
+    ada = Client.objects.create(tenant=salon, name='Ada')
+
+    assert ada.plan_state() == 'none'
+
+
+def test_a_client_paid_through_today_is_still_active(salon):
+    """The boundary. `paid_until` is a day the operator names, not an instant, so
+    the last day it covers is covered in full."""
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
+    )
+
+    assert ada.plan_state() == 'active'
+
+
+def test_a_client_whose_last_paid_day_has_passed_is_expired(salon):
+    ada = Client.objects.create(
+        tenant=salon,
+        name='Ada',
+        monthly_fee=300000,
+        paid_until=timezone.localdate() - timedelta(days=1),
+    )
+
+    assert ada.plan_state() == 'expired'
+
+
+def test_the_client_payload_carries_the_plan_and_the_state_derived_from_it(receptionist, salon):
+    paid_until = timezone.localdate() + timedelta(days=5)
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=paid_until
+    )
+
+    res = api(receptionist, salon).get(detail_url(ada))
+
+    assert res.status_code == 200
+    assert res.data['monthly_fee'] == 300000
+    assert res.data['paid_until'] == paid_until.isoformat()
+    assert res.data['plan_state'] == 'active'
+
+
+def test_a_plan_can_be_given_and_taken_away_through_the_api(receptionist, salon):
+    """A studio sells plans, a salon sells none: both shapes must round-trip."""
+    http = api(receptionist, salon)
+    res = http.post(
+        LIST_URL,
+        {'name': 'Ada', 'monthly_fee': 300000, 'paid_until': '2026-12-31'},
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert res.data['plan_state'] == 'active'
+
+    cleared = http.patch(
+        detail_url(Client.objects.get(name='Ada')),
+        {'monthly_fee': None, 'paid_until': None},
+        format='json',
+    )
+
+    assert cleared.status_code == 200
+    assert cleared.data['plan_state'] == 'none'
+
+
+def test_registering_a_payment_on_an_active_plan_extends_from_its_own_end(receptionist, salon):
+    """Paying early stacks onto what is left instead of throwing it away."""
+    remaining = timezone.localdate() + timedelta(days=10)
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=remaining
+    )
+
+    res = api(receptionist, salon).post(payment_url(ada), format='json')
+
+    assert res.status_code == 200
+    ada.refresh_from_db()
+    assert ada.paid_until == one_month_after(remaining)
+
+
+def test_registering_a_payment_on_an_expired_plan_extends_from_today(receptionist, salon):
+    """Paying late buys a month from now: nobody owes us the days they spent uncovered."""
+    today = timezone.localdate()
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=today - timedelta(days=40)
+    )
+
+    res = api(receptionist, salon).post(payment_url(ada), format='json')
+
+    assert res.status_code == 200
+    ada.refresh_from_db()
+    assert ada.paid_until == one_month_after(today)
+    assert res.data['plan_state'] == 'active'
+
+
+def test_registering_a_payment_books_the_money_in_the_cash_book(receptionist, salon):
+    ada = Client.objects.create(tenant=salon, name='Ada', monthly_fee=300000)
+
+    res = api(receptionist, salon).post(payment_url(ada), format='json')
+
+    assert res.status_code == 200
+    ada.refresh_from_db()
+    entry = CashEntry.objects.get()
+    assert entry.tenant == salon
+    assert entry.kind == CashEntry.Kind.INCOME
+    assert entry.amount == 300000
+    assert entry.occurred_on == timezone.localdate()
+    assert entry.appointment is None
+    # Pinned wording, not a loose contains: this line is read by the shop in its
+    # cash book, sitting between entries the front end writes in Spanish, so the
+    # language is part of the behaviour rather than an implementation detail.
+    assert entry.concept == f'Mensualidad · Ada · hasta {ada.paid_until:%d/%m/%Y}'
+
+
+def test_a_client_with_no_monthly_fee_cannot_be_charged(receptionist, salon):
+    """There is no amount to take, and recording a zero would corrupt the day's takings."""
+    ada = Client.objects.create(tenant=salon, name='Ada')
+
+    res = api(receptionist, salon).post(payment_url(ada), format='json')
+
+    assert res.status_code == 400
+    ada.refresh_from_db()
+    assert ada.paid_until is None
+    assert not CashEntry.objects.exists()
+
+
+def test_a_payment_cannot_be_registered_for_another_tenants_client(receptionist, salon, clinic):
+    foreign = Client.objects.create(tenant=clinic, name='Grace', monthly_fee=300000)
+
+    res = api(receptionist, salon).post(payment_url(foreign), format='json')
+
+    assert res.status_code == 404
+    assert not CashEntry.objects.exists()

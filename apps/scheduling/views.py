@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
@@ -12,7 +13,14 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 
+# Safe in this direction only: accounting names scheduling by string and never
+# imports it, so there is no cycle to make here. Imported at all because taking a
+# month of a client's plan is ONE event at the counter -- the cover is extended
+# and the money is booked -- and two requests for it is what leaves a day's
+# takings disagreeing with its plans.
+from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership, Notification
+from apps.commons.dates import one_month_after
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling.models import (
     Appointment,
@@ -22,6 +30,8 @@ from apps.scheduling.models import (
     Client,
     ClientField,
     Service,
+    TimeOff,
+    WorkSchedule,
 )
 from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
@@ -36,7 +46,9 @@ from apps.scheduling.serializers import (
     ProfessionalSerializer,
     RescheduleFollowingSerializer,
     ServiceSerializer,
+    TimeOffSerializer,
     VisitSerializer,
+    WorkScheduleSerializer,
 )
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -66,6 +78,50 @@ class ClientViewSet(TenantScopedModelViewSet):
 
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
+
+    @extend_schema(request=None, responses=ClientSerializer)
+    @action(detail=True, methods=['post'], url_path='register-payment')
+    def register_payment(self, request, pk=None):
+        """
+        A month of this client's plan, paid for at the counter.
+
+        Extends from whichever is later, today or the day already covered: paying
+        early stacks onto what is left instead of throwing it away, and paying
+        late starts today rather than back-dating time nobody could use. That is
+        the same rule the platform applies to a tenant, out of the same helper --
+        the month clamp is the part nobody gets right twice.
+
+        No role check, deliberately. The cash BOOK is owner/admin because the
+        shop's aggregate takings are the protected thing; taking one client's
+        monthly fee is what the front desk is there to do.
+        """
+        client = self.get_object()
+        if client.monthly_fee is None:
+            raise ValidationError(
+                {'monthly_fee': 'This client has no monthly plan, so there is nothing to charge.'}
+            )
+
+        today = timezone.localdate()
+        # Atomic because these are two halves of one fact. A cover extended
+        # without its entry is a month the shop gave away and cannot see in the
+        # book; an entry without the extension is money taken for nothing.
+        with transaction.atomic():
+            client.paid_until = one_month_after(max(client.paid_until or today, today))
+            client.save(update_fields=['paid_until', 'updated_at'])
+            CashEntry.objects.create(
+                tenant=request.tenant,
+                kind=CashEntry.Kind.INCOME,
+                amount=client.monthly_fee,
+                occurred_on=today,
+                # Spanish, unlike everything around it: this string is not an
+                # identifier, it is the line the shop reads in its cash book,
+                # sitting between entries the front end writes in Spanish. The
+                # separator matches those too.
+                concept=f'Mensualidad · {client.name} · hasta {client.paid_until:%d/%m/%Y}',
+                # No appointment: a plan is paid for the month, not for a slot.
+            )
+
+        return Response(self.get_serializer(client).data)
 
     @extend_schema(responses=VisitSerializer(many=True))
     @action(detail=True, methods=['get'])
@@ -183,6 +239,100 @@ class CategoryViewSet(TenantScopedModelViewSet):
 class ServiceViewSet(TenantScopedModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                'professional', int,
+                description="Only this person's week. Omitted, the whole team's.",
+            ),
+        ],
+    ),
+)
+class WorkScheduleViewSet(TenantScopedModelViewSet):
+    """
+    The recurring week: when each professional is normally at work.
+
+    Readable by any active membership, because the agenda and the availability
+    calculation both need it. Writable only by owner/admin: these rows decide
+    what the public page offers to strangers, so widening them is a business
+    decision, not a personal one.
+    """
+
+    queryset = WorkSchedule.objects.all()
+    serializer_class = WorkScheduleSerializer
+    # Bounded by staff times days of the week, and read whole to draw the week.
+    pagination_class = None
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def get_queryset(self):
+        rows = super().get_queryset()
+        professional = self.request.query_params.get('professional')
+        if professional:
+            rows = rows.filter(professional_id=professional)
+        return rows
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter('from', OpenApiTypes.DATE, description='YYYY-MM-DD, inclusive.'),
+            OpenApiParameter('to', OpenApiTypes.DATE, description='YYYY-MM-DD, inclusive.'),
+        ],
+    ),
+)
+class TimeOffViewSet(TenantScopedModelViewSet):
+    """
+    Holidays, closures and absences: what comes out of the working week.
+
+    Same split as the schedule, for the same reason -- except that a row here
+    only ever REMOVES availability, which is why it is the one an owner reaches
+    for in a hurry and why it stays cheap to write.
+    """
+
+    queryset = TimeOff.objects.all()
+    serializer_class = TimeOffSerializer
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def get_queryset(self):
+        """
+        Defaults to what is still ahead. A shop opening this list wants the
+        closures it has to plan around, not every sick day since it opened --
+        and past rows only grow.
+        """
+        rows = super().get_queryset()
+        tz = ZoneInfo(self.request.tenant.timezone)
+        since = self._parse_day(self.request.query_params.get('from'), tz, 'from')
+        until = self._parse_day(self.request.query_params.get('to'), tz, 'to')
+
+        if since is None and until is None:
+            return rows.filter(end__gte=timezone.now())
+        if since is not None:
+            rows = rows.filter(end__gt=since)
+        if until is not None:
+            rows = rows.filter(start__lt=until + timedelta(days=1))
+        return rows
+
+    @staticmethod
+    def _parse_day(value, tz, field):
+        if value is None:
+            return None
+        try:
+            return datetime.strptime(value, '%Y-%m-%d').replace(tzinfo=tz)
+        except ValueError:
+            raise ValidationError({field: 'Use YYYY-MM-DD.'})
 
 
 class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -308,7 +458,13 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     # Both hooks, and only these two: cancel() takes a row OUT of the constraint's
     # condition and complete() leaves its range untouched, so neither can raise it.
     def perform_create(self, serializer):
-        self._save_or_conflict(super().perform_create, serializer)
+        # Who booked it, recorded here and never taken from the payload. The
+        # public page leaves this null and says so through `source`, so the two
+        # ways a slot can enter the diary stay told apart.
+        self._save_or_conflict(
+            lambda s: s.save(tenant=self.request.tenant, created_by=self.request.membership),
+            serializer,
+        )
 
     def perform_update(self, serializer):
         self._save_or_conflict(super().perform_update, serializer)
@@ -377,6 +533,20 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     def complete(self, request, pk=None):
         appointment = self.get_object()
         return self._transition(appointment, appointment.complete)
+
+    # No body: the URL already names the transition.
+    @extend_schema(request=None, responses=AppointmentSerializer)
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        """
+        The shop accepting a request that came off the public page.
+
+        Turning one down has no action of its own: that is `cancel`, which is
+        already the transition that gives a slot back and already carries the
+        reason the shop typed.
+        """
+        appointment = self.get_object()
+        return self._transition(appointment, appointment.confirm)
 
     def _following(self, appointment):
         """
@@ -469,7 +639,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         moved, skipped = [], []
 
         for one in self._following(appointment):
-            local_day = one.start.astimezone(zone).date()
+            was_at = one.start
+            local_day = was_at.astimezone(zone).date()
             # Rebuilt from the local date plus the new wall-clock time, the same
             # way the series was generated: adding an offset to a UTC instant
             # would move an occurrence on the far side of a DST boundary to the
@@ -478,9 +649,21 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             one.end = one.start + one.service.duration
             if professional is not None:
                 one.professional = professional
+            # Handing the series to someone else without changing the hour moves
+            # nobody's day, so it leaves the badge off.
+            if one.start != was_at:
+                one.rescheduled_from = was_at
+                # Same reason as the single-appointment path, and this is where
+                # it bites hardest: one POST moves an entire run, so a term of
+                # Mondays could go silent all at once, on exactly the imminent
+                # occurrences where a wrong reminder costs the most.
+                one.reminder_sent_at = None
             try:
                 with transaction.atomic():
-                    one.save(update_fields=['start', 'end', 'professional', 'updated_at'])
+                    one.save(update_fields=[
+                        'start', 'end', 'professional', 'rescheduled_from',
+                        'reminder_sent_at', 'updated_at',
+                    ])
             except IntegrityError as exc:
                 if 'no_overlap_per_professional' not in str(exc):
                     raise

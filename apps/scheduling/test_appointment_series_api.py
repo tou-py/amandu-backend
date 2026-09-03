@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
@@ -165,10 +166,16 @@ def test_a_clash_skips_that_date_and_names_it(receptionist, studio, teacher, ref
 def test_a_series_that_clashes_everywhere_is_refused_outright(
     receptionist, studio, teacher, reformer, ada
 ):
-    """An empty arrangement is not a success anybody would read."""
+    """
+    An empty arrangement is not a success anybody would read.
+
+    Every blocker is at 07:30, half over the class and half not: a real clash,
+    the one shape an enrolment can never absorb. On the hour it would be the
+    same class and the series would join it instead.
+    """
     for day in (31, 7, 14, 21):
         month = 8 if day == 31 else 9
-        when = datetime(2026, month, day, 7, 0, tzinfo=SANTIAGO)
+        when = datetime(2026, month, day, 7, 30, tzinfo=SANTIAGO)
         Appointment.objects.create(
             tenant=studio, professional=teacher, service=reformer,
             start=when, end=when + reformer.duration,
@@ -357,6 +364,22 @@ def test_reschedule_following_leaves_a_clashing_occurrence_where_it_was(
     assert local(stayed).strftime('%H:%M') == '07:00'
 
 
+def test_reschedule_following_marks_every_occurrence_it_moved(
+    receptionist, studio, teacher, reformer, ada
+):
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    booked = list(Appointment.objects.order_by('start'))
+    second = booked[1]
+    was_at = {a.pk: a.start for a in booked}
+
+    http.post(action_url(second, 'reschedule-following'), {'time': '19:30'}, format='json')
+
+    moved = list(Appointment.objects.order_by('start'))
+    assert moved[0].rescheduled_from is None  # before the pivot, never touched
+    assert [a.rescheduled_from for a in moved[1:]] == [was_at[a.pk] for a in moved[1:]]
+
+
 def test_reschedule_following_can_hand_the_run_to_someone_else(
     db, django_user_model, receptionist, studio, teacher, reformer, ada
 ):
@@ -378,3 +401,218 @@ def test_reschedule_following_can_hand_the_run_to_someone_else(
     assert res.status_code == 200
     handed = [a.professional_id for a in Appointment.objects.order_by('start')]
     assert handed == [teacher.pk, cover.pk, cover.pk, cover.pk]
+
+def test_moving_a_run_puts_every_reminder_it_moved_back_in_the_queue(
+    receptionist, studio, teacher, reformer, ada
+):
+    """
+    The sharpest edge of the stamp, and the reason it is cleared at all: one
+    POST moves a whole run, so an uncleared stamp would not lose one reminder
+    but a term of them, on exactly the imminent dates where being wrong is
+    worst. The occurrence before the pivot is untouched and must keep its own.
+    """
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    booked = list(Appointment.objects.order_by('start'))
+    sent = timezone.now()
+    Appointment.objects.update(reminder_sent_at=sent)
+
+    res = http.post(action_url(booked[1], 'reschedule-following'), {'time': '19:30'}, format='json')
+
+    assert res.status_code == 200
+    moved = list(Appointment.objects.order_by('start'))
+    assert moved[0].reminder_sent_at == sent, 'the occurrence before the pivot never moved'
+    assert [one.reminder_sent_at for one in moved[1:]] == [None, None, None]
+
+
+# --- enrolling in a class that already exists --------------------------------
+
+@pytest.fixture
+def bob(db, studio):
+    return Client.objects.create(tenant=studio, name='Bob')
+
+
+@pytest.fixture
+def barre(db, studio):
+    return Service.objects.create(
+        tenant=studio, name='Barre', duration=timedelta(minutes=60)
+    )
+
+
+def book_series(receptionist, studio, teacher, reformer, client, **overrides):
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, client, **overrides), format='json'
+    )
+    assert res.status_code == 201, res.data
+    return AppointmentSeries.objects.get(pk=res.data['id'])
+
+
+def test_a_second_client_enrols_in_the_class_instead_of_being_turned_away(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """
+    A recurring slot in a group business is ONE class. Bob wanting Ada's Monday
+    is not a double booking, it is the second person on the mat.
+    """
+    book_series(receptionist, studio, teacher, reformer, ada)
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, bob), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == []
+    assert res.data['joined'] == [
+        '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21',
+    ]
+    assert len(res.data['appointments']) == 4
+    # Nothing new in the diary, and Bob on the mat of every existing class.
+    assert Appointment.objects.count() == 4
+    assert all(a.client_links.count() == 2 for a in Appointment.objects.all())
+
+
+def test_a_joined_class_keeps_its_own_series_and_the_roster_carries_the_new_one(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """
+    The appointment belongs to whoever booked it; only the roster row belongs to
+    the enrolment. Which is why the enrolment needs a series of its own -- the
+    appointment's column is already answering somebody else's question.
+    """
+    ada_series = book_series(receptionist, studio, teacher, reformer, ada)
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, bob), format='json'
+    )
+    bob_series = AppointmentSeries.objects.get(pk=res.data['id'])
+
+    assert list(bob_series.appointments.all()) == []
+    assert ada_series.appointments.count() == 4
+    assert bob_series.enrolments.count() == 4
+    assert {link.client for link in bob_series.enrolments.all()} == {bob}
+    assert {link.client for link in ada_series.enrolments.all()} == {ada}
+
+
+def test_a_full_class_is_skipped_rather_than_squeezed(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """The class's own ceiling wins: enrolling in a room never widens it."""
+    ada_series = book_series(receptionist, studio, teacher, reformer, ada)
+    full = ada_series.appointments.get(start=datetime(2026, 9, 7, 7, 0, tzinfo=SANTIAGO))
+    full.capacity = 1
+    full.save(update_fields=['capacity'])
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, bob), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == ['2026-09-07']
+    assert res.data['joined'] == ['2026-08-31', '2026-09-14', '2026-09-21']
+    full.refresh_from_db()
+    assert full.capacity == 1
+    assert [link.client for link in full.client_links.all()] == [ada]
+
+
+def test_another_service_at_the_same_hour_is_a_clash_not_a_class(
+    receptionist, studio, teacher, reformer, barre, ada, bob
+):
+    """Two different things cannot happen in the same room at once."""
+    taken = datetime(2026, 9, 7, 7, 0, tzinfo=SANTIAGO)
+    other = Appointment.objects.create(
+        tenant=studio, professional=teacher, service=barre,
+        start=taken, end=taken + barre.duration,
+    )
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == ['2026-09-07']
+    assert res.data['joined'] == []
+    assert other.client_links.count() == 0
+
+
+def test_an_appointment_that_only_partly_overlaps_is_never_joined(
+    receptionist, studio, teacher, reformer, ada
+):
+    """
+    Half over the class is the appointment next door running long, not the class
+    itself. Enrolling into it would put the client somewhere they never asked to
+    be, at an hour that is not the one on their card.
+    """
+    taken = datetime(2026, 9, 7, 7, 30, tzinfo=SANTIAGO)
+    overlapping = Appointment.objects.create(
+        tenant=studio, professional=teacher, service=reformer,
+        start=taken, end=taken + reformer.duration,
+    )
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == ['2026-09-07']
+    assert res.data['joined'] == []
+    assert overlapping.client_links.count() == 0
+
+
+def test_a_cancelled_class_neither_blocks_the_hour_nor_absorbs_the_enrolment(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """A called-off class is not one anybody can still walk into."""
+    when = datetime(2026, 9, 7, 7, 0, tzinfo=SANTIAGO)
+    called_off = Appointment.objects.create(
+        tenant=studio, professional=teacher, service=reformer,
+        start=when, end=when + reformer.duration,
+        status=Appointment.Status.CANCELLED,
+    )
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == []
+    assert res.data['joined'] == []
+    assert len(res.data['appointments']) == 4
+    assert called_off.client_links.count() == 0
+
+
+def test_a_series_that_joins_every_date_is_still_a_complete_success(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """
+    Nothing created is not nothing done. The client is enrolled in every class
+    they asked for, which is the entire point of asking.
+    """
+    book_series(receptionist, studio, teacher, reformer, ada)
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, bob), format='json'
+    )
+
+    assert res.status_code == 201
+    assert AppointmentSeries.objects.count() == 2
+    assert AppointmentSeries.objects.get(pk=res.data['id']).enrolments.count() == 4
+
+
+def test_enrolling_somebody_already_in_the_class_does_not_duplicate_them(
+    receptionist, studio, teacher, reformer, ada
+):
+    """
+    The end state asked for already holds, so the join succeeded. Inserting Ada
+    twice would only break the roster's unique constraint and take the other
+    dates down with it.
+    """
+    book_series(receptionist, studio, teacher, reformer, ada)
+
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['skipped'] == []
+    assert len(res.data['joined']) == 4
+    assert all(a.client_links.count() == 1 for a in Appointment.objects.all())

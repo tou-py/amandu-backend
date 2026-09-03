@@ -8,6 +8,8 @@ from apps.scheduling.views import (
     ClientViewSet,
     ProfessionalViewSet,
     ServiceViewSet,
+    TimeOffViewSet,
+    WorkScheduleViewSet,
 )
 
 app_name = 'scheduling'
@@ -20,5 +22,7 @@ router.register('services', ServiceViewSet, basename='service')
 router.register('appointments', AppointmentViewSet, basename='appointment')
 router.register('appointment-series', AppointmentSeriesViewSet, basename='appointmentseries')
 router.register('professionals', ProfessionalViewSet, basename='professional')
+router.register('work-schedules', WorkScheduleViewSet, basename='workschedule')
+router.register('time-off', TimeOffViewSet, basename='timeoff')
 
 urlpatterns = router.urls

@@ -461,9 +461,14 @@ def test_marking_attendance_does_not_reorder_the_roster(
     assert [a['name'] for a in refetched.data['attendees']] == original_order
 
 
-def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
+def test_a_late_cancellation_is_no_longer_a_verdict_of_its_own(
     receptionist, salon, stylist, client_, haircut
 ):
+    """
+    The shops never charged it differently from a silent absence, so it went.
+    Anything still sending the old value gets told, rather than having it
+    quietly stored as something else.
+    """
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
     appointment = Appointment.objects.get(pk=created.data['id'])
@@ -474,8 +479,8 @@ def test_a_late_cancellation_is_told_apart_from_a_silent_absence(
         format='json',
     )
 
-    assert res.status_code == 200
-    assert res.data['attendees'][0]['attendance'] == 'late_cancel'
+    assert res.status_code == 400
+    assert 'attendance' in res.data
 
 
 def test_a_client_outside_the_appointment_cannot_be_marked(
@@ -555,11 +560,73 @@ def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircu
     assert Appointment.objects.get(pk=res.data['id']).id.version == 7
 
 
+def test_an_appointment_carries_the_plan_state_of_every_attendee(
+    receptionist, salon, stylist, haircut
+):
+    """
+    Per person, not per slot: a group class holds several people and each is
+    covered by a plan or not on their own. The charge step reads this to decide
+    whether to ask THIS attendee for money at all.
+    """
+    covered = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
+    )
+    lapsed = Client.objects.create(
+        tenant=salon,
+        name='Bob',
+        monthly_fee=300000,
+        paid_until=timezone.localdate() - timedelta(days=1),
+    )
+    per_session = Client.objects.create(tenant=salon, name='Grace')
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [covered, lapsed, per_session], haircut, TOMORROW),
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert {a['name']: a['plan_state'] for a in res.data['attendees']} == {
+        'Ada': 'active', 'Bob': 'expired', 'Grace': 'none',
+    }
+
+
+def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, stylist, client_):
+    """
+    Null when the service is not charged per session, the amount when it is. The
+    agenda never fetches the service catalogue, so this is the only place the
+    charge step can read it.
+    """
+    priced = Service.objects.create(
+        tenant=salon, name='Cut', duration=timedelta(minutes=30), price=120000
+    )
+    unpriced = Service.objects.create(
+        tenant=salon, name='Pilates', duration=timedelta(minutes=30)
+    )
+    http = api(receptionist, salon)
+
+    charged = http.post(
+        LIST_URL, booking(stylist, [client_], priced, TOMORROW), format='json'
+    )
+    covered = http.post(
+        LIST_URL, booking(stylist, [client_], unpriced, TOMORROW + timedelta(hours=2)),
+        format='json',
+    )
+
+    assert charged.data['service_price'] == 120000
+    assert covered.data['service_price'] is None
+
+
 def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
     """N+1 guard: the query count for the list must not grow with the number of
-    appointments. Fails if `client_links__client` stops being prefetched."""
-    ada = Client.objects.create(tenant=salon, name='Ada')
+    appointments. Fails if `client_links__client` stops being prefetched, and
+    equally if `attendees.plan_state` or `service_price` ever start resolving
+    through a relation the viewset does not already fetch."""
+    ada = Client.objects.create(
+        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
+    )
     bob = Client.objects.create(tenant=salon, name='Bob')
+    haircut.price = 120000
+    haircut.save(update_fields=['price'])
 
     def book(offset_minutes):
         start = TOMORROW + timedelta(minutes=offset_minutes)
@@ -721,9 +788,45 @@ def test_a_malformed_date_filter_is_rejected(receptionist, salon):
 
 
 def test_an_unknown_status_filter_is_rejected(receptionist, salon):
-    res = api(receptionist, salon).get(LIST_URL, {'status': 'pending'})
+    # Not 'pending': that used to be the example of a status the domain does not
+    # have, and the public booking page gave it a meaning.
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'rescheduled'})
 
     assert res.status_code == 400
+
+
+def test_a_booking_records_who_made_it(receptionist, salon, stylist, haircut, client_):
+    """Recorded by the server, never taken from the payload: a body that could
+    set these could dress a public request up as a staff booking."""
+    res = api(receptionist, salon).post(LIST_URL, {
+        'professional': stylist.pk, 'service': haircut.pk,
+        'clients': [str(client_.pk)], 'start': TOMORROW.isoformat(),
+        'source': 'public', 'created_by': None,
+    }, format='json')
+
+    assert res.status_code == 201
+    appointment = Appointment.objects.get()
+    assert appointment.source == Appointment.Source.STAFF
+    assert appointment.created_by.user == receptionist
+
+
+def test_the_shop_can_filter_the_requests_waiting_on_it(receptionist, salon, stylist,
+                                                        haircut):
+    """The queue the shop actually works from: what the public page asked for
+    and nobody has answered yet."""
+    waiting = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
+        status=Appointment.Status.PENDING, source=Appointment.Source.PUBLIC,
+    )
+    Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut,
+        start=TOMORROW + timedelta(hours=2), end=TOMORROW + timedelta(hours=2, minutes=30),
+    )
+
+    res = api(receptionist, salon).get(LIST_URL, {'status': 'pending'})
+
+    assert [row['id'] for row in res.json()['results']] == [str(waiting.pk)]
 
 
 def test_another_tenants_appointment_is_not_reachable(receptionist, salon, stylist, haircut, clinic):
@@ -1001,3 +1104,119 @@ def test_adding_one_person_too_many_to_an_existing_slot_is_refused(
 
     assert res.status_code == 400
     assert appointment.clients.count() == 5
+
+
+def test_a_new_booking_has_never_been_rescheduled(
+    receptionist, salon, stylist, client_, haircut
+):
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
+    )
+
+    assert res.status_code == 201
+    assert res.data['rescheduled_from'] is None
+    assert Appointment.objects.get(pk=res.data['id']).rescheduled_from is None
+
+
+def test_moving_a_booking_records_the_hour_it_came_from(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.rescheduled_from == TOMORROW
+
+
+def test_moving_a_booking_twice_records_the_hour_it_last_came_from(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    It answers "where was this before?", not "where did it start life?" -- the
+    receptionist telephoning the client needs the time that person is currently
+    expecting, which is the one it was moved away from most recently.
+    """
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    second = TOMORROW + timedelta(hours=2)
+
+    http.patch(detail_url(appointment), {'start': second.isoformat()}, format='json')
+    http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=5)).isoformat()},
+        format='json',
+    )
+
+    appointment.refresh_from_db()
+    assert appointment.rescheduled_from == second
+
+
+def test_an_edit_that_leaves_the_hour_alone_is_not_a_reschedule(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    res = http.patch(detail_url(appointment), {'notes': 'brings her own towel'}, format='json')
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.notes == 'brings her own towel'
+    assert appointment.rescheduled_from == TOMORROW
+
+def test_moving_a_booking_puts_its_reminder_back_in_the_queue(
+    receptionist, salon, stylist, client_, haircut
+):
+    """
+    The stamp that stops a second reminder must not also stop the corrected one.
+
+    Left set, it is a guarantee of silence: the sweep skips every stamped row,
+    so the professional keeps a notification for an hour that no longer exists
+    and nothing will ever contradict it.
+    """
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    Appointment.objects.filter(pk=appointment.pk).update(reminder_sent_at=timezone.now())
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=6)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.reminder_sent_at is None
+
+
+def test_an_edit_that_leaves_the_hour_alone_keeps_its_reminder_spent(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Otherwise every touch of the notes field would notify the whole team again."""
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    sent = timezone.now()
+    Appointment.objects.filter(pk=appointment.pk).update(reminder_sent_at=sent)
+
+    res = http.patch(detail_url(appointment), {'notes': 'brings her own towel'}, format='json')
+
+    assert res.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.reminder_sent_at == sent
