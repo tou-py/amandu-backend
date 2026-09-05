@@ -71,9 +71,16 @@ USER app
 ENTRYPOINT ["/entrypoint.sh"]
 
 # --timeout kills hung workers, --max-requests recycles them to bound memory growth.
+#
+# 5 workers, not 3. A sync worker serves ONE request at a time, so the worker
+# count IS the concurrency limit -- and the agenda polls, which means the ceiling
+# is reached by open tabs rather than by busy people. The usual sizing is
+# (2 x cores) + 1; 5 is deliberately short of that because each worker is a full
+# copy of Django in memory and the box is shared with Postgres and Redis. Raise
+# it against measured RSS, not against the formula.
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
-     "--workers", "3", \
+     "--workers", "5", \
      "--timeout", "60", \
      "--max-requests", "1000", \
      "--max-requests-jitter", "100", \
