@@ -918,6 +918,23 @@ class MovedFollowingSerializer(serializers.Serializer):
     skipped = serializers.ListField(child=serializers.DateField(), read_only=True)
 
 
+class DayLoadSerializer(serializers.Serializer):
+    """
+    One local day of the agenda as two numbers, for callers that need to know
+    how full a stretch of days is without being sent every slot on it.
+
+    Declared rather than answered as a bare dict for the same reason
+    MovedFollowingSerializer is: the schema has to promise the shape, or the
+    generated client types it as an unknown object and every reader guesses.
+    """
+
+    date = serializers.DateField(read_only=True)
+    count = serializers.IntegerField(read_only=True)
+    # A union of the day's bookings, never their sum -- see workload.daily_load.
+    # Named for what it measures so nobody reads it as capacity sold.
+    busy_minutes = serializers.IntegerField(read_only=True)
+
+
 class RescheduleFollowingSerializer(serializers.Serializer):
     """
     Body of the "this one and the following" move: the new wall-clock time, and

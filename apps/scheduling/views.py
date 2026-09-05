@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 
 # Safe in this direction only: accounting names scheduling by string and never
@@ -42,6 +43,7 @@ from apps.scheduling.serializers import (
     CategorySerializer,
     ClientFieldSerializer,
     ClientSerializer,
+    DayLoadSerializer,
     MovedFollowingSerializer,
     ProfessionalSerializer,
     RescheduleFollowingSerializer,
@@ -50,6 +52,7 @@ from apps.scheduling.serializers import (
     VisitSerializer,
     WorkScheduleSerializer,
 )
+from apps.scheduling.workload import daily_load
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
@@ -365,6 +368,26 @@ class ProfessionalViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         )
 
 
+class AgendaPagination(PageNumberPagination):
+    """
+    Lets the agenda ask for its whole week in one response.
+
+    The project default of 50 turns a busy shop's week into five sequential
+    round trips -- five times the JWT check, the tenant lookup and the throttle
+    hit -- to draw one screen. But the backlog and the request queue deliberately
+    read only page one, so raising the default for everybody would hand them a
+    payload five times larger for no gain. Hence a parameter rather than a new
+    default: the grid asks, nothing else has to.
+
+    `max_page_size` is the actual guard. The agenda's range is bounded by the
+    calendar, so a big page is safe there; the cap is what stops the parameter
+    being a way to ask for an unbounded scan.
+    """
+
+    page_size_query_param = 'page_size'
+    max_page_size = 300
+
+
 @extend_schema_view(
     list=extend_schema(
         parameters=[
@@ -406,14 +429,26 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     """
 
     permission_classes = (IsAuthenticated, HasActiveMembership, OwnsAppointmentOrActsForTheTeam)
+    pagination_class = AgendaPagination
     queryset = (
         Appointment.objects
-        .select_related('professional__user', 'service')
+        # `created_by__user` is not optional here, it is an N+1 fix. The
+        # serializer reads `created_by.display_name`, which walks TWO relations,
+        # so without this every row costs two extra queries: 50 rows went from 5
+        # queries to 105. It hid behind the seed data, where `created_by` is
+        # null and DRF short-circuits to the field default -- every appointment
+        # booked through the API has it set, so only real use showed it.
+        .select_related('professional__user', 'service', 'created_by__user')
         # The links, not the clients: the serializer reads attendance off the
         # through row, and prefetching only `clients` would query it per slot.
         .prefetch_related('client_links__client')
     )
     serializer_class = AppointmentSerializer
+
+    # The widest range `summary` will aggregate. A screen asks for a week, or a
+    # month at the outside; past a year the request stops being a view of the
+    # diary and becomes a walk of the whole table.
+    MAX_SUMMARY_DAYS = 366
 
     def get_queryset(self):
         """
@@ -447,6 +482,78 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             queryset = queryset.filter(start__lt=day_to + timedelta(days=1))
 
         return queryset
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                'from',
+                OpenApiTypes.DATE,
+                required=True,
+                description='First local day to include (YYYY-MM-DD). Inclusive.',
+            ),
+            OpenApiParameter(
+                'to',
+                OpenApiTypes.DATE,
+                required=True,
+                description='Last local day to include (YYYY-MM-DD). Inclusive.',
+            ),
+        ],
+        responses=DayLoadSerializer(many=True),
+    )
+    # `pagination_class=None` is not decoration: the router's paginator applies
+    # to every list-shaped route on the viewset, so drf-spectacular described
+    # this one as a paged envelope -- count/next/previous/results -- while the
+    # handler below returns a bare list. The generated client believed the
+    # schema. Seven rows never need a second page anyway.
+    @action(detail=False, methods=['get'], pagination_class=None)
+    def summary(self, request):
+        """
+        How full each day of the range is: one row per day instead of every slot
+        on it.
+
+        Why it exists. The agenda's week strip needs fourteen integers -- a count
+        and a busy-minutes figure for each of seven days -- and the only way to
+        get them was to page through the whole week on the list endpoint. For a
+        shop with a couple of hundred bookings a week that is five requests every
+        thirty seconds, each carrying full slots with their service, professional
+        and roster attached, so the client can add them up and throw the rows
+        away. This is one query over two columns.
+
+        Days with nothing on them are absent rather than sent as zeros: the
+        caller is drawing a fixed row of days and already knows which ones it
+        asked for, so a day missing here means the same thing a zero would, in
+        fewer bytes.
+
+        Cancelled slots are out -- they held nothing. Pending ones are IN: a
+        request nobody has answered still holds its hour, which is exactly what
+        the overlap constraint says about it.
+        """
+        params = request.query_params
+        if not params.get('from') or not params.get('to'):
+            raise ValidationError('Both `from` and `to` are required.')
+
+        tz = ZoneInfo(request.tenant.timezone)
+        day_from = self._parse_day(params['from'], tz, 'from')
+        day_to = self._parse_day(params['to'], tz, 'to')
+        if day_to < day_from:
+            raise ValidationError({'to': 'Cannot be before `from`.'})
+        # A screen shows a week, a month at the very most. Anything past a year
+        # is a scrape, and it would walk every appointment the tenant has.
+        if (day_to - day_from).days > self.MAX_SUMMARY_DAYS:
+            raise ValidationError(
+                {'to': f'Ask for at most {self.MAX_SUMMARY_DAYS} days at a time.'}
+            )
+
+        spans = (
+            self.get_queryset()
+            .exclude(status=Appointment.Status.CANCELLED)
+            # Two columns and no model instances. The class queryset carries a
+            # select_related and a prefetch for the serializer's benefit, and
+            # this endpoint reads neither a service, nor a professional, nor a
+            # roster -- values_list leaves all three unpaid for.
+            .values_list('start', 'end')
+        )
+        return Response(DayLoadSerializer(daily_load(spans, tz), many=True).data)
 
     # AppointmentSerializer.validate() checks for a clash and cannot hold what it
     # found free: between its .exists() and the INSERT, another transaction can
@@ -564,7 +671,13 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
                 start__gte=appointment.start,
                 status=Appointment.Status.SCHEDULED,
             )
-            .select_related('service')
+            # The same related loading the class queryset carries, and for the
+            # same reason: both actions below answer with AppointmentSerializer,
+            # which reads the professional, whoever booked it and the roster. On
+            # `service` alone a forty-week arrangement cost four queries per
+            # occurrence to serialise the answer.
+            .select_related('professional__user', 'service', 'created_by__user')
+            .prefetch_related('client_links__client')
             .order_by('start')
         )
 
