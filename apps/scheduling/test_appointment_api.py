@@ -1220,3 +1220,47 @@ def test_an_edit_that_leaves_the_hour_alone_keeps_its_reminder_spent(
     assert res.status_code == 200
     appointment.refresh_from_db()
     assert appointment.reminder_sent_at == sent
+
+
+@pytest.mark.django_db
+def test_the_list_does_not_query_per_row(
+    salon, stylist, haircut, client_, django_assert_num_queries,
+):
+    """
+    The agenda list must cost the same whether it returns one row or twelve.
+
+    This exists because it did not. `created_by_name` reads
+    `created_by.display_name`, which walks TWO relations, and `created_by` was
+    missing from the viewset's select_related -- fifty rows cost 105 queries
+    instead of 5.
+
+    It hid the whole time: seeded appointments leave `created_by` null, and DRF
+    short-circuits a null source to the field default without touching the
+    database. Only rows booked through the API -- which is every real one -- paid
+    it, which is why `created_by` is set below. Without that line this test
+    passes against the broken queryset, exactly as the seed data did.
+    """
+    start = timezone.now() + timedelta(days=1)
+    for index in range(12):
+        appointment = Appointment.objects.create(
+            tenant=salon,
+            professional=stylist,
+            service=haircut,
+            start=start + timedelta(hours=index),
+            end=start + timedelta(hours=index, minutes=30),
+            created_by=stylist,
+        )
+        # A roster on every slot, or the prefetch never runs and the test would
+        # be blind to the more expensive of the two paths through the serializer.
+        appointment.clients.add(client_)
+
+    http = api(stylist.user, salon)
+
+    # Membership, count, the page, the through rows, the clients. Five, and it
+    # stays five as rows are added -- that constancy is the property, not the
+    # number.
+    with django_assert_num_queries(5):
+        response = http.get('/api/appointments/')
+
+    assert response.status_code == 200
+    assert len(response.data['results']) == 12
