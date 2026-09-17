@@ -288,7 +288,7 @@ REST_FRAMEWORK = {
 
 # drf-spectacular (OpenAPI 3). Schema at /api/schema/, Swagger UI at /api/docs/.
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Amandu API',
+    'TITLE': 'Kyo API',
     'DESCRIPTION': 'Multi-tenant appointment scheduling API. Authenticate with a '
                    'JWT (POST /api/auth/login/) and send X-Tenant-ID to pick the '
                    'tenant you act for.',

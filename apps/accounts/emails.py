@@ -10,11 +10,11 @@ def send_invitation_email(invitation):
     """
     accept_link = f'{settings.INVITATION_ACCEPT_URL}?token={invitation.token}'
     send_mail(
-        subject=f'You have been invited to {invitation.tenant.name}',
+        subject=f'Te invitaron a {invitation.tenant.name}',
         message=(
-            f'You have been invited to join {invitation.tenant.name} on Amandu.\n\n'
-            f'Accept the invitation and set your password here:\n{accept_link}\n\n'
-            f'This link expires on {invitation.expires_at:%Y-%m-%d}.'
+            f'Te invitaron a sumarte a {invitation.tenant.name} en Kyo.\n\n'
+            f'Aceptá la invitación y elegí tu contraseña acá:\n{accept_link}\n\n'
+            f'El enlace vence el {invitation.expires_at:%d/%m/%Y}.'
         ),
         # None falls back to DEFAULT_FROM_EMAIL.
         from_email=None,
