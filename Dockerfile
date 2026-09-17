@@ -21,6 +21,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY . .
 
+# The same entrypoint prod uses, for the same reason: a stack whose database
+# volume is new comes up against an empty schema and 500s on every request until
+# someone remembers to migrate by hand. It lives at / rather than in the workdir
+# because the compose bind mount shadows everything under /usr/src/app.
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
 # The compose bind mount makes the container's uid the owner of anything written
 # back to the host, and manage.py writes real files (migrations, __pycache__).
 # Matching the host uid keeps those files editable outside Docker.
