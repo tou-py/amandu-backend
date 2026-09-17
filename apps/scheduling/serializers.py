@@ -405,12 +405,16 @@ class AttendeeSerializer(serializers.ModelSerializer):
     plan_state = serializers.ChoiceField(
         choices=Client.PLAN_STATES, source='client.plan_state', read_only=True
     )
+    # E.164 or '' -- what the appointment sheet builds a wa.me link from, so
+    # writing to the person about this slot is one tap from the slot. Same
+    # prefetch as the two above, so it costs no query.
+    phone = serializers.CharField(source='client.phone', read_only=True)
 
     class Meta:
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'attendance', 'plan_state')
+        fields = ('id', 'name', 'phone', 'attendance', 'plan_state')
         read_only_fields = fields
 
 
