@@ -24,6 +24,7 @@ from drf_spectacular.views import (
 from rest_framework.permissions import AllowAny
 
 from apps.commons.health import healthz
+from apps.commons.state import StateView
 from apps.scheduling.public_pages import booking_page
 
 urlpatterns = [
@@ -33,6 +34,9 @@ urlpatterns = [
     # so it gets a URL a shop can print on a card. Spanish because its readers
     # are, unlike the API.
     path('reservar/<slug:slug>/', booking_page, name='booking-page'),
+    # Named here rather than inside an app's router because it answers for two
+    # of them at once -- the diary and the feed. See apps/commons/state.py.
+    path('api/state/', StateView.as_view(), name='state'),
     path('api/auth/', include('apps.accounts.urls')),
     # The only unauthenticated surface in the product. Its own prefix so that
     # what a stranger can reach is visible here, at the routing table, instead
