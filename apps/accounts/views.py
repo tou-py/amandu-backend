@@ -220,10 +220,10 @@ class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets
     serializer_class = NotificationSerializer
     permission_classes = (IsAuthenticated, HasActiveMembership)
 
-    # Schema-only: drf-spectacular needs a class queryset to derive the pk
-    # type for mark_read's path param, and get_queryset() below requires a
-    # real request (membership). .none() so nothing leaks if get_queryset()
-    # is ever bypassed; it never runs in normal request handling.
+    # Schema-only: drf-spectacular needs a class queryset to infer the model,
+    # and get_queryset() below requires a real request (membership). .none()
+    # so nothing leaks if get_queryset() is ever bypassed; it never runs in
+    # normal request handling.
     queryset = Notification.objects.none()
 
     def get_queryset(self):
@@ -232,16 +232,6 @@ class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets
             .filter(recipient=self.request.membership)
             .select_related('actor__user', 'appointment')
         )
-
-    @extend_schema(request=None, responses=NotificationSerializer)
-    @action(detail=True, methods=['post'])
-    def mark_read(self, request, pk=None):
-        """Idempotent: read_at is set once and never overwritten by a later call."""
-        notification = self.get_object()
-        if notification.read_at is None:
-            notification.read_at = timezone.now()
-            notification.save(update_fields=['read_at'])
-        return Response(self.get_serializer(notification).data)
 
     @extend_schema(
         request=None,

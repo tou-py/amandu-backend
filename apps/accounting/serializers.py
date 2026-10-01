@@ -28,15 +28,3 @@ class CashEntrySerializer(serializers.ModelSerializer):
             # (TenantOwnedMixin, rule 2), so the field's own queryset is what
             # turns a foreign id into a 400 instead of a cross-tenant link.
             self.fields['appointment'].queryset = Appointment.objects.for_tenant(tenant)
-
-
-class CashSummarySerializer(serializers.Serializer):
-    """
-    What a range of days added up to. Declared so the schema says three integers
-    instead of promising a bare object, the same reason MovedFollowingSerializer
-    exists next door.
-    """
-
-    income = serializers.IntegerField(read_only=True)
-    expense = serializers.IntegerField(read_only=True)
-    balance = serializers.IntegerField(read_only=True)

@@ -38,10 +38,6 @@ urlpatterns = [
     # of them at once -- the diary and the feed. See apps/commons/state.py.
     path('api/state/', StateView.as_view(), name='state'),
     path('api/auth/', include('apps.accounts.urls')),
-    # The only unauthenticated surface in the product. Its own prefix so that
-    # what a stranger can reach is visible here, at the routing table, instead
-    # of being a permission_classes line buried in a viewset.
-    path('api/public/', include('apps.scheduling.public_urls')),
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
     path('api/', include('apps.accounting.urls')),
