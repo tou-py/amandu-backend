@@ -452,3 +452,74 @@ def test_a_payment_cannot_be_registered_for_another_tenants_client(receptionist,
 
     assert res.status_code == 404
     assert not CashEntry.objects.exists()
+
+
+# -- Deleting a client ---------------------------------------------------------
+
+
+def member(django_user_model, tenant, role, email):
+    user = django_user_model.objects.create_user(email=email, password='pw')
+    Membership.objects.create(user=user, tenant=tenant, role=role)
+    return user
+
+
+@pytest.mark.parametrize('role', [Membership.Role.STAFF, Membership.Role.COORDINATOR])
+def test_only_owner_or_admin_may_delete_a_client(db, django_user_model, salon, role):
+    """Filing and editing is front-desk work; erasing a file is not."""
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    caller = member(django_user_model, salon, role, 'x@example.com')
+
+    res = api(caller, salon).delete(detail_url(ada))
+
+    assert res.status_code == 403
+    assert Client.objects.filter(pk=ada.pk).exists()
+
+
+@pytest.mark.parametrize('role', [Membership.Role.OWNER, Membership.Role.ADMIN])
+def test_an_unbooked_client_is_erased_and_frees_its_phone(db, django_user_model, salon, role):
+    ada = Client.objects.create(tenant=salon, name='Ada', phone='+541112345678')
+    caller = member(django_user_model, salon, role, 'x@example.com')
+
+    res = api(caller, salon).delete(detail_url(ada))
+
+    assert res.status_code == 204
+    assert not Client.objects.filter(pk=ada.pk).exists()
+    # The unique phone slot goes with the file, so the same person can be filed again.
+    again = api(caller, salon).post(LIST_URL, {'name': 'Ada', 'phone': '+541112345678'}, format='json')
+    assert again.status_code == 201
+
+
+def test_deleting_a_client_keeps_the_money_they_paid(db, django_user_model, salon):
+    """The cash book records what the shop took; erasing the payer does not un-take it."""
+    ada = Client.objects.create(tenant=salon, name='Ada', monthly_fee=300000)
+    owner = member(django_user_model, salon, Membership.Role.OWNER, 'o@example.com')
+    api(owner, salon).post(payment_url(ada), format='json')
+
+    res = api(owner, salon).delete(detail_url(ada))
+
+    assert res.status_code == 204
+    assert CashEntry.objects.get().amount == 300000
+
+
+def test_a_cancelled_booking_still_keeps_the_client(db, django_user_model, salon, stylist, haircut):
+    """Cancelled is history too: the timeline and no-show record still name them."""
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    appointment = book(salon, stylist, haircut, timezone.now() - timedelta(days=3), ada)
+    appointment.status = Appointment.Status.CANCELLED
+    appointment.save(update_fields=['status'])
+    owner = member(django_user_model, salon, Membership.Role.OWNER, 'o@example.com')
+
+    res = api(owner, salon).delete(detail_url(ada))
+
+    assert res.status_code == 409
+    assert Client.objects.filter(pk=ada.pk).exists()
+
+
+def test_another_tenants_client_cannot_be_deleted(db, django_user_model, salon, clinic):
+    foreign = Client.objects.create(tenant=clinic, name='Grace')
+    owner = member(django_user_model, salon, Membership.Role.OWNER, 'o@example.com')
+
+    res = api(owner, salon).delete(detail_url(foreign))
+
+    assert res.status_code == 404
+    assert Client.objects.filter(pk=foreign.pk).exists()

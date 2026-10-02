@@ -260,6 +260,8 @@ def test_deleting_a_booked_client_is_a_conflict_not_a_crash(
         start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
     )
     appointment.clients.add(client_)
+    # Admin, so the role check passes and what is left to refuse is the history.
+    Membership.objects.filter(user=receptionist).update(role=Membership.Role.ADMIN)
 
     res = api(receptionist, salon).delete(
         reverse('scheduling:client-detail', args=[client_.pk])
@@ -285,16 +287,6 @@ def test_deleting_a_service_in_use_is_a_conflict_not_a_crash(
 
     assert res.status_code == 409
     assert Service.objects.filter(pk=haircut.pk).exists()
-
-
-def test_an_unreferenced_client_still_deletes(receptionist, salon, client_):
-    """The guard must only fire on real references."""
-    res = api(receptionist, salon).delete(
-        reverse('scheduling:client-detail', args=[client_.pk])
-    )
-
-    assert res.status_code == 204
-    assert not Client.objects.filter(pk=client_.pk).exists()
 
 
 def test_cancel_keeps_the_row_visible_with_a_reason(receptionist, salon, stylist, client_, haircut):

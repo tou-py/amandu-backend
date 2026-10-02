@@ -82,6 +82,20 @@ class ClientViewSet(TenantScopedModelViewSet):
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
 
+    def get_permissions(self):
+        """
+        Anyone in the tenant files and edits clients -- that is the front desk's
+        job. Erasing one is owner/admin: it is the only write here that cannot be
+        undone, and it takes the notes and custom answers with it.
+
+        A client on any appointment's roster is never erased at all, whoever
+        asks: AppointmentClient is PROTECT, and the base turns that into a 409.
+        """
+        permissions = super().get_permissions()
+        if self.request.method == 'DELETE':
+            permissions.append(IsTenantAdmin())
+        return permissions
+
     @extend_schema(request=None, responses=ClientSerializer)
     @action(detail=True, methods=['post'], url_path='register-payment')
     def register_payment(self, request, pk=None):
