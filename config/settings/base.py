@@ -67,6 +67,8 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # Outermost, so the duration it logs covers every other middleware too.
+    'apps.commons.middleware.access_log',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     # Compresses every response body: mobile clients on cellular pay per byte
@@ -117,7 +119,16 @@ DATABASES = {
         'PASSWORD': env.str('POSTGRES_PASSWORD'),
         'HOST': env.str('POSTGRES_HOST'),
         'PORT': env.int('POSTGRES_PORT', default=5432),
-        'CONN_MAX_AGE': env.int('CONN_MAX_AGE', default=60),
+        # A pool, not CONN_MAX_AGE. Under ASGI each sync view runs on whichever
+        # thread the executor hands it, and a persistent connection belongs to a
+        # thread -- so they pile up instead of being reused. Django's docs say
+        # to disable persistent connections under ASGI and use the backend's
+        # pool. The pool is per process: 3 workers x max_size 10 = 30, under
+        # Postgres's default max_connections of 100. `timeout` is how long a
+        # request waits for a free connection before it errors, instead of
+        # hanging until gunicorn's --timeout kills the worker.
+        'CONN_MAX_AGE': 0,
+        'OPTIONS': {'pool': {'min_size': 2, 'max_size': 10, 'timeout': 10}},
     }
 }
 

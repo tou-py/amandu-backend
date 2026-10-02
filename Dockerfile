@@ -34,8 +34,11 @@ ENTRYPOINT ["/entrypoint.sh"]
 RUN useradd --create-home --uid 1000 app
 USER app
 
-# runserver only: autoreload, readable tracebacks, and it serves /static/ itself.
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# uvicorn, not runserver: the same ASGI runtime prod runs, so a sync-only or
+# thread-local surprise shows up here first. --reload polls for changes, which
+# is what works through a Windows bind mount. /static/ comes from WhiteNoise's
+# finders (on when DEBUG). --no-access-log: apps.commons.middleware logs instead.
+CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload", "--no-access-log"]
 
 # ---------------------------------------------------------------- builder
 FROM base AS builder
@@ -77,26 +80,25 @@ USER app
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# --timeout kills hung workers, --max-requests recycles them to bound memory growth.
+# ASGI through gunicorn's UvicornWorker: gunicorn stays as the process manager
+# for what uvicorn alone lacks -- --timeout kills a hung worker, --max-requests
+# (with jitter) recycles them to bound memory growth.
 #
-# 5 workers, not 3. A sync worker serves ONE request at a time, so the worker
-# count IS the concurrency limit -- and the agenda polls, which means the ceiling
-# is reached by open tabs rather than by busy people. The usual sizing is
-# (2 x cores) + 1; 5 is deliberately short of that because each worker is a full
-# copy of Django in memory and the box is shared with Postgres and Redis. Raise
-# it against measured RSS, not against the formula.
-# --access-logformat is gunicorn's default plus %(D)s, the request duration in
-# microseconds. The default format carries no duration field at all, so the
-# production log could not answer "how long does a request take" -- the one
-# number the whole capacity question depends on, and the one PRODUCT.md has to
-# write down as an assumption until this ships. Appended rather than inserted so
-# any existing parser still finds the fields it knows where it expects them.
-CMD ["gunicorn", "config.wsgi:application", \
+# Under ASGI the worker count is no longer the concurrency limit: DRF's sync
+# views run on a thread per request, and an async view waiting on I/O holds no
+# thread at all -- which is what a long-lived event stream needs. So 3, down
+# from the 5 the sync workers needed: concurrency now comes from threads, and
+# each worker is a full copy of Django in memory on a box shared with Postgres
+# and Redis. Raise it against measured RSS or CPU, not open tabs. Mind the DB pool in
+# settings: workers x max_size has to stay under Postgres's max_connections.
+#
+# No --access-logfile: UvicornWorker would route uvicorn's access format, which
+# has no duration, through it. apps.commons.middleware.access_log writes one
+# line per request with the duration instead.
+CMD ["gunicorn", "config.asgi:application", \
+     "--worker-class", "uvicorn_worker.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
-     "--workers", "5", \
+     "--workers", "3", \
      "--timeout", "60", \
      "--max-requests", "1000", \
-     "--max-requests-jitter", "100", \
-     "--access-logfile", "-", \
-     "--access-logformat", \
-     "%(h)s %(l)s %(u)s %(t)s \"%(r)s\" %(s)s %(b)s \"%(f)s\" \"%(a)s\" %(D)s"]
+     "--max-requests-jitter", "100"]
