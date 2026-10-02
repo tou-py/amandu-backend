@@ -378,8 +378,9 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/pycharm,python,django
 
-.atl
 staticfiles/
 
 # Planning notes, deliberately untracked
 roadmap-agenda-saas.md
+
+graphify-out/

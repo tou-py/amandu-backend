@@ -1,10 +1,11 @@
 """
-Everything an unauthenticated stranger can reach.
+What an unauthenticated stranger may do, shared by the server-rendered booking
+page (public_pages.py).
 
-Deliberately one module rather than rows added to views.py and serializers.py.
-This is the only surface in the product with no credential in front of it, and
-the question "what exactly is exposed?" has to be answerable by reading one
-file rather than by auditing which of forty viewsets happens to be AllowAny.
+Kept apart from views.py and serializers.py on purpose. This is the only
+surface in the product with no credential in front of it, and the question
+"what exactly is exposed?" has to be answerable by reading one file rather
+than by auditing which of forty viewsets happens to be AllowAny.
 
 Three rules hold everywhere below:
 
@@ -19,35 +20,19 @@ Three rules hold everywhere below:
    the whole of it.
 """
 
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import (
-    OpenApiParameter,
-    OpenApiResponse,
-    extend_schema,
-    inline_serializer,
-)
-from rest_framework import serializers, status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework import serializers
 
 from apps.accounts.models import Membership, Notification
 from apps.scheduling.availability import free_slots
 from apps.scheduling.models import Appointment, Client, Service
 from apps.scheduling.views import Overlaps
 from apps.tenancy.models import Tenant
-
-# How far ahead the public page will look. A stranger asking for slots in 2038
-# should not turn into a scan of ten thousand days.
-MAX_HORIZON_DAYS = 60
 
 
 def _shop(slug):
@@ -66,21 +51,6 @@ def _shop(slug):
         # tell an outsider that this business exists and is behind on payment.
         raise Http404
     return shop
-
-
-class PublicServiceSerializer(serializers.ModelSerializer):
-    duration_minutes = serializers.IntegerField(read_only=True)
-
-    class Meta:
-        model = Service
-        # No price: the model has none, and when it gets one this list is the
-        # first place to decide deliberately whether it goes out.
-        fields = ('id', 'name', 'duration_minutes')
-
-
-class PublicProfessionalSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    name = serializers.CharField(source='display_name')
 
 
 class BookingRequestSerializer(serializers.Serializer):
@@ -131,142 +101,10 @@ class BookingRequestSerializer(serializers.Serializer):
         return attrs
 
 
-@extend_schema(
-    responses=inline_serializer(
-        name='PublicShop',
-        fields={
-            'name': serializers.CharField(),
-            'slug': serializers.SlugField(),
-            'timezone': serializers.CharField(),
-            'services': PublicServiceSerializer(many=True),
-            'professionals': PublicProfessionalSerializer(many=True),
-        },
-    ),
-)
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@throttle_classes([ScopedRateThrottle])
-def shop_detail(request, slug):
-    """What the booking page needs to draw itself before anyone picks a time."""
-    shop = _shop(slug)
-    return Response({
-        'name': shop.name,
-        'slug': shop.slug,
-        'timezone': shop.timezone,
-        'services': PublicServiceSerializer(
-            Service.objects.filter(tenant=shop), many=True,
-        ).data,
-        'professionals': PublicProfessionalSerializer(
-            Membership.professionals_for(shop), many=True,
-        ).data,
-    })
-
-
-shop_detail.throttle_scope = 'public-read'
-
-
-@extend_schema(
-    parameters=[
-        OpenApiParameter('service', int, required=True),
-        OpenApiParameter('professional', int, required=True),
-        OpenApiParameter('from', OpenApiTypes.DATE, description='Defaults to today.'),
-        OpenApiParameter(
-            'to', OpenApiTypes.DATE,
-            description=f'Defaults to six days out, clamped to {MAX_HORIZON_DAYS}.',
-        ),
-    ],
-    responses=OpenApiResponse(
-        # A map keyed by date, so there is no fixed field list to declare.
-        response={'type': 'object', 'additionalProperties': {
-            'type': 'array', 'items': {'type': 'string', 'format': 'date-time'},
-        }},
-        description='Free start times per local date, in the tenant timezone.',
-    ),
-)
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@throttle_classes([ScopedRateThrottle])
-def availability(request, slug):
-    """
-    Free start times for one service and one professional over a date range.
-
-    Returns times and nothing else. That a slot is taken is public the moment
-    the page renders; WHO is in it is not, and never appears here.
-    """
-    shop = _shop(slug)
-
-    service = get_object_or_404(Service, pk=request.query_params.get('service'), tenant=shop)
-    professional = get_object_or_404(
-        Membership.professionals_for(shop), pk=request.query_params.get('professional'),
-    )
-
-    today = timezone.localdate(timezone=ZoneInfo(shop.timezone))
-    since = _date_param(request, 'from', default=today)
-    until = _date_param(request, 'to', default=since + timedelta(days=6))
-
-    if until < since:
-        return Response(
-            {'detail': '"to" is before "from".'}, status=status.HTTP_400_BAD_REQUEST,
-        )
-    # Clamped rather than rejected: a page asking for too much wants as much as
-    # it can have, and a 400 would only teach it to ask twice.
-    until = min(until, since + timedelta(days=MAX_HORIZON_DAYS))
-
-    slots = free_slots(professional, service, since, until)
-    return Response({
-        day.isoformat(): [moment.isoformat() for moment in moments]
-        for day, moments in slots.items()
-    })
-
-
-availability.throttle_scope = 'public-read'
-
-
-@extend_schema(
-    request=BookingRequestSerializer,
-    responses={
-        201: inline_serializer(
-            name='PublicBookingAccepted',
-            fields={'detail': serializers.CharField()},
-        ),
-        409: OpenApiResponse(description='Someone else took the slot first.'),
-    },
-)
-@api_view(['POST'])
-@permission_classes([AllowAny])
-@throttle_classes([ScopedRateThrottle])
-def book(request, slug):
-    """
-    A stranger asking for a slot. Creates a PENDING appointment: the shop
-    decides whether it becomes real.
-
-    The response says only that the request landed. It carries no appointment
-    id, no client id and no link -- there is nothing to authenticate whoever
-    would use them, so anything handed back here is a handle on a stranger's
-    booking for whoever guesses it next. Self-service rescheduling arrives with
-    the signed links of roadmap §6, not before.
-    """
-    shop = _shop(slug)
-    form = BookingRequestSerializer(data=request.data, shop=shop)
-    form.is_valid(raise_exception=True)
-    create_booking(shop, form.validated_data)
-
-    return Response(
-        {'detail': 'Your request was sent. The shop will confirm it.'},
-        status=status.HTTP_201_CREATED,
-    )
-
-
-book.throttle_scope = 'public-booking'
-
-
 def create_booking(shop, data):
     """
-    Turn validated booking input into a pending appointment.
-
-    Shared by the JSON endpoint above and the server-rendered page, so that the
-    two transports cannot drift into two different meanings of "book". Both
-    validate through BookingRequestSerializer and both land here.
+    Turn validated booking input into a pending appointment: the shop decides
+    whether it becomes real.
     """
     with transaction.atomic():
         client = _client_for(shop, data)
@@ -321,11 +159,3 @@ def _client_for(shop, data):
         defaults={'name': data['name'], 'email': data.get('email', '')},
     )
     return client
-
-
-def _date_param(request, name, default):
-    raw = request.query_params.get(name)
-    if not raw:
-        return default
-    parsed = serializers.DateField().to_internal_value(raw)
-    return parsed

@@ -11,11 +11,6 @@ from apps.scheduling.models import Appointment, Service
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('accounting:cashentry-list')
-SUMMARY_URL = reverse('accounting:cashentry-summary')
-
-
-def detail_url(entry):
-    return reverse('accounting:cashentry-detail', args=[entry.pk])
 
 
 def api(user=None, tenant=None):
@@ -61,21 +56,6 @@ def receptionist(db, django_user_model, salon):
     return user
 
 
-@pytest.fixture
-def intruder(db, django_user_model, clinic):
-    """
-    Active membership in the OTHER tenant: a real caller, wrong shop.
-
-    Admin of their own clinic on purpose. Left as staff, the role check would
-    refuse them before the tenant scoping was ever consulted, and the boundary
-    tests below would pass without testing the boundary. Somebody with every
-    right to read their OWN book is exactly who must not reach this one.
-    """
-    user = django_user_model.objects.create_user(email='i@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=clinic, role=Membership.Role.ADMIN)
-    return user
-
-
 def make_appointment(tenant, user=None, email=None, start=None):
     """A bookable slot in `tenant`, with the staff and service it needs."""
     if user is None:
@@ -95,16 +75,6 @@ def make_appointment(tenant, user=None, email=None, start=None):
         service=service,
         start=start,
         end=start + service.duration,
-    )
-
-
-def entry(tenant, kind, amount, occurred_on, concept='Whatever'):
-    return CashEntry.objects.create(
-        tenant=tenant,
-        kind=kind,
-        amount=amount,
-        occurred_on=occurred_on,
-        concept=concept,
     )
 
 
@@ -162,139 +132,6 @@ def test_a_negative_amount_is_refused(manager, salon):
 
     assert res.status_code == 400
     assert 'amount' in res.data
-
-
-# --- the tenant boundary -----------------------------------------------------
-
-def test_the_list_only_shows_the_active_tenants_entries(manager, salon, clinic):
-    entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2), 'Ours')
-    entry(clinic, CashEntry.Kind.INCOME, 999000, date(2026, 3, 2), 'Theirs')
-
-    res = api(manager, salon).get(LIST_URL)
-
-    assert res.status_code == 200
-    assert [e['concept'] for e in res.data['results']] == ['Ours']
-
-
-def test_another_tenants_entry_is_not_reachable_by_id(intruder, salon, clinic):
-    """
-    The important one. `intruder` is a fully authenticated caller with a live
-    membership -- just in the wrong shop -- so nothing but the tenant scoping
-    stands between them and this row. A 404 and not a 403: the entry does not
-    exist as far as this tenant is concerned, and a 403 would confirm it does.
-    """
-    foreign = entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2), 'Salon takings')
-
-    http = api(intruder, clinic)
-    assert http.get(detail_url(foreign)).status_code == 404
-    assert http.patch(detail_url(foreign), {'amount': 1}, format='json').status_code == 404
-    assert http.delete(detail_url(foreign)).status_code == 404
-
-    foreign.refresh_from_db()
-    assert foreign.amount == 150000
-
-
-def test_another_tenants_entries_do_not_reach_the_summary(intruder, salon, clinic):
-    """Scoping the detail route is not enough if the aggregate reads everyone."""
-    entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2))
-
-    res = api(intruder, clinic).get(SUMMARY_URL)
-
-    assert res.status_code == 200
-    assert res.data == {'income': 0, 'expense': 0, 'balance': 0}
-
-
-# --- filtering ---------------------------------------------------------------
-
-def test_from_and_to_bound_the_range_at_both_ends(manager, salon):
-    """Both ends inclusive: an entry ON the boundary day is inside the range."""
-    entry(salon, CashEntry.Kind.INCOME, 1000, date(2026, 3, 1), 'Before')
-    entry(salon, CashEntry.Kind.INCOME, 2000, date(2026, 3, 2), 'First day')
-    entry(salon, CashEntry.Kind.INCOME, 3000, date(2026, 3, 4), 'Last day')
-    entry(salon, CashEntry.Kind.INCOME, 4000, date(2026, 3, 5), 'After')
-
-    res = api(manager, salon).get(LIST_URL, {'from': '2026-03-02', 'to': '2026-03-04'})
-
-    assert res.status_code == 200
-    assert {e['concept'] for e in res.data['results']} == {'First day', 'Last day'}
-
-
-def test_kind_filters_the_list(manager, salon):
-    entry(salon, CashEntry.Kind.INCOME, 1000, date(2026, 3, 2), 'Takings')
-    entry(salon, CashEntry.Kind.EXPENSE, 500, date(2026, 3, 2), 'Shampoo')
-
-    res = api(manager, salon).get(LIST_URL, {'kind': 'expense'})
-
-    assert res.status_code == 200
-    assert [e['concept'] for e in res.data['results']] == ['Shampoo']
-
-
-def test_a_malformed_date_is_a_400_not_a_500(manager, salon):
-    res = api(manager, salon).get(LIST_URL, {'from': '02/03/2026'})
-
-    assert res.status_code == 400
-    assert 'from' in res.data
-
-
-def test_an_unknown_kind_is_a_400(manager, salon):
-    res = api(manager, salon).get(LIST_URL, {'kind': 'refund'})
-
-    assert res.status_code == 400
-    assert 'kind' in res.data
-
-
-def test_the_book_reads_most_recent_business_day_first(manager, salon):
-    entry(salon, CashEntry.Kind.INCOME, 1000, date(2026, 3, 1), 'Sunday')
-    entry(salon, CashEntry.Kind.INCOME, 2000, date(2026, 3, 3), 'Tuesday')
-    entry(salon, CashEntry.Kind.INCOME, 3000, date(2026, 3, 2), 'Monday')
-
-    res = api(manager, salon).get(LIST_URL)
-
-    assert [e['concept'] for e in res.data['results']] == ['Tuesday', 'Monday', 'Sunday']
-
-
-# --- the number the owner opens the app for ----------------------------------
-
-def test_summary_adds_up_income_expense_and_balance(manager, salon):
-    entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2))
-    entry(salon, CashEntry.Kind.INCOME, 80000, date(2026, 3, 3))
-    entry(salon, CashEntry.Kind.EXPENSE, 45000, date(2026, 3, 3))
-
-    res = api(manager, salon).get(SUMMARY_URL)
-
-    assert res.status_code == 200
-    assert res.data == {'income': 230000, 'expense': 45000, 'balance': 185000}
-
-
-def test_summary_honours_the_same_range_as_the_list(manager, salon):
-    entry(salon, CashEntry.Kind.INCOME, 999000, date(2026, 2, 28), 'Last month')
-    entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2))
-    entry(salon, CashEntry.Kind.EXPENSE, 45000, date(2026, 3, 2))
-
-    res = api(manager, salon).get(SUMMARY_URL, {'from': '2026-03-01', 'to': '2026-03-31'})
-
-    assert res.data == {'income': 150000, 'expense': 45000, 'balance': 105000}
-
-
-def test_an_empty_range_is_zeros_and_never_nulls(manager, salon):
-    """A day that made nothing is a real answer. A null would make every caller
-    guess whether it meant zero or 'no idea'."""
-    entry(salon, CashEntry.Kind.INCOME, 150000, date(2026, 3, 2))
-
-    res = api(manager, salon).get(SUMMARY_URL, {'from': '2026-04-01', 'to': '2026-04-30'})
-
-    assert res.status_code == 200
-    assert res.data == {'income': 0, 'expense': 0, 'balance': 0}
-
-
-def test_a_losing_range_gives_a_negative_balance(manager, salon):
-    """The amounts are unsigned; the balance is not."""
-    entry(salon, CashEntry.Kind.INCOME, 10000, date(2026, 3, 2))
-    entry(salon, CashEntry.Kind.EXPENSE, 90000, date(2026, 3, 2))
-
-    res = api(manager, salon).get(SUMMARY_URL)
-
-    assert res.data['balance'] == -80000
 
 
 # --- the optional link to a booking ------------------------------------------
@@ -358,28 +195,27 @@ def test_deleting_the_appointment_leaves_the_money_behind(manager, salon):
     assert money.amount == 150000
 
 
-# --- who may look at the money -----------------------------------------------
+# --- who may touch the money -------------------------------------------------
 
-def test_staff_may_not_read_the_book(manager, stylist, salon):
+def test_the_book_cannot_be_read_back_by_anyone(manager, salon):
     """
-    Reads are refused too, not just writes.
-
-    Unlike the schedule, where staff read the hours they work and only an admin
-    changes them, the protected thing here IS the figures. A stylist opening the
-    tab must not be handed what the shop bills.
+    Write-only on purpose: nothing in the front end reads entries back, so no
+    role -- not even an admin -- gets a route to list, read, correct or
+    delete them.
     """
-    CashEntry.objects.create(
+    money = CashEntry.objects.create(
         tenant=salon, kind=CashEntry.Kind.INCOME, amount=150_000,
         occurred_on=date(2026, 8, 12), concept='Corte',
     )
+    http = api(manager, salon)
+    detail = reverse('accounting:cashentry-detail', args=[money.pk])
 
-    assert api(stylist, salon).get(LIST_URL).status_code == 403
-
-
-def test_staff_may_not_read_the_summary(stylist, salon):
-    """The totals are the whole point of the restriction: refusing the list and
-    serving the aggregate would hand over the number that matters most."""
-    assert api(stylist, salon).get(SUMMARY_URL).status_code == 403
+    assert http.get(LIST_URL).status_code == 405
+    assert http.get(detail).status_code == 405
+    assert http.patch(detail, {'amount': 1}, format='json').status_code == 405
+    assert http.delete(detail).status_code == 405
+    money.refresh_from_db()
+    assert money.amount == 150_000
 
 
 def test_staff_may_not_file_an_entry(stylist, salon):
@@ -392,27 +228,17 @@ def test_staff_may_not_file_an_entry(stylist, salon):
     assert not CashEntry.objects.exists()
 
 
-def test_staff_may_not_touch_an_existing_entry(stylist, salon):
-    entry = CashEntry.objects.create(
-        tenant=salon, kind=CashEntry.Kind.EXPENSE, amount=80_000,
-        occurred_on=date(2026, 8, 12), concept='Shampoo',
-    )
-    http = api(stylist, salon)
-
-    assert http.get(detail_url(entry)).status_code == 403
-    assert http.patch(detail_url(entry), {'amount': 1}, format='json').status_code == 403
-    assert http.delete(detail_url(entry)).status_code == 403
-    entry.refresh_from_db()
-    assert entry.amount == 80_000
-
-
-def test_an_owner_is_not_shut_out_by_the_admin_check(db, django_user_model, salon):
-    """IsTenantAdmin admits owner AND admin. A guard that only let admins in
-    would lock out the one person the shop belongs to."""
+def test_an_owner_may_file_an_entry(db, django_user_model, salon):
+    """The coordinator check admits every role above it, owner included."""
     user = django_user_model.objects.create_user(email='o@example.com', password='pw')
     Membership.objects.create(user=user, tenant=salon, role=Membership.Role.OWNER)
 
-    assert api(user, salon).get(LIST_URL).status_code == 200
+    response = api(user, salon).post(LIST_URL, {
+        'kind': 'income', 'amount': 90_000,
+        'occurred_on': '2026-08-20', 'concept': 'Corte',
+    }, format='json')
+
+    assert response.status_code == 201
 
 
 def test_the_front_desk_may_file_an_entry(receptionist, salon):
@@ -427,35 +253,6 @@ def test_the_front_desk_may_file_an_entry(receptionist, salon):
 
     assert response.status_code == 201
     assert CashEntry.objects.get().amount == 90_000
-
-
-def test_the_front_desk_may_not_read_the_book(receptionist, salon):
-    """The point of the split: writing a movement is not reading the figures."""
-    CashEntry.objects.create(
-        tenant=salon, kind=CashEntry.Kind.INCOME, amount=150_000,
-        occurred_on=date(2026, 8, 20), concept='Corte',
-    )
-    http = api(receptionist, salon)
-
-    assert http.get(LIST_URL).status_code == 403
-    assert http.get(SUMMARY_URL).status_code == 403
-
-
-def test_the_front_desk_may_not_correct_an_entry(receptionist, salon):
-    """Not even their own. Fixing a number means finding it first, and the book
-    is closed to them -- an authority reachable only by guessing an id is not
-    one worth granting."""
-    entry = CashEntry.objects.create(
-        tenant=salon, kind=CashEntry.Kind.INCOME, amount=90_000,
-        occurred_on=date(2026, 8, 20), concept='Corte',
-    )
-    http = api(receptionist, salon)
-
-    assert http.get(detail_url(entry)).status_code == 403
-    assert http.patch(detail_url(entry), {'amount': 1}, format='json').status_code == 403
-    assert http.delete(detail_url(entry)).status_code == 403
-    entry.refresh_from_db()
-    assert entry.amount == 90_000
 
 
 def test_a_coordinator_of_another_shop_may_not_file_here(db, django_user_model, salon, clinic):

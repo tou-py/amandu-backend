@@ -590,6 +590,25 @@ def test_an_appointment_carries_the_plan_state_of_every_attendee(
     }
 
 
+def test_an_appointment_carries_the_phone_of_every_attendee(
+    receptionist, salon, stylist, haircut
+):
+    """The sheet opens WhatsApp from here, so the number has to be the one
+    wa.me reads -- E.164 -- and an attendee without one has to say so plainly."""
+    reachable = Client.objects.create(tenant=salon, name='Ada', phone='+595981123456')
+    unreachable = Client.objects.create(tenant=salon, name='Bob')
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [reachable, unreachable], haircut, TOMORROW),
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert {a['name']: a['phone'] for a in res.data['attendees']} == {
+        'Ada': '+595981123456', 'Bob': '',
+    }
+
+
 def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, stylist, client_):
     """
     Null when the service is not charged per session, the amount when it is. The
