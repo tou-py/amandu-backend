@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from apps.scheduling.views import (
@@ -6,8 +7,11 @@ from apps.scheduling.views import (
     CategoryViewSet,
     ClientFieldViewSet,
     ClientViewSet,
+    PlanViewSet,
     ProfessionalViewSet,
+    ReceivablesView,
     ServiceViewSet,
+    SubscriptionViewSet,
     TimeOffViewSet,
     WorkScheduleViewSet,
 )
@@ -24,5 +28,10 @@ router.register('appointment-series', AppointmentSeriesViewSet, basename='appoin
 router.register('professionals', ProfessionalViewSet, basename='professional')
 router.register('work-schedules', WorkScheduleViewSet, basename='workschedule')
 router.register('time-off', TimeOffViewSet, basename='timeoff')
+router.register('plans', PlanViewSet, basename='plan')
+router.register('subscriptions', SubscriptionViewSet, basename='subscription')
 
-urlpatterns = router.urls
+urlpatterns = [
+    path('receivables/', ReceivablesView.as_view(), name='receivables'),
+    *router.urls,
+]

@@ -64,6 +64,44 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
         blank=True,
         related_name='cash_entries',
     )
+    # Who paid. Same rule as the appointment link and for the same reason:
+    # SET_NULL, because the money record outlives the client file -- erasing a
+    # payer does not un-take what they paid.
+    #
+    # A charge for a turn has this AND `appointment`: one attendee of one slot.
+    # A charge for a plan period has this, `subscription` and `period`.
+    client = models.ForeignKey(
+        'scheduling.Client',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cash_entries',
+    )
+    subscription = models.ForeignKey(
+        'scheduling.Subscription',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cash_entries',
+    )
+    # The START DATE of the plan period this entry pays, which is what names the
+    # period (see apps/scheduling/billing.py). A date and not a month number
+    # because periods are anchored per subscription: Ana's "October" runs from
+    # the 14th, and only its first day says so.
+    period = models.DateField(null=True, blank=True)
+    # A void is a reversal, not a delete. The row stays, so the book still shows
+    # that money was taken and given back and who decided it; everything that
+    # reads payments -- coverage, debt, totals -- filters on voided_at IS NULL.
+    voided_at = models.DateTimeField(null=True, blank=True, editable=False)
+    voided_by = models.ForeignKey(
+        'accounts.Membership',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name='+',
+    )
+    void_reason = models.TextField(blank=True, editable=False)
 
     class Meta:
         db_table = 'tb_cash_entry'
@@ -76,6 +114,29 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
             # list, the summary, the owner's month. The tenant column has to lead
             # for the index to serve that, since it is always an equality.
             models.Index(fields=['tenant', 'occurred_on'], name='cash_entry_tenant_day_idx'),
+        ]
+        constraints = [
+            # One period paid once. Partial on voided_at, so voiding a mistaken
+            # payment frees the period to be paid again -- the void IS the undo.
+            # This is what turns two receptionists charging the same month at
+            # the same moment into one payment and a 409, not two payments.
+            models.UniqueConstraint(
+                fields=['subscription', 'period'],
+                condition=models.Q(voided_at__isnull=True, period__isnull=False),
+                name='one_live_payment_per_period',
+            ),
+            # One attendee's turn charged once, same reasoning. Only when both
+            # sides are named: an entry filed against a turn with no client is
+            # the old till entry and says nothing about who paid.
+            models.UniqueConstraint(
+                fields=['appointment', 'client'],
+                condition=models.Q(
+                    voided_at__isnull=True,
+                    appointment__isnull=False,
+                    client__isnull=False,
+                ),
+                name='one_live_payment_per_attendee',
+            ),
         ]
         verbose_name_plural = 'cash entries'
 

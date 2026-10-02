@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, ValidationError
@@ -13,16 +14,17 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
+from rest_framework.views import APIView
 
 # Safe in this direction only: accounting names scheduling by string and never
-# imports it, so there is no cycle to make here. Imported at all because taking a
-# month of a client's plan is ONE event at the counter -- the cover is extended
-# and the money is booked -- and two requests for it is what leaves a day's
-# takings disagreeing with its plans.
+# imports its views, so there is no cycle to make here. Imported at all because
+# charging a turn or a plan period IS filing a cash entry: the payment and the
+# book are one row, so they cannot disagree.
 from apps.accounting.models import CashEntry
+from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership, Notification
-from apps.commons.dates import one_month_after
 from apps.commons.mixins import NoHeuristicCacheMixin
+from apps.scheduling import billing
 from apps.scheduling.models import (
     Appointment,
     AppointmentClient,
@@ -30,7 +32,9 @@ from apps.scheduling.models import (
     Category,
     Client,
     ClientField,
+    Plan,
     Service,
+    Subscription,
     TimeOff,
     WorkSchedule,
 )
@@ -41,12 +45,21 @@ from apps.scheduling.serializers import (
     AppointmentSerializer,
     AttendanceSerializer,
     CategorySerializer,
+    ChargePeriodsSerializer,
+    ChargeTurnSerializer,
+    ClientDetailSerializer,
     ClientFieldSerializer,
     ClientSerializer,
     DayLoadSerializer,
+    DefaultStartSerializer,
     MovedFollowingSerializer,
+    PlanSerializer,
     ProfessionalSerializer,
+    ReceivablesSerializer,
     RescheduleFollowingSerializer,
+    SubscriptionChangePlanSerializer,
+    SubscriptionEndSerializer,
+    SubscriptionSerializer,
     ServiceSerializer,
     TimeOffSerializer,
     VisitSerializer,
@@ -75,6 +88,31 @@ class Overlaps(APIException):
     default_code = 'overlaps'
 
 
+class AlreadyPaid(APIException):
+    """
+    409 for the payment that lost a race: validation saw the period or the turn
+    unpaid, and by the INSERT somebody else had charged it. The partial unique
+    constraints on CashEntry are what decide; this is how that reads.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = 'This has already been paid.'
+    default_code = 'already_paid'
+
+
+def _file_payments(entries):
+    """Insert payments as one fact, turning a lost race into AlreadyPaid."""
+    try:
+        with transaction.atomic():
+            for entry in entries:
+                entry.save()
+    except IntegrityError as exc:
+        if 'one_live_payment_per' not in str(exc):
+            raise
+        raise AlreadyPaid() from exc
+    return entries
+
+
 class ClientViewSet(TenantScopedModelViewSet):
     """The client file: who they are, whatever this tenant asks about them, and
     every appointment they have ever been on the roster of."""
@@ -96,49 +134,64 @@ class ClientViewSet(TenantScopedModelViewSet):
             permissions.append(IsTenantAdmin())
         return permissions
 
-    @extend_schema(request=None, responses=ClientSerializer)
-    @action(detail=True, methods=['post'], url_path='register-payment')
-    def register_payment(self, request, pk=None):
+    def get_serializer_class(self):
+        # The list is names; the file carries its money header (see
+        # ClientDetailSerializer for why the list does not).
+        return ClientSerializer if self.action == 'list' else ClientDetailSerializer
+
+    @extend_schema(request=ChargePeriodsSerializer, responses={201: CashEntrySerializer(many=True)})
+    # pagination_class=None for the schema's sake, as on `summary`: without it
+    # the many=True answer is described as a paged envelope it never is.
+    @action(detail=True, methods=['post'], url_path='charge-periods', pagination_class=None)
+    def charge_periods(self, request, pk=None):
         """
-        A month of this client's plan, paid for at the counter.
+        Take payment for plan periods: the oldest owed first, and on into future
+        months when the client pays ahead. One cash entry per period, each at
+        that period's effective price, all or none.
 
-        Extends from whichever is later, today or the day already covered: paying
-        early stacks onto what is left instead of throwing it away, and paying
-        late starts today rather than back-dating time nobody could use. That is
-        the same rule the platform applies to a tenant, out of the same helper --
-        the month clamp is the part nobody gets right twice.
-
-        No role check, deliberately. The cash BOOK is owner/admin because the
-        shop's aggregate takings are the protected thing; taking one client's
-        monthly fee is what the front desk is there to do.
+        No role check, deliberately: taking a client's monthly fee is what the
+        front desk is there to do. Undoing it is not -- see the void action.
         """
         client = self.get_object()
-        if client.monthly_fee is None:
+        body = ChargePeriodsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        today = billing.local_today(request.tenant)
+        periods = billing.periods_to_charge(client, body.validated_data['count'], today)
+        if len(periods) < body.validated_data['count']:
             raise ValidationError(
-                {'monthly_fee': 'This client has no monthly plan, so there is nothing to charge.'}
+                {'count': 'This client does not have that many periods left to pay.'}
             )
-
-        today = timezone.localdate()
-        # Atomic because these are two halves of one fact. A cover extended
-        # without its entry is a month the shop gave away and cannot see in the
-        # book; an entry without the extension is money taken for nothing.
-        with transaction.atomic():
-            client.paid_until = one_month_after(max(client.paid_until or today, today))
-            client.save(update_fields=['paid_until', 'updated_at'])
-            CashEntry.objects.create(
+        entries = _file_payments([
+            CashEntry(
                 tenant=request.tenant,
                 kind=CashEntry.Kind.INCOME,
-                amount=client.monthly_fee,
-                occurred_on=today,
-                # Spanish, unlike everything around it: this string is not an
-                # identifier, it is the line the shop reads in its cash book,
-                # sitting between entries the front end writes in Spanish. The
-                # separator matches those too.
-                concept=f'Mensualidad · {client.name} · hasta {client.paid_until:%d/%m/%Y}',
-                # No appointment: a plan is paid for the month, not for a slot.
+                amount=period.amount,
+                occurred_on=body.validated_data.get('occurred_on', today),
+                concept=billing.concept_for_period(client, period),
+                payment_method=body.validated_data['payment_method'],
+                client=client,
+                subscription=period.subscription,
+                period=period.start,
             )
+            for period in periods
+        ])
+        return Response(CashEntrySerializer(entries, many=True).data, status=status.HTTP_201_CREATED)
 
-        return Response(self.get_serializer(client).data)
+    @extend_schema(responses=CashEntrySerializer(many=True))
+    @action(detail=True, methods=['get'])
+    def payments(self, request, pk=None):
+        """
+        Everything this client has paid, voided payments included and marked:
+        a void is a reversal on the record, not an erasure. Most recent first,
+        paginated like the timeline.
+        """
+        client = self.get_object()
+        entries = CashEntry.objects.for_tenant(request.tenant).filter(client=client)
+        page = self.paginate_queryset(entries)
+        serializer = CashEntrySerializer(page if page is not None else entries, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @extend_schema(responses=VisitSerializer(many=True))
     @action(detail=True, methods=['get'])
@@ -256,6 +309,170 @@ class CategoryViewSet(TenantScopedModelViewSet):
 class ServiceViewSet(TenantScopedModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
+
+
+class PlanViewSet(TenantScopedModelViewSet):
+    """
+    The catalogue of monthly plans. Read by anyone in the tenant -- the front
+    desk subscribes clients from it -- and priced only by owner/admin, so the
+    prices stay the owner's.
+
+    A plan in use cannot be deleted (Subscription.plan is PROTECT, so a 409);
+    it is archived instead, with a PATCH of `archived`.
+    """
+
+    queryset = Plan.objects.prefetch_related('categories')
+    serializer_class = PlanSerializer
+    # A catalogue, read whole to fill a picker: a second page would hide plans.
+    pagination_class = None
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.request.method not in SAFE_METHODS:
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[OpenApiParameter('client', OpenApiTypes.UUID, description="Only this client's.")],
+    ),
+)
+class SubscriptionViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Clients on plans. Created here, then only ended or moved to another plan,
+    each through its own action: there is deliberately no update, because
+    editing the start date or the plan of a running subscription would rewrite
+    periods that were already owed or paid.
+
+    Any member: subscribing, ending and changing plan are front-desk work.
+    """
+
+    permission_classes = (IsAuthenticated, HasActiveMembership)
+    queryset = Subscription.objects.select_related('plan')
+    serializer_class = SubscriptionSerializer
+    # A client has a handful over its whole life; the list is read per client.
+    pagination_class = None
+
+    def get_queryset(self):
+        rows = super().get_queryset().for_tenant(self.request.tenant)
+        client = self.request.query_params.get('client')
+        if client:
+            rows = rows.filter(client_id=client)
+        return rows
+
+    def perform_create(self, serializer):
+        self._save_or_conflict(lambda: serializer.save(tenant=self.request.tenant))
+
+    @staticmethod
+    def _save_or_conflict(save):
+        """The serializer looked for a running subscription; the constraint decides."""
+        try:
+            with transaction.atomic():
+                return save()
+        except IntegrityError as exc:
+            if 'one_open_subscription_per_client' not in str(exc):
+                raise
+            raise ValidationError('This client already has a subscription running in that time.')
+
+    @extend_schema(responses=DefaultStartSerializer)
+    @action(detail=False, methods=['get'], url_path='default-start')
+    def default_start(self, request):
+        """
+        The start date a new subscription gets when none is sent, by the
+        business's rule -- so the form can prefill it. Here rather than read off
+        the business settings because those are the owner's, and the front desk
+        is who subscribes.
+        """
+        return Response(DefaultStartSerializer({'start_date': billing.default_start_date(request.tenant)}).data)
+
+    @extend_schema(request=SubscriptionEndSerializer, responses=SubscriptionSerializer)
+    @action(detail=True, methods=['post'])
+    def end(self, request, pk=None):
+        """
+        Stop a running subscription. `end_date` is the last day covered; left
+        out, it is the last day of the last paid period, so ending a plan the
+        client stopped paying does not invent the months since as debt. A
+        subscription nothing was ever paid on has no such day, and needs one
+        named.
+        """
+        subscription = self.get_object()
+        if subscription.end_date is not None:
+            raise ValidationError('This subscription has already ended.')
+        body = SubscriptionEndSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        end = body.validated_data.get('end_date') or billing.last_paid_end(subscription)
+        if end is None:
+            raise ValidationError(
+                {'end_date': 'Nothing was ever paid on this subscription, so name its last day.'}
+            )
+        if end < subscription.start_date:
+            raise ValidationError({'end_date': 'A subscription cannot end before it starts.'})
+        subscription.end_date = end
+        subscription.save(update_fields=['end_date', 'updated_at'])
+        return Response(self.get_serializer(subscription).data)
+
+    @extend_schema(request=SubscriptionChangePlanSerializer, responses={201: SubscriptionSerializer})
+    @action(detail=True, methods=['post'], url_path='change-plan')
+    def change_plan(self, request, pk=None):
+        """
+        Move the client to another plan from their NEXT period.
+
+        This subscription ends on the last day of the period running today and
+        a new one opens the day after, so the anchor carries over and every
+        period up to now keeps the plan and the price it had. A subscription
+        that has not started yet has no past to protect, so its plan is simply
+        swapped.
+
+        Answers with the subscription that now runs from the next period.
+        """
+        subscription = self.get_object()
+        if subscription.end_date is not None:
+            raise ValidationError('This subscription has already ended.')
+        body = SubscriptionChangePlanSerializer(data=request.data, context={'request': request})
+        body.is_valid(raise_exception=True)
+        plan = body.validated_data['plan']
+        override = body.validated_data.get('price_override')
+        today = billing.local_today(request.tenant)
+
+        k = billing.period_index(subscription, today)
+        if k < 0:
+            subscription.plan, subscription.price_override = plan, override
+            subscription.save(update_fields=['plan', 'price_override', 'updated_at'])
+            return Response(self.get_serializer(subscription).data, status=status.HTTP_201_CREATED)
+
+        def swap():
+            subscription.end_date = billing.period_end(subscription, k)
+            subscription.save(update_fields=['end_date', 'updated_at'])
+            return Subscription.objects.create(
+                tenant=request.tenant,
+                client=subscription.client,
+                plan=plan,
+                price_override=override,
+                start_date=billing.period_start(subscription, k + 1),
+            )
+
+        successor = self._save_or_conflict(swap)
+        return Response(self.get_serializer(successor).data, status=status.HTTP_201_CREATED)
+
+
+class ReceivablesView(APIView):
+    """
+    Por cobrar: everyone who owes, oldest debt first, and whose current period
+    falls due within three days. Readable by any member, because the front
+    desk is who chases.
+    """
+
+    permission_classes = (IsAuthenticated, HasActiveMembership)
+
+    @extend_schema(responses=ReceivablesSerializer)
+    def get(self, request):
+        return Response(ReceivablesSerializer(billing.receivables(request.tenant)).data)
 
 
 @extend_schema_view(
@@ -455,7 +672,9 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         .select_related('professional__user', 'service', 'created_by__user')
         # The links, not the clients: the serializer reads attendance off the
         # through row, and prefetching only `clients` would query it per slot.
-        .prefetch_related('client_links__client')
+        # `cash_entries` is what each attendee's billing reads to know whether
+        # they paid (billing.attendee_billing), once per page instead of per row.
+        .prefetch_related('client_links__client', 'cash_entries')
     )
     serializer_class = AppointmentSerializer
 
@@ -691,7 +910,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             # `service` alone a forty-week arrangement cost four queries per
             # occurrence to serialise the answer.
             .select_related('professional__user', 'service', 'created_by__user')
-            .prefetch_related('client_links__client')
+            .prefetch_related('client_links__client', 'cash_entries')
             .order_by('start')
         )
 
@@ -802,6 +1021,56 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             'appointments': self.get_serializer(moved, many=True).data,
             'skipped': [day.isoformat() for day in skipped],
         })
+
+    @extend_schema(request=ChargeTurnSerializer, responses={201: CashEntrySerializer})
+    @action(detail=True, methods=['post'])
+    def charge(self, request, pk=None):
+        """
+        Take payment from ONE attendee for this turn: a cash entry linked to the
+        turn and the client, at the amount the billing state says unless the
+        counter typed another.
+
+        Refused for an attendee who is covered by a plan or has already paid --
+        the two states with nothing to charge.
+
+        Any member may charge, whoever's turn it is: looked up through the
+        tenant's agenda and not get_object(), whose object permission would stop
+        a stylist taking money for a colleague's client at the till.
+        """
+        appointment = get_object_or_404(self.get_queryset(), pk=pk)
+        body = ChargeTurnSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+
+        link = next(
+            (one for one in appointment.client_links.all() if one.client_id == body.validated_data['client']),
+            None,
+        )
+        if link is None:
+            raise ValidationError({'client': 'That client is not in this appointment.'})
+
+        state = billing.attendee_billing(link)
+        if state['state'] in (billing.State.PAID, billing.State.COVERED):
+            raise ValidationError(f"Nothing to charge: this attendee is {state['state']}.")
+        # The billing amount is a default only for the states that charge the
+        # turn itself; plan_owed's amount is the plan's debt, not this turn's.
+        default = state['amount'] if state['state'] in (billing.State.CHARGE, billing.State.EXTRA) else None
+        amount = body.validated_data.get('amount', default)
+        if amount is None:
+            raise ValidationError({'amount': 'This turn has no price, so say how much was paid.'})
+
+        (entry,) = _file_payments([
+            CashEntry(
+                tenant=request.tenant,
+                kind=CashEntry.Kind.INCOME,
+                amount=amount,
+                occurred_on=body.validated_data.get('occurred_on', billing.local_today(request.tenant)),
+                concept=billing.concept_for_turn(link.client, appointment),
+                payment_method=body.validated_data['payment_method'],
+                appointment=appointment,
+                client=link.client,
+            )
+        ])
+        return Response(CashEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(request=AttendanceSerializer, responses=AppointmentSerializer)
     @action(detail=True, methods=['post'])

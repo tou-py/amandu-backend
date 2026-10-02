@@ -8,7 +8,9 @@ from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
+from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership
+from apps.scheduling import billing
 from apps.scheduling.models import (
     MAX_OCCURRENCES,
     Appointment,
@@ -17,7 +19,9 @@ from apps.scheduling.models import (
     Category,
     Client,
     ClientField,
+    Plan,
     Service,
+    Subscription,
     TimeOff,
     WorkSchedule,
 )
@@ -140,17 +144,10 @@ class ClientSerializer(serializers.ModelSerializer):
     # always an object keyed by field key. DictField also rejects a list or a
     # string before validate() ever runs.
     custom_data = serializers.DictField(required=False)
-    # Derived, never stored: Client.plan_state() answers it from `paid_until` and
-    # today's date. Sent alongside the two raw fields rather than instead of them
-    # because the form edits the plan and the file reads whether it covers today,
-    # and those are different questions about the same two columns.
-    plan_state = serializers.ChoiceField(choices=Client.PLAN_STATES, read_only=True)
-
     class Meta:
         model = Client
         fields = (
             'id', 'name', 'phone', 'email', 'notes', 'custom_data',
-            'monthly_fee', 'paid_until', 'plan_state',
             'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
@@ -383,39 +380,166 @@ class ProfessionalSerializer(serializers.ModelSerializer):
         fields = ('id', 'name')
 
 
+class PeriodSerializer(serializers.Serializer):
+    """
+    One plan period: its range, the month that names it ("octubre"), what it
+    costs and when it falls due. Read-only and described by hand, like
+    ActiveMembershipSerializer: billing.Period builds it, this documents it.
+    """
+
+    subscription = serializers.IntegerField(source='subscription.id')
+    start = serializers.DateField()
+    # The last day of the period, inclusive.
+    end = serializers.DateField()
+    name = serializers.CharField()
+    amount = serializers.IntegerField()
+    # The start plus the business's grace days. Overdue from the day AFTER.
+    due_date = serializers.DateField()
+    overdue = serializers.BooleanField()
+
+
+class PeriodRangeSerializer(serializers.Serializer):
+    start = serializers.DateField()
+    end = serializers.DateField()
+    name = serializers.CharField()
+
+
+class UnpaidTurnSerializer(serializers.Serializer):
+    """A past turn nobody paid for, with what its billing state charges."""
+
+    appointment = serializers.UUIDField()
+    start = serializers.DateTimeField()
+    service_name = serializers.CharField()
+    amount = serializers.IntegerField()
+
+
+class BillingSerializer(serializers.Serializer):
+    """
+    What ONE attendee of ONE turn owes, decided by the API (billing.py) so the
+    front end only renders it. Exactly one state, evaluated in this order, the
+    first that applies winning:
+
+      paid       a live payment is linked to this turn and client
+      plan_owed  the client has a subscription with an overdue period, today
+      covered    a subscription covers the turn's period and category, quota left
+      extra      a subscription is active but the quota is used up or the
+                 category is not included, and the service has a price
+      charge     nothing covers it and the service has a price
+      no_price   nothing covers it and the service has no price
+
+    `amount` is what the action charges: the payment for `paid`, the owed
+    periods' total for `plan_owed`, the service price for `extra`/`charge`,
+    null for `covered`/`no_price`. The other fields are label data and are only
+    filled for the state that uses them.
+    """
+
+    state = serializers.ChoiceField(choices=billing.State.ALL)
+    amount = serializers.IntegerField(allow_null=True)
+    # plan_owed: the periods owed, oldest first ("Debe septiembre y octubre").
+    owed_periods = PeriodSerializer(many=True)
+    # covered/extra: this turn's place in its period's quota ("Plan · 5 de 8"),
+    # and the quota itself -- a null total is an unlimited plan.
+    quota_used = serializers.IntegerField(allow_null=True)
+    quota_total = serializers.IntegerField(allow_null=True)
+    # paid: how the money arrived, and the entry to void it through.
+    payment_method = serializers.ChoiceField(
+        choices=CashEntry.PaymentMethod.choices, allow_null=True
+    )
+    cash_entry = serializers.IntegerField(allow_null=True)
+
+
+class CurrentSubscriptionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    plan = serializers.IntegerField()
+    plan_name = serializers.CharField()
+    # The effective price: the override if set, else the plan's current price.
+    price = serializers.IntegerField()
+    price_override = serializers.IntegerField(allow_null=True)
+    start_date = serializers.DateField()
+    end_date = serializers.DateField(allow_null=True)
+    # The period running today, or the first one if the plan has not started.
+    current_period = PeriodRangeSerializer()
+    sessions_used = serializers.IntegerField()
+    # Both null on an unlimited plan.
+    sessions_total = serializers.IntegerField(allow_null=True)
+    sessions_left = serializers.IntegerField(allow_null=True)
+
+
+class BillingSummarySerializer(serializers.Serializer):
+    """The money header of a client file: the plan, what is owed, the total."""
+
+    subscription = CurrentSubscriptionSerializer(allow_null=True)
+    # Every started, unpaid period, oldest first; `overdue` tells the late ones
+    # from the ones still inside their grace days.
+    owed_periods = PeriodSerializer(many=True)
+    unpaid_turns = UnpaidTurnSerializer(many=True)
+    total = serializers.IntegerField()
+
+
+class ReceivableRowSerializer(serializers.Serializer):
+    """One client who owes, as the Por cobrar list shows them."""
+
+    client = serializers.UUIDField()
+    client_name = serializers.CharField()
+    # E.164 or '': what "Recordar por WhatsApp" builds its wa.me link from.
+    client_phone = serializers.CharField()
+    # For the "End plan" shortcut on an overdue row. Null when only turns are owed.
+    subscription = serializers.IntegerField(allow_null=True)
+    overdue_periods = PeriodSerializer(many=True)
+    unpaid_turns = UnpaidTurnSerializer(many=True)
+    amount = serializers.IntegerField()
+    # What the list is ordered by, oldest first.
+    oldest_debt = serializers.DateField()
+
+
+class DueSoonRowSerializer(serializers.Serializer):
+    """A client whose current period is unpaid and falls due within three days."""
+
+    client = serializers.UUIDField()
+    client_name = serializers.CharField()
+    client_phone = serializers.CharField()
+    subscription = serializers.IntegerField()
+    period = PeriodSerializer()
+
+
+class ReceivablesSerializer(serializers.Serializer):
+    # Everything owed across `rows`. Due-soon periods are not overdue yet and
+    # are not in it.
+    total = serializers.IntegerField()
+    rows = ReceivableRowSerializer(many=True)
+    due_soon = DueSoonRowSerializer(many=True)
+
+
 class AttendeeSerializer(serializers.ModelSerializer):
     """
-    One person in the slot, with whether they turned up and whether a monthly
-    plan covers them. Flattens the through row so a client reads
-    `{id, name, attendance, plan_state}` and never has to know a join table sits
+    One person in the slot, with whether they turned up and what they owe for
+    it. Flattens the through row so a client reads
+    `{id, name, attendance, billing}` and never has to know a join table sits
     underneath.
     """
 
     id = serializers.UUIDField(source='client_id', read_only=True)
     name = serializers.CharField(source='client.name', read_only=True)
-    # Per attendee and not per appointment: a group class holds four people and
-    # each one is covered or not on their own. The charge step reads this to
-    # decide whether to ask for money from this person at all, so it has to ride
-    # on the roster the agenda already has -- fetching the client file per name
-    # would be a round trip per person, per slot, per day on screen.
-    #
-    # Free of extra queries only because AppointmentViewSet prefetches
-    # `client_links__client`; reading it off `client.name`'s own object is what
-    # keeps it that way.
-    plan_state = serializers.ChoiceField(
-        choices=Client.PLAN_STATES, source='client.plan_state', read_only=True
-    )
     # E.164 or '' -- what the appointment sheet builds a wa.me link from, so
-    # writing to the person about this slot is one tap from the slot. Same
-    # prefetch as the two above, so it costs no query.
+    # writing to the person about this slot is one tap from the slot. Free of
+    # queries because AppointmentViewSet prefetches `client_links__client`.
     phone = serializers.CharField(source='client.phone', read_only=True)
+    # Per attendee and not per appointment: a group class holds four people and
+    # each one owes, or is covered, on their own. Rides on the roster the agenda
+    # already has, because fetching a client file per name would be a round
+    # trip per person, per slot, per day on screen.
+    billing = serializers.SerializerMethodField()
 
     class Meta:
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'phone', 'attendance', 'plan_state')
+        fields = ('id', 'name', 'phone', 'attendance', 'billing')
         read_only_fields = fields
+
+    @extend_schema_field(BillingSerializer)
+    def get_billing(self, link):
+        return BillingSerializer(billing.attendee_billing(link)).data
 
 
 class VisitSerializer(serializers.ModelSerializer):
@@ -959,3 +1083,154 @@ class RescheduleFollowingSerializer(serializers.Serializer):
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             self.fields['professional'].queryset = Membership.professionals_for(tenant)
+
+
+class ClientDetailSerializer(ClientSerializer):
+    """
+    The client file, which is the list row plus its money header.
+
+    A subclass rather than a field on ClientSerializer because the summary
+    costs a few queries per client -- subscriptions, the periods paid -- and
+    the client LIST is fifty rows a page that only needs names. The detail,
+    create and update responses carry it; the list does not.
+    """
+
+    billing_summary = serializers.SerializerMethodField()
+
+    class Meta(ClientSerializer.Meta):
+        fields = (*ClientSerializer.Meta.fields, 'billing_summary')
+
+    @extend_schema_field(BillingSummarySerializer)
+    def get_billing_summary(self, client):
+        return BillingSummarySerializer(billing.billing_summary(client)).data
+
+
+class PlanSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
+    """
+    A line of the catalogue. `archived` is how a plan is retired: it leaves the
+    picker and keeps every subscription already on it.
+    """
+
+    class Meta:
+        model = Plan
+        fields = (
+            'id', 'name', 'price', 'sessions_per_period', 'categories', 'archived',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            # TenantOwnedMixin, rule 2: the join table would happily hold
+            # another tenant's category.
+            self.fields['categories'].child_relation.queryset = Category.objects.for_tenant(tenant)
+
+
+class PickablePlanMixin:
+    def validate_plan(self, plan):
+        if plan.archived:
+            raise serializers.ValidationError('This plan is archived and cannot be picked.')
+        return plan
+
+
+class SubscriptionSerializer(PickablePlanMixin, serializers.ModelSerializer):
+    """
+    A client on a plan. Created here; after that it only ever ends or changes
+    plan, through their own actions, because rewriting the start date or the
+    plan of a running subscription would rewrite periods already owed or paid.
+
+    `start_date` may be omitted: it then follows the business's rule (next 1st
+    or today, billing.default_start_date). `end_date` is never written here --
+    a subscription is born open.
+    """
+
+    plan_name = serializers.CharField(source='plan.name', read_only=True)
+    # Effective price: the override when there is one, else the plan's.
+    price = serializers.IntegerField(read_only=True)
+    start_date = serializers.DateField(required=False)
+
+    class Meta:
+        model = Subscription
+        fields = (
+            'id', 'client', 'plan', 'plan_name', 'price_override', 'price',
+            'start_date', 'end_date', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'end_date', 'created_at', 'updated_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['client'].queryset = Client.objects.for_tenant(tenant)
+            self.fields['plan'].queryset = Plan.objects.for_tenant(tenant)
+
+    def validate(self, attrs):
+        tenant = self.context['request'].tenant
+        start = attrs.setdefault('start_date', billing.default_start_date(tenant))
+        # A new subscription is open, so ANY other one that has not ended
+        # before this starts overlaps it -- including one that starts later.
+        # The partial unique constraint only sees two open rows at once; this
+        # is what sees closed ranges too.
+        clash = Subscription.objects.for_tenant(tenant).filter(client=attrs['client']).exclude(
+            end_date__lt=start
+        )
+        if clash.exists():
+            raise serializers.ValidationError(
+                'This client already has a subscription running in that time.'
+            )
+        return attrs
+
+
+class SubscriptionEndSerializer(serializers.Serializer):
+    """Omit `end_date` to end on the last day of the last paid period."""
+
+    end_date = serializers.DateField(required=False)
+
+
+class SubscriptionChangePlanSerializer(PickablePlanMixin, serializers.Serializer):
+    plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.none())
+    price_override = serializers.IntegerField(min_value=0, required=False, allow_null=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['plan'].queryset = Plan.objects.for_tenant(tenant)
+
+
+class DefaultStartSerializer(serializers.Serializer):
+    start_date = serializers.DateField()
+
+
+class ChargePeriodsSerializer(serializers.Serializer):
+    """
+    Body of charging plan periods: how many, oldest owed first and on into the
+    future if the client pays ahead. Each period is charged at its own
+    effective price; there is no amount to send.
+    """
+
+    # Two years ahead is already a client paying for something nobody can
+    # promise; past that it is a typo.
+    count = serializers.IntegerField(min_value=1, max_value=24, default=1)
+    payment_method = serializers.ChoiceField(
+        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
+    )
+    # The day the money arrived. Omitted, today in the business's calendar.
+    occurred_on = serializers.DateField(required=False)
+
+
+class ChargeTurnSerializer(serializers.Serializer):
+    """
+    Body of charging one attendee for one turn. `amount` defaults to what the
+    billing state says and may be edited -- a discount at the counter is
+    recorded as it happened.
+    """
+
+    client = serializers.UUIDField()
+    amount = serializers.IntegerField(min_value=1, required=False)
+    payment_method = serializers.ChoiceField(
+        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
+    )
+    occurred_on = serializers.DateField(required=False)

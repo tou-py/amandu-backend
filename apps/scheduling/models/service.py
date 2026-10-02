@@ -18,7 +18,7 @@ class Service(TenantOwnedMixin, TimestampMixin):
     #
     # NULL is the load-bearing state and the only signal for it: this service is
     # not charged per session. A pilates studio prices nothing here and sells its
-    # clients a monthly plan instead (Client.monthly_fee); a salon prices every
+    # clients a monthly plan instead (Plan, Subscription); a salon prices every
     # service and sells nobody a plan. The shape of the data is the whole
     # difference -- there is no mode flag on the tenant to branch on, on purpose.
     price = models.PositiveBigIntegerField(null=True, blank=True)

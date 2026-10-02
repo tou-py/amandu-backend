@@ -1,7 +1,7 @@
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, RegexValidator
 from django.db import models
 
 from apps.commons.mixins import TimestampMixin
@@ -94,6 +94,35 @@ class Tenant(TimestampMixin):
     # with six fields; a table earns its place when there are enough of these to
     # make Tenant unreadable.
     public_booking = models.BooleanField(default=False)
+
+    class PlanPeriodStart(models.TextChoices):
+        # "Everyone pays October by the 10th": a new subscription starts on the
+        # next 1st.
+        MONTH_START = 'month_start', 'Month start'
+        # "Ana pays every 14th": a new subscription starts the day she joins.
+        JOIN_DAY = 'join_day', 'Join day'
+
+    # How a NEW subscription's start date is prefilled, and nothing more. The
+    # start date of each subscription is its anchor; changing this setting never
+    # rewrites one that already exists, which is what makes it safe to flip.
+    plan_period_start = models.CharField(
+        max_length=20,
+        choices=PlanPeriodStart.choices,  # type: ignore
+        default=PlanPeriodStart.MONTH_START,
+    )
+    # Days after a period starts before it counts as overdue. 9 under
+    # month_start reproduces "paid by the 10th" -- the 1st plus nine days. Capped
+    # at 28 so a period is always due before the next one starts, even in
+    # February; past that, "overdue" and "next month" would overlap.
+    plan_grace_days = models.PositiveSmallIntegerField(
+        default=9, validators=[MaxValueValidator(28)]
+    )
+    # The last LOCAL date the plan digest was claimed for this tenant. Not a
+    # sent-at: send_reminders claims the day with one conditional UPDATE ("set
+    # to today where not already today") before sending, so overlapping runs
+    # cannot both send, and a run that missed 05:00 still catches up. NULL is
+    # "never claimed".
+    plan_digest_date = models.DateField(null=True, blank=True, editable=False)
 
     class Meta:
         db_table = 'tb_tenant'

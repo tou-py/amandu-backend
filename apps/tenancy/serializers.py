@@ -29,6 +29,10 @@ class TenantSerializer(serializers.ModelSerializer):
     booking page at all. Opening one and closing it again are the owner's calls
     to make from a settings screen; the alternative is a support request for a
     checkbox. It defaults to off for the reason on the model field.
+
+    And so are `plan_period_start` and `plan_grace_days`, how this business
+    collects its monthly plans. Changing them prefills the NEXT subscription
+    and moves the due dates read from now on; no subscription's anchor moves.
     """
 
     # Declared rather than inferred so the model's `^[A-Z]{2}$` validator does
@@ -42,7 +46,7 @@ class TenantSerializer(serializers.ModelSerializer):
         model = Tenant
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
-            'public_booking', 'created_at',
+            'public_booking', 'plan_period_start', 'plan_grace_days', 'created_at',
         )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
 

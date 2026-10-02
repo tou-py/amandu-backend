@@ -552,36 +552,6 @@ def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircu
     assert Appointment.objects.get(pk=res.data['id']).id.version == 7
 
 
-def test_an_appointment_carries_the_plan_state_of_every_attendee(
-    receptionist, salon, stylist, haircut
-):
-    """
-    Per person, not per slot: a group class holds several people and each is
-    covered by a plan or not on their own. The charge step reads this to decide
-    whether to ask THIS attendee for money at all.
-    """
-    covered = Client.objects.create(
-        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
-    )
-    lapsed = Client.objects.create(
-        tenant=salon,
-        name='Bob',
-        monthly_fee=300000,
-        paid_until=timezone.localdate() - timedelta(days=1),
-    )
-    per_session = Client.objects.create(tenant=salon, name='Grace')
-
-    res = api(receptionist, salon).post(
-        LIST_URL, booking(stylist, [covered, lapsed, per_session], haircut, TOMORROW),
-        format='json',
-    )
-
-    assert res.status_code == 201
-    assert {a['name']: a['plan_state'] for a in res.data['attendees']} == {
-        'Ada': 'active', 'Bob': 'expired', 'Grace': 'none',
-    }
-
-
 def test_an_appointment_carries_the_phone_of_every_attendee(
     receptionist, salon, stylist, haircut
 ):
@@ -630,11 +600,9 @@ def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, st
 def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
     """N+1 guard: the query count for the list must not grow with the number of
     appointments. Fails if `client_links__client` stops being prefetched, and
-    equally if `attendees.plan_state` or `service_price` ever start resolving
+    equally if `attendees.billing` or `service_price` ever start resolving
     through a relation the viewset does not already fetch."""
-    ada = Client.objects.create(
-        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
-    )
+    ada = Client.objects.create(tenant=salon, name='Ada')
     bob = Client.objects.create(tenant=salon, name='Bob')
     haircut.price = 120000
     haircut.save(update_fields=['price'])
@@ -1267,10 +1235,10 @@ def test_the_list_does_not_query_per_row(
 
     http = api(stylist.user, salon)
 
-    # Membership, count, the page, the through rows, the clients. Five, and it
-    # stays five as rows are added -- that constancy is the property, not the
-    # number.
-    with django_assert_num_queries(5):
+    # Membership, count, the page, the through rows, the clients, the cash
+    # entries each attendee's billing reads. Six, and it stays six as rows are
+    # added -- that constancy is the property, not the number.
+    with django_assert_num_queries(6):
         response = http.get('/api/appointments/')
 
     assert response.status_code == 200
