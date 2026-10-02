@@ -673,8 +673,13 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         # The links, not the clients: the serializer reads attendance off the
         # through row, and prefetching only `clients` would query it per slot.
         # `cash_entries` is what each attendee's billing reads to know whether
-        # they paid (billing.attendee_billing), once per page instead of per row.
-        .prefetch_related('client_links__client', 'cash_entries')
+        # they paid (billing.attendee_billing), and client_prefetches() the
+        # plans, payments and quota turns behind the rest of it -- once per page
+        # instead of per row.
+        .prefetch_related(
+            'client_links__client', 'cash_entries',
+            *billing.client_prefetches('client_links__client__'),
+        )
     )
     serializer_class = AppointmentSerializer
 
@@ -910,7 +915,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             # `service` alone a forty-week arrangement cost four queries per
             # occurrence to serialise the answer.
             .select_related('professional__user', 'service', 'created_by__user')
-            .prefetch_related('client_links__client', 'cash_entries')
+            .prefetch_related(
+                'client_links__client', 'cash_entries',
+                *billing.client_prefetches('client_links__client__'),
+            )
             .order_by('start')
         )
 

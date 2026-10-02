@@ -1,10 +1,13 @@
 """
-The sweep. Three things come due on the same tick and share one run:
+The sweep. Four things come due on the same tick and share one run:
 
   * a tenant whose paid period ran out, which loses access;
+  * a business's morning plan digest -- who owes, what falls due soon -- for
+    its owners and admins, once a day from 05:00 in ITS timezone;
   * a reminder of the appointment a professional is about to give;
-  * a Notification row nobody has been told about yet -- today, a teammate
-    cancelling a slot that was not theirs (AppointmentViewSet.cancel).
+  * a Notification row nobody has been told about yet -- a teammate cancelling
+    a slot that was not theirs (AppointmentViewSet.cancel), a request from the
+    public page, or the digest above.
 
 Kept in one command, under a name that only says "reminders", deliberately: the
 cron entry lives in Dokploy's UI, not in this repo, and a second command means a
@@ -27,9 +30,9 @@ is no job per appointment, on purpose:
   * a job that was due while the process was down is lost, whereas a sweep that
     missed its turn simply catches it on the next run.
 
-Late is the failure mode, never silent and never twice. `reminder_sent_at` and
-`Notification.pushed_at` are what make the second guarantee hold no matter how
-often this runs.
+Late is the failure mode, never silent and never twice. `reminder_sent_at`,
+`Notification.pushed_at` and `Tenant.plan_digest_date` are what make the second
+guarantee hold no matter how often this runs.
 """
 import json
 from zoneinfo import ZoneInfo
@@ -41,7 +44,8 @@ from django.db.models import DateTimeField, ExpressionWrapper, F
 from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
-from apps.accounts.models import Notification
+from apps.accounts.models import Membership, Notification
+from apps.scheduling import billing
 from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
 
@@ -61,11 +65,16 @@ LOCK_KEY = 'send_reminders_lock'
 LOCK_TIMEOUT = 240  # seconds -- expires before the next tick even if a run wedges
 PUSH_TIMEOUT = 10  # seconds -- passed straight to requests.post via pywebpush
 
+# The local hour the plan digest may go out from. Fixed, like the due-soon
+# window: "the start of the business's day" is the whole requirement.
+DIGEST_HOUR = 5
+
 
 class Command(BaseCommand):
     help = (
-        'Push appointment reminders that have come due, and any notification not '
-        'yet delivered. Safe to run repeatedly.'
+        'Suspend lapsed tenants, file the daily plan digest, push appointment '
+        'reminders that have come due and any notification not yet delivered. '
+        'Safe to run repeatedly.'
     )
 
     def handle(self, *args, **options):
@@ -74,6 +83,10 @@ class Command(BaseCommand):
         # idempotent UPDATE has nothing to serialise -- an overlapping tick
         # matches zero rows the second time.
         self._run_billing()
+        # Also before the VAPID guard: the digest is a Notification row, and the
+        # in-app feed is how a device that never allowed push still sees it. The
+        # push half below picks the rows up on this same tick.
+        self._run_digest()
 
         if not (settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             # Loud here rather than at boot: the API must serve an agenda without
@@ -121,6 +134,52 @@ class Command(BaseCommand):
             # Silent on the ordinary tick (this runs every 5 minutes), loud when
             # somebody actually lost access.
             self.stdout.write(f'{suspended} tenant(s) suspended for non-payment.')
+
+    def _run_digest(self):
+        """
+        File the plan digest for every business whose local morning has come,
+        once per local day.
+
+        The day is CLAIMED before anything is sent, with one conditional UPDATE
+        ("set to today where not already today"): two overlapping runs cannot
+        both get the row back, so only one sends. Claim first, send second, on
+        purpose -- a crash between the two loses that day's digest, and the same
+        figures are still on Por cobrar; the other order risks two digests,
+        which is exactly what this sweep promises never to do. A morning missed
+        while the server was down is claimed on the first run back, late.
+        """
+        filed = 0
+        # Only businesses that sell plans: a salon charging per turn has nothing
+        # to be woken up about, and is never even claimed.
+        tenants = Tenant.objects.filter(scheduling_subscription_set__isnull=False).distinct()
+        for tenant in tenants:
+            now = timezone.localtime(timezone=ZoneInfo(tenant.timezone))
+            if now.hour < DIGEST_HOUR:
+                continue
+            today = now.date()
+            claimed = (
+                Tenant.objects.filter(pk=tenant.pk)
+                .exclude(plan_digest_date=today)  # NULL included: never claimed
+                .update(plan_digest_date=today)
+            )
+            if not claimed:
+                continue
+            owed = billing.receivables(tenant)
+            if not (owed['rows'] or owed['due_soon']):
+                # Claimed and silent: a digest saying "nothing" every morning
+                # trains people to ignore the one that matters.
+                continue
+            # Money stays with owners and admins (the spec's Daily digest).
+            recipients = tenant.memberships.filter(
+                role__in=(Membership.Role.OWNER, Membership.Role.ADMIN),
+                status=Membership.Status.ACTIVE,
+            )
+            filed += len(Notification.objects.bulk_create(
+                Notification(recipient=membership, verb=Notification.Verb.PLAN_DIGEST)
+                for membership in recipients
+            ))
+        if filed:
+            self.stdout.write(f'{filed} plan digest(s) filed.')
 
     def _run(self):
         now = timezone.now()
@@ -232,6 +291,43 @@ class Command(BaseCommand):
         }
 
     def notification_payload(self, notification):
+        if notification.verb == Notification.Verb.PLAN_DIGEST:
+            return self.digest_payload(notification)
+        return self.cancellation_payload(notification)
+
+    def digest_payload(self, notification):
+        """
+        Who owes, in figures worked out NOW rather than stored on the row: a
+        push that waited for a device to subscribe must not announce debts that
+        were paid in the meantime. Opens Por cobrar, where the same rows are.
+
+        ponytail: receivables are recomputed per recipient, so an owner and an
+        admin cost two. Cache per tenant if a business grows a crowd of admins.
+        """
+        owed = billing.receivables(notification.recipient.tenant)
+        debtors = len(owed['rows'])
+        parts = []
+        if debtors:
+            # Guaraníes are written with dots between thousands.
+            amount = f"{owed['total']:,}".replace(',', '.')
+            parts.append(
+                f'1 cliente debe Gs. {amount}.' if debtors == 1
+                else f'{debtors} clientes deben Gs. {amount}.'
+            )
+        if owed['due_soon']:
+            soon = len(owed['due_soon'])
+            parts.append(
+                f'1 mensualidad vence en {billing.DUE_SOON_DAYS} días.' if soon == 1
+                else f'{soon} mensualidades vencen en {billing.DUE_SOON_DAYS} días.'
+            )
+        return {
+            'title': 'Por cobrar',
+            'body': ' '.join(parts),
+            'url': '/por-cobrar',
+            'tag': f'notification-{notification.pk}',
+        }
+
+    def cancellation_payload(self, notification):
         """
         A cancellation, said the way the person needs to hear it: whose slot,
         when it was, and who called it off. The appointment is SET_NULL, so every

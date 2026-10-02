@@ -20,19 +20,33 @@ start date through add_months, never from the previous period, so an anchor of
 them instead of drifting. A period is named after the month it starts in, and a
 cash entry pays it by carrying its start date in `CashEntry.period`.
 
-Phase 0 is the contract: the shapes below are final, and the parts marked
-`# phase 1:` answer with something minimal but schema-valid until the rules
-behind them land.
+Quota. Within one period of a subscription, the client's non-cancelled turns
+in the plan's categories are ordered by start time; the first N are covered and
+the rest are extra. No-shows count, because the booking held the slot. The
+order is total (start, then id), so the same turn always gets the same answer --
+and booking a turn earlier in the period can push a later one into extra, which
+is the honest reading of "8 per month".
+
+Reading a whole roster costs a fixed number of queries, never one per
+attendee: everything below reads a client through `client_prefetches()`, which
+a list view prefetches once per page and a single call loads on demand.
 """
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 from itertools import islice
+from operator import attrgetter
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
+from django.db.models import (
+    DateTimeField, ExpressionWrapper, OuterRef, Prefetch, Subquery, Value, prefetch_related_objects,
+)
+from django.db.models.functions import Least
 from django.utils import timezone
 
 from apps.commons.dates import add_months
+from apps.scheduling.models import Appointment, AppointmentClient, Client, Subscription
 from apps.tenancy.models import Tenant
 
 # Spanish, unlike everything around it, for the same reason as the cash entry
@@ -42,6 +56,9 @@ MONTH_NAMES = (
     'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
     'septiembre', 'octubre', 'noviembre', 'diciembre',
 )
+
+# Fixed, not configurable (see the spec's Out of Scope).
+DUE_SOON_DAYS = 3
 
 
 class State:
@@ -81,6 +98,11 @@ def local_today(tenant):
     sweep makes.
     """
     return timezone.localdate(timezone=ZoneInfo(tenant.timezone))
+
+
+def _day(moment, tenant):
+    """The business's calendar day a turn happens on."""
+    return moment.astimezone(ZoneInfo(tenant.timezone)).date()
 
 
 def default_start_date(tenant, today=None):
@@ -126,11 +148,64 @@ def make_period(subscription, k, today):
     )
 
 
-def _paid_starts(subscription):
-    return set(
-        subscription.cash_entries.filter(voided_at__isnull=True, period__isnull=False)
-        .values_list('period', flat=True)
+def client_prefetches(path=''):
+    """
+    Everything billing reads off a client, as prefetch lookups rooted at `path`
+    (e.g. 'client_links__client__' from an appointment). One list, used by the
+    agenda, the client file and Por cobrar alike, so no reader can forget a
+    relation and quietly fall back to a query per attendee.
+    """
+    first_start = (
+        Subscription.objects.filter(client=OuterRef('client'))
+        .order_by('start_date').values('start_date')[:1]
     )
+    return [
+        Prefetch(
+            f'{path}subscriptions',
+            queryset=Subscription.objects.select_related('plan', 'tenant')
+            .prefetch_related('plan__categories', 'cash_entries'),
+        ),
+        Prefetch(
+            f'{path}appointment_links',
+            queryset=AppointmentClient.objects
+            .exclude(appointment__status=Appointment.Status.CANCELLED)
+            # Only the turns a rule can still ask about: from the first
+            # subscription (the quota) or the go-live cutoff (unpaid turns),
+            # whichever is earlier, less a day so a business east of UTC does not
+            # lose its first morning to the date-to-timestamp cast. LEAST skips
+            # the NULL of a client who never subscribed.
+            #
+            # ponytail: a subscribed client's whole history since joining is
+            # read to rank one turn. Fine at a few hundred turns per client; past
+            # that, bound it by the earliest period on screen.
+            .filter(appointment__start__gte=ExpressionWrapper(
+                Least(Subquery(first_start), Value(settings.BILLING_GO_LIVE))
+                - Value(timedelta(days=1)),
+                output_field=DateTimeField(),
+            ))
+            .select_related('appointment__service')
+            .prefetch_related('appointment__cash_entries'),
+        ),
+    ]
+
+
+def _load(client):
+    # A no-op on a client the caller already prefetched; one query per relation
+    # on a bare one (a single charge, a single client file).
+    prefetch_related_objects([client], *client_prefetches())
+
+
+def _subscriptions(client):
+    return sorted(client.subscriptions.all(), key=attrgetter('start_date'))
+
+
+def _paid_starts(subscription):
+    # Filtered here rather than in the query, so a prefetched `cash_entries`
+    # answers it without another round trip.
+    return {
+        entry.period for entry in subscription.cash_entries.all()
+        if entry.voided_at is None and entry.period is not None
+    }
 
 
 def unpaid_periods(client, today):
@@ -143,7 +218,8 @@ def unpaid_periods(client, today):
     A period belongs to a subscription only if it starts on or before its end
     date: ending a subscription is what stops it producing debt.
     """
-    for subscription in client.subscriptions.select_related('plan', 'tenant').order_by('start_date'):
+    _load(client)
+    for subscription in _subscriptions(client):
         paid = _paid_starts(subscription)
         k = 0
         while True:
@@ -183,12 +259,81 @@ def current_subscription(client, today):
     The subscription running today, else the next one about to start, else
     None. Ranges never overlap, so the earliest not-yet-finished one is it.
     """
-    return (
-        client.subscriptions.select_related('plan', 'tenant')
-        .exclude(end_date__lt=today)
-        .order_by('start_date')
-        .first()
+    return next(
+        (s for s in _subscriptions(client) if s.end_date is None or s.end_date >= today), None
     )
+
+
+def _covered_categories(subscription):
+    # Empty means ALL (Plan.categories): an empty set here is the widest plan.
+    return {category.id for category in subscription.plan.categories.all()}
+
+
+def _counted(client, subscription, k):
+    """
+    The client's turns that count against period k of `subscription`.
+    Cancelled ones are already out (client_prefetches); no-shows stay in.
+    """
+    start, end = period_start(subscription, k), period_end(subscription, k)
+    categories = _covered_categories(subscription)
+    return [
+        link for link in client.appointment_links.all()
+        if (not categories or link.appointment.service.category_id in categories)
+        and start <= _day(link.appointment.start, subscription.tenant) <= end
+    ]
+
+
+def _payment(link):
+    return next(
+        (
+            entry for entry in link.appointment.cash_entries.all()
+            if entry.client_id == link.client_id and entry.voided_at is None
+        ),
+        None,
+    )
+
+
+def _turn_state(link):
+    """
+    covered, extra, charge or no_price: what this turn itself costs, before a
+    payment or a plan debt is looked at. Kept apart from attendee_billing so an
+    unpaid turn is judged on the turn -- a client who owes September still owes
+    Tuesday's extra, and the plan debt must not hide it.
+    """
+    appointment = link.appointment
+    price = appointment.service.price
+    subscription = next(
+        (
+            s for s in _subscriptions(link.client)
+            if s.start_date <= _day(appointment.start, s.tenant)
+            and (s.end_date is None or _day(appointment.start, s.tenant) <= s.end_date)
+        ),
+        None,
+    )
+    if subscription is not None:
+        categories = _covered_categories(subscription)
+        if not categories or appointment.service.category_id in categories:
+            k = period_index(subscription, _day(appointment.start, subscription.tenant))
+            # Its place in quota order -- start time, then id, so two turns at
+            # the same minute still get one answer each -- counted rather than
+            # looked up: one past every turn ahead of it, which also answers for
+            # a turn not in the list itself (a cancelled one).
+            here = (appointment.start, appointment.pk)
+            used = 1 + sum(
+                1 for other in _counted(link.client, subscription, k)
+                if (other.appointment.start, other.appointment_id) < here
+            )
+            total = subscription.plan.sessions_per_period
+            quota = {'quota_used': used, 'quota_total': total}
+            if total is None or used <= total:
+                return {'state': State.COVERED, **quota}
+            if price is not None:
+                return {'state': State.EXTRA, 'amount': price, **quota}
+        elif price is not None:
+            return {'state': State.EXTRA, 'amount': price}
+    if price is None:
+        return {'state': State.NO_PRICE}
+    return {'state': State.CHARGE, 'amount': price}
 
 
 def attendee_billing(link):
@@ -196,21 +341,16 @@ def attendee_billing(link):
     The billing state of one attendee of one turn, as the `billing` object on
     the appointment's roster (BillingSerializer).
 
-    Reads `link.appointment.cash_entries.all()`, so a caller serialising many
-    turns prefetches `cash_entries` and this costs no query per row.
+    Reads `link.appointment.cash_entries.all()` and the client through
+    client_prefetches(), so a caller serialising many turns prefetches both and
+    this costs no query per row.
     """
     answer = {
         'state': None, 'amount': None, 'owed_periods': [],
         'quota_used': None, 'quota_total': None,
         'payment_method': None, 'cash_entry': None,
     }
-    payment = next(
-        (
-            entry for entry in link.appointment.cash_entries.all()
-            if entry.client_id == link.client_id and entry.voided_at is None
-        ),
-        None,
-    )
+    payment = _payment(link)
     if payment is not None:
         answer.update(
             state=State.PAID, amount=payment.amount,
@@ -218,25 +358,64 @@ def attendee_billing(link):
         )
         return answer
 
-    # phase 1: plan_owed (owed_periods against today), covered and extra (the
-    # subscription covering the turn's period and category, and the quota
-    # ordering that fills quota_used/quota_total). Until then a subscribed
-    # client falls through to the per-turn price like everybody else.
-    price = link.appointment.service.price
-    if price is None:
-        answer['state'] = State.NO_PRICE
-    else:
-        answer.update(state=State.CHARGE, amount=price)
+    client = link.client
+    _load(client)
+    subscriptions = _subscriptions(client)
+    if subscriptions:
+        # Against TODAY, not the turn's period: whoever owes September is told
+        # so on an October turn, because that is when they are at the counter.
+        # Only the overdue periods: one still inside its grace days is not yet
+        # a debt to chase at the door.
+        today = local_today(subscriptions[0].tenant)
+        overdue = [p for p in owed_periods(client, today) if p.overdue]
+        if overdue:
+            answer.update(
+                state=State.PLAN_OWED, amount=sum(p.amount for p in overdue), owed_periods=overdue,
+            )
+            return answer
+
+    answer.update(_turn_state(link))
     return answer
+
+
+def _unpaid_turns(client, tenant):
+    """
+    The client's past turns nobody paid for that the turn itself charges for
+    (charge or extra), oldest first. Only from the go-live cutoff: history from
+    before per-turn charging existed was never meant to be collected, and would
+    flood Por cobrar with debts nobody can reconstruct.
+    """
+    now = timezone.now()
+    turns = []
+    for link in sorted(client.appointment_links.all(), key=lambda one: one.appointment.start):
+        appointment = link.appointment
+        if appointment.start >= now or _day(appointment.start, tenant) < settings.BILLING_GO_LIVE:
+            continue
+        if _payment(link) is not None:
+            continue
+        state = _turn_state(link)
+        if state['state'] in (State.CHARGE, State.EXTRA):
+            turns.append({
+                'appointment': appointment.pk,
+                'start': appointment.start,
+                'service_name': appointment.service.name,
+                'amount': state['amount'],
+            })
+    return turns
 
 
 def billing_summary(client):
     """The money header of the client file (BillingSummarySerializer)."""
     today = local_today(client.tenant)
+    _load(client)
     subscription = current_subscription(client, today)
     current = None
     if subscription is not None:
         k = max(period_index(subscription, today), 0)
+        # Every booked turn in the period, past and future: the booking holds
+        # the quota, the same count that numbers each turn "5 de 8".
+        used = len(_counted(client, subscription, k))
+        total = subscription.plan.sessions_per_period
         current = {
             'id': subscription.id,
             'plan': subscription.plan_id,
@@ -250,16 +429,12 @@ def billing_summary(client):
                 'end': period_end(subscription, k),
                 'name': MONTH_NAMES[period_start(subscription, k).month - 1],
             },
-            # phase 1: the quota -- turns in covered categories counted in this
-            # period. Zero used and the plan's whole allowance left until then.
-            'sessions_used': 0,
-            'sessions_total': subscription.plan.sessions_per_period,
-            'sessions_left': subscription.plan.sessions_per_period,
+            'sessions_used': used,
+            'sessions_total': total,
+            'sessions_left': None if total is None else max(total - used, 0),
         }
     owed = owed_periods(client, today)
-    # phase 1: unpaid turns since the go-live cutoff (the migration date), each
-    # with the amount its billing state charges.
-    unpaid_turns = []
+    unpaid_turns = _unpaid_turns(client, client.tenant)
     return {
         'subscription': current,
         'owed_periods': owed,
@@ -274,14 +449,42 @@ def receivables(tenant):
     client with overdue periods or unpaid turns, oldest debt first, then the
     clients whose current period falls due within the next three days.
     """
-    # phase 1: the rows (overdue periods per client plus unpaid turns since the
-    # go-live cutoff, ordered by oldest debt), the due-soon section (current
-    # period unpaid and due within DUE_SOON_DAYS) and their total.
-    return {'total': 0, 'rows': [], 'due_soon': []}
-
-
-# Fixed, not configurable (see the spec's Out of Scope).
-DUE_SOON_DAYS = 3
+    today = local_today(tenant)
+    rows, due_soon = [], []
+    # ponytail: every client of the tenant, judged in Python. A fixed number of
+    # queries, but linear in clients; filter to those with a subscription or a
+    # turn since the cutoff when a tenant grows into the thousands.
+    for client in Client.objects.for_tenant(tenant).prefetch_related(*client_prefetches()):
+        owed = owed_periods(client, today)
+        overdue = [p for p in owed if p.overdue]
+        turns = _unpaid_turns(client, tenant)
+        if overdue or turns:
+            rows.append({
+                'client': client.pk,
+                'client_name': client.name,
+                'client_phone': str(client.phone),
+                # The subscription still producing the debt, for "End plan".
+                'subscription': overdue[-1].subscription.id if overdue else None,
+                'overdue_periods': overdue,
+                'unpaid_turns': turns,
+                'amount': sum(p.amount for p in overdue) + sum(t['amount'] for t in turns),
+                'oldest_debt': min(
+                    [p.start for p in overdue] + [_day(t['start'], tenant) for t in turns]
+                ),
+            })
+        # Only the latest owed period can be due soon: any older unpaid one is
+        # already past its due date, since grace stops short of the next period.
+        if owed and not owed[-1].overdue and owed[-1].due_date <= today + timedelta(days=DUE_SOON_DAYS):
+            due_soon.append({
+                'client': client.pk,
+                'client_name': client.name,
+                'client_phone': str(client.phone),
+                'subscription': owed[-1].subscription.id,
+                'period': owed[-1],
+            })
+    rows.sort(key=lambda row: (row['oldest_debt'], row['client_name']))
+    due_soon.sort(key=lambda row: (row['period'].due_date, row['client_name']))
+    return {'total': sum(row['amount'] for row in rows), 'rows': rows, 'due_soon': due_soon}
 
 
 def concept_for_period(client, period):
@@ -292,4 +495,3 @@ def concept_for_period(client, period):
 
 def concept_for_turn(client, appointment):
     return f'Turno · {appointment.service.name} · {client.name}'
-

@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling.models import Appointment, Client, Service
+from apps.scheduling.models import Appointment, Client, Plan, Service, Subscription
 from apps.scheduling.serializers import AppointmentSerializer
 from apps.scheduling.views import AppointmentViewSet
 from apps.tenancy.models import Tenant
@@ -1220,6 +1220,12 @@ def test_the_list_does_not_query_per_row(
     passes against the broken queryset, exactly as the seed data did.
     """
     start = timezone.now() + timedelta(days=1)
+    # Subscribed, so every attendee's billing walks the plan, its categories,
+    # the periods paid and the quota turns -- the expensive path.
+    plan = Plan.objects.create(tenant=salon, name='Libre', price=100, sessions_per_period=8)
+    Subscription.objects.create(
+        tenant=salon, client=client_, plan=plan, start_date=timezone.localdate() - timedelta(days=1)
+    )
     for index in range(12):
         appointment = Appointment.objects.create(
             tenant=salon,
@@ -1236,9 +1242,11 @@ def test_the_list_does_not_query_per_row(
     http = api(stylist.user, salon)
 
     # Membership, count, the page, the through rows, the clients, the cash
-    # entries each attendee's billing reads. Six, and it stays six as rows are
-    # added -- that constancy is the property, not the number.
-    with django_assert_num_queries(6):
+    # entries on each turn; then billing.client_prefetches(): subscriptions,
+    # their plans' categories, their payments, the client's quota turns and the
+    # payments on those. Eleven, and it stays eleven as rows are added -- that
+    # constancy is the property, not the number.
+    with django_assert_num_queries(11):
         response = http.get('/api/appointments/')
 
     assert response.status_code == 200

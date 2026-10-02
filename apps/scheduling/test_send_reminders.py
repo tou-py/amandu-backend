@@ -7,8 +7,10 @@ devices hear about it, and what stops a second reminder -- because that is where
 the behaviour lives. pywebpush's own encryption is its business.
 """
 import json
-from datetime import timedelta
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -18,7 +20,7 @@ from django.utils import timezone
 from pywebpush import WebPushException
 
 from apps.accounts.models import Membership, Notification, PushSubscription
-from apps.scheduling.models import Appointment, Category, Client, Service
+from apps.scheduling.models import Appointment, Category, Client, Plan, Service, Subscription
 from apps.tenancy.models import Tenant
 
 
@@ -452,3 +454,159 @@ def test_suspends_even_when_push_is_not_configured(paid, settings):
 
     tenant.refresh_from_db()
     assert tenant.status == Tenant.Status.SUSPENDED
+
+
+# --- The plan digest ------------------------------------------------------------
+#
+# Once a day, from 05:00 in each business's own timezone, owners and admins hear
+# who owes. The clock is the subject here, so every test pins it: `clock(...)`
+# sets the instant the whole sweep (and the billing rules under it) believes it
+# is.
+
+UTC = ZoneInfo('UTC')
+
+
+@contextmanager
+def clock(*args):
+    with patch('django.utils.timezone.now', return_value=datetime(*args, tzinfo=UTC)):
+        yield
+
+
+@pytest.fixture
+def team(db, django_user_model):
+    """Every role in a tenant, so a test can tell who heard the digest."""
+
+    def make(tenant):
+        members = {}
+        for role in Membership.Role.values:
+            user = django_user_model.objects.create_user(email=f'{role}@{tenant.slug}.com', password='pw')
+            members[role] = Membership.objects.create(user=user, tenant=tenant, role=role)
+        return members
+
+    return make
+
+
+@pytest.fixture
+def owing(db):
+    """A client of `tenant` who has owed a plan since August 2026."""
+
+    def make(tenant):
+        plan = Plan.objects.create(tenant=tenant, name='Pilates', price=250000)
+        client = Client.objects.create(tenant=tenant, name='Ana')
+        return Subscription.objects.create(tenant=tenant, client=client, plan=plan, start_date=date(2026, 8, 1))
+
+    return make
+
+
+def digests():
+    return Notification.objects.filter(verb=Notification.Verb.PLAN_DIGEST)
+
+
+def test_the_digest_reaches_owners_and_admins_only(salon, team, owing, sent):
+    members = team(salon)
+    owing(salon)
+
+    with clock(2026, 10, 2, 8, 0):  # 05:00 in Buenos Aires
+        call_command('send_reminders')
+
+    assert sorted(n.recipient.role for n in digests()) == ['admin', 'owner']
+    assert {n.recipient for n in digests()} == {members['owner'], members['admin']}
+
+
+def test_no_digest_before_five_in_the_morning_local_time(salon, team, owing, sent):
+    team(salon)
+    owing(salon)
+
+    with clock(2026, 10, 2, 7, 59):  # 04:59 in Buenos Aires, 07:59 on the server
+        call_command('send_reminders')
+
+    assert not digests().exists()
+    salon.refresh_from_db()
+    assert salon.plan_digest_date is None
+
+
+def test_one_digest_a_day_however_often_the_sweep_runs(salon, team, owing, sent):
+    team(salon)
+    owing(salon)
+
+    for hour in (8, 9, 23):
+        with clock(2026, 10, 2, hour, 0):
+            call_command('send_reminders')
+    assert digests().count() == 2
+
+    with clock(2026, 10, 3, 8, 0):  # the next local day
+        call_command('send_reminders')
+    assert digests().count() == 4
+
+
+def test_a_missed_morning_still_gets_its_digest_late(salon, team, owing, sent):
+    """The server was down from Monday to Friday afternoon: Friday's digest
+    goes out on the first run back, not never."""
+    team(salon)
+    owing(salon)
+    Tenant.objects.filter(pk=salon.pk).update(plan_digest_date=date(2026, 9, 28))
+
+    with clock(2026, 10, 2, 18, 0):  # 15:00 in Buenos Aires
+        call_command('send_reminders')
+
+    assert digests().count() == 2
+    salon.refresh_from_db()
+    assert salon.plan_digest_date == date(2026, 10, 2)
+
+
+def test_nothing_owed_claims_the_day_and_sends_nothing(salon, team, sent):
+    team(salon)
+    plan = Plan.objects.create(tenant=salon, name='Pilates', price=250000)
+    client = Client.objects.create(tenant=salon, name='Ana')
+    # Starts in the future: nothing owed, nothing due soon.
+    Subscription.objects.create(tenant=salon, client=client, plan=plan, start_date=date(2026, 11, 1))
+
+    with clock(2026, 10, 2, 8, 0):
+        call_command('send_reminders')
+
+    assert not digests().exists()
+    salon.refresh_from_db()
+    assert salon.plan_digest_date == date(2026, 10, 2)
+
+
+def test_each_tenant_wakes_up_in_its_own_timezone(salon, team, owing, sent):
+    tokyo = Tenant.objects.create(name='Tokyo', slug='tokyo', timezone='Asia/Tokyo')
+    team(salon)
+    team(tokyo)
+    owing(salon)
+    owing(tokyo)
+
+    with clock(2026, 10, 2, 6, 0):  # 03:00 in Buenos Aires, 15:00 in Tokyo
+        call_command('send_reminders')
+
+    assert {n.recipient.tenant for n in digests()} == {tokyo}
+
+
+def test_the_digest_push_says_who_owes_and_opens_por_cobrar(salon, team, owing, sent):
+    members = team(salon)
+    owing(salon)
+    PushSubscription.objects.create(
+        user=members['owner'].user, endpoint='https://push.example.com/o', p256dh='k', auth='a',
+    )
+
+    with clock(2026, 10, 2, 8, 0):
+        call_command('send_reminders')
+
+    payload = json.loads(sent.call_args.kwargs['data'])
+    assert payload['url'] == '/por-cobrar'
+    # August, September and October started; Oct 1 + 9 days of grace is not
+    # past yet, so two periods are overdue.
+    assert payload['body'] == '1 cliente debe Gs. 500.000.'
+
+
+def test_the_digest_lands_in_the_feed_even_without_push(salon, team, owing, settings):
+    """Like the billing sweep, the in-app feed does not depend on VAPID keys:
+    the bell is the channel for a device that never allowed push."""
+    settings.VAPID_PRIVATE_KEY = ''
+    team(salon)
+    owing(salon)
+
+    with clock(2026, 10, 2, 8, 0), pytest.raises(CommandError):
+        call_command('send_reminders')
+
+    assert digests().count() == 2

@@ -3,11 +3,13 @@ Charging and voiding, and the billing shapes the front end renders: the
 `billing` object on every attendee, the client file's `billing_summary` and
 the receivables list. Driven through the HTTP API only.
 
-Phase 0 covers the contract and the simple states (paid, charge, no_price).
-The plan states and the receivables rows arrive with phase 1's rules.
+Days are relative to the real today wherever the rule is about "now" (owed,
+overdue, due soon), and absolute and in the past wherever it is about the
+calendar (an anchor of 31 across February), so the suite holds on any day.
 """
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
@@ -18,10 +20,11 @@ from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership
 from apps.commons.dates import add_months
 from apps.scheduling.billing import local_today
-from apps.scheduling.models import Appointment, Client, Plan, Service, Subscription
+from apps.scheduling.models import Appointment, AppointmentClient, Category, Client, Plan, Service, Subscription
 from apps.tenancy.models import Tenant
 
 RECEIVABLES = reverse('scheduling:receivables')
+SUBSCRIPTIONS = reverse('scheduling:subscription-list')
 YESTERDAY = timezone.now().replace(microsecond=0) - timedelta(days=1)
 
 
@@ -94,10 +97,10 @@ def bob(studio):
     return Client.objects.create(tenant=studio, name='Bob')
 
 
-def turn(tenant, professional, clients, price=80000, start=YESTERDAY):
+def turn(tenant, professional, clients, price=80000, start=YESTERDAY, category=None):
     service = Service.objects.create(
         tenant=tenant, name=f'Masaje {start.isoformat()}', price=price,
-        duration=timedelta(minutes=60),
+        duration=timedelta(minutes=60), category=category,
     )
     appointment = Appointment.objects.create(
         tenant=tenant, professional=professional, service=service,
@@ -422,3 +425,347 @@ def test_receivables_answer_in_their_final_shape(staff, studio):
 
     assert res.status_code == 200
     assert res.data == {'total': 0, 'rows': [], 'due_soon': []}
+
+
+# -- Plan states ---------------------------------------------------------------
+
+
+def at(tenant, day, hour=10):
+    """A moment on a day of the BUSINESS's calendar."""
+    return datetime.combine(day, time(hour), tzinfo=ZoneInfo(tenant.timezone))
+
+
+def subscribe(client, plan, start, **fields):
+    return Subscription.objects.create(
+        tenant=client.tenant, client=client, plan=plan, start_date=start, **fields
+    )
+
+
+def pay_owed(http, client):
+    """Settle every started period through the API, so a plan state shows."""
+    owed = http.get(client_url(client)).data['billing_summary']['owed_periods']
+    if owed:
+        http.post(client_url(client, 'charge-periods'), {'count': len(owed)}, format='json')
+
+
+def test_a_subscribed_attendee_inside_the_quota_is_covered(owner, studio, teacher, pilates, ada):
+    today = local_today(studio)
+    subscribe(ada, pilates, today)
+    appointment = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
+
+    assert billing_of(api(owner, studio), appointment)['Ada'] == {
+        'state': 'covered', 'amount': None, 'owed_periods': [],
+        'quota_used': 1, 'quota_total': 8,
+        'payment_method': None, 'cash_entry': None,
+    }
+
+
+def test_an_unlimited_plan_covers_without_a_total(owner, studio, teacher, ada):
+    libre = Plan.objects.create(tenant=studio, name='Libre', price=300000)
+    subscribe(ada, libre, local_today(studio))
+    appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
+
+    billing = billing_of(api(owner, studio), appointment)['Ada']
+    assert (billing['state'], billing['quota_used'], billing['quota_total']) == ('covered', 1, None)
+
+
+def test_a_client_who_owes_a_past_period_shows_it_on_any_turn(owner, studio, teacher, pilates, ada):
+    """Decided against today, not the turn's period: last month's debt shows on
+    this month's turn. Only the overdue period is charged -- the current one is
+    still inside its grace days."""
+    today = local_today(studio)
+    last_month = add_months(today, -1)
+    subscribe(ada, pilates, last_month)
+    appointment = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
+
+    billing = billing_of(api(owner, studio), appointment)['Ada']
+
+    assert billing['state'] == 'plan_owed'
+    assert billing['amount'] == 250000
+    assert [p['start'] for p in billing['owed_periods']] == [last_month.isoformat()]
+    assert billing['owed_periods'][0]['overdue'] is True
+
+
+def test_a_paid_turn_wins_over_a_plan_debt(owner, studio, teacher, pilates, ada):
+    subscribe(ada, pilates, add_months(local_today(studio), -1))
+    appointment = turn(studio, teacher, [ada])
+    http = api(owner, studio)
+
+    res = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 80000}, format='json')
+
+    assert res.status_code == 201
+    assert billing_of(http, appointment)['Ada']['state'] == 'paid'
+
+
+def test_voiding_a_period_payment_brings_the_debt_back(owner, studio, teacher, pilates, ada):
+    subscribe(ada, pilates, add_months(local_today(studio), -1))
+    appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
+    http = api(owner, studio)
+    paid = http.post(client_url(ada, 'charge-periods'), {}, format='json').data[0]
+    assert billing_of(http, appointment)['Ada']['state'] == 'covered'
+
+    http.post(void_url(CashEntry.objects.get(pk=paid['id'])), {'reason': 'x'}, format='json')
+
+    assert billing_of(http, appointment)['Ada']['state'] == 'plan_owed'
+
+
+def test_the_quota_goes_by_start_time_counting_no_shows_but_not_cancellations(
+    owner, studio, teacher, ada
+):
+    duo = Plan.objects.create(tenant=studio, name='Duo', price=100000, sessions_per_period=2)
+    today = local_today(studio)
+    subscribe(ada, duo, today)
+    tomorrow = today + timedelta(days=1)
+    # Booked out of order on purpose: the quota follows the diary, not the
+    # order the bookings were made in.
+    fourth = turn(studio, teacher, [ada], start=at(studio, tomorrow, 13))
+    no_show = turn(studio, teacher, [ada], start=at(studio, tomorrow, 10))
+    cancelled = turn(studio, teacher, [ada], start=at(studio, tomorrow, 11))
+    third = turn(studio, teacher, [ada], start=at(studio, tomorrow, 12))
+    AppointmentClient.objects.filter(appointment=no_show).update(attendance='no_show')
+    Appointment.objects.filter(pk=cancelled.pk).update(status='cancelled')
+    http = api(owner, studio)
+
+    def state(appointment):
+        billing = billing_of(http, appointment)['Ada']
+        return billing['state'], billing['amount'], billing['quota_used'], billing['quota_total']
+
+    assert state(no_show) == ('covered', None, 1, 2)
+    assert state(third) == ('covered', None, 2, 2)
+    assert state(fourth) == ('extra', 80000, 3, 2)
+
+
+def test_a_plan_covers_only_its_categories(owner, studio, teacher, ada):
+    pilates_class = Category.objects.create(tenant=studio, name='Pilates')
+    massage = Category.objects.create(tenant=studio, name='Masajes')
+    plan = Plan.objects.create(tenant=studio, name='Solo pilates', price=200000)
+    plan.categories.add(pilates_class)
+    subscribe(ada, plan, local_today(studio))
+    tomorrow = local_today(studio) + timedelta(days=1)
+    reformer = turn(studio, teacher, [ada], start=at(studio, tomorrow, 9), category=pilates_class)
+    priced = turn(studio, teacher, [ada], start=at(studio, tomorrow, 10), category=massage)
+    unpriced = turn(studio, teacher, [ada], price=None, start=at(studio, tomorrow, 11), category=massage)
+    http = api(owner, studio)
+
+    assert billing_of(http, reformer)['Ada']['state'] == 'covered'
+    assert billing_of(http, priced)['Ada']['state'] == 'extra'
+    assert billing_of(http, priced)['Ada']['amount'] == 80000
+    assert billing_of(http, unpriced)['Ada']['state'] == 'no_price'
+
+
+def test_a_turn_outside_the_subscription_is_charged_per_turn(owner, studio, teacher, pilates, ada):
+    today = local_today(studio)
+    subscribe(ada, pilates, today + timedelta(days=5))
+    before = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
+
+    assert billing_of(api(owner, studio), before)['Ada']['state'] == 'charge'
+
+
+def test_the_quota_is_counted_per_anchored_period_not_per_calendar_month(
+    owner, studio, teacher, ada
+):
+    """Billed on the 14th: the 13th and the 14th of March are two periods, so
+    one class a period covers both, while the 2nd and the 13th share one."""
+    single = Plan.objects.create(tenant=studio, name='Una', price=100000, sessions_per_period=1)
+    subscribe(ada, single, date(2026, 1, 14), end_date=date(2026, 4, 13))
+    http = api(owner, studio)
+    pay_owed(http, ada)
+    early = turn(studio, teacher, [ada], start=at(studio, date(2026, 3, 2)))
+    last_day = turn(studio, teacher, [ada], start=at(studio, date(2026, 3, 13)))
+    next_period = turn(studio, teacher, [ada], start=at(studio, date(2026, 3, 14)))
+
+    assert billing_of(http, early)['Ada']['state'] == 'covered'
+    assert billing_of(http, last_day)['Ada']['state'] == 'extra'
+    assert billing_of(http, next_period)['Ada']['state'] == 'covered'
+    assert billing_of(http, next_period)['Ada']['quota_used'] == 1
+
+
+# -- Periods -------------------------------------------------------------------
+
+
+def test_an_anchor_of_31_lands_on_the_last_day_of_short_months_and_comes_back(
+    owner, studio, pilates, ada
+):
+    subscribe(ada, pilates, date(2026, 1, 31), end_date=date(2026, 5, 30))
+
+    owed = api(owner, studio).get(client_url(ada)).data['billing_summary']['owed_periods']
+
+    assert [(p['start'], p['end'], p['name']) for p in owed] == [
+        ('2026-01-31', '2026-02-27', 'enero'),
+        ('2026-02-28', '2026-03-30', 'febrero'),
+        ('2026-03-31', '2026-04-29', 'marzo'),
+        ('2026-04-30', '2026-05-30', 'abril'),
+    ]
+
+
+@pytest.mark.parametrize('rule', ['month_start', 'join_day'])
+def test_a_subscription_runs_its_periods_from_the_rules_start_date(owner, studio, pilates, ada, rule):
+    """Either rule becomes the anchor of the periods."""
+    studio.plan_period_start = rule
+    studio.save()
+    http = api(owner, studio)
+    today = local_today(studio)
+
+    http.post(SUBSCRIPTIONS, {'client': ada.pk, 'plan': pilates.pk}, format='json')
+    current = http.get(client_url(ada)).data['billing_summary']['subscription']['current_period']
+
+    first = today if rule == 'join_day' or today.day == 1 else add_months(today.replace(day=1), 1)
+    assert current['start'] == first.isoformat()
+    assert current['end'] == (add_months(first, 1) - timedelta(days=1)).isoformat()
+
+
+def test_a_given_start_date_overrides_the_rule(owner, studio, pilates, ada):
+    """The rule is only the prefill: one subscription keeps its own anchor."""
+    http = api(owner, studio)
+    start = local_today(studio) - timedelta(days=3)
+
+    http.post(SUBSCRIPTIONS, {'client': ada.pk, 'plan': pilates.pk, 'start_date': start.isoformat()}, format='json')
+
+    current = http.get(client_url(ada)).data['billing_summary']['subscription']['current_period']
+    assert current['start'] == start.isoformat()
+
+
+@pytest.mark.parametrize('grace, days_ago, overdue', [
+    (9, 8, False),   # the day before the due date
+    (9, 9, False),   # on the due date: still on time
+    (9, 10, True),   # the day after
+    (0, 0, False),   # no grace: due the day it starts
+    (0, 1, True),
+])
+def test_a_period_is_overdue_the_day_after_its_due_date(
+    owner, studio, teacher, pilates, ada, grace, days_ago, overdue
+):
+    studio.plan_grace_days = grace
+    studio.save()
+    start = local_today(studio) - timedelta(days=days_ago)
+    subscribe(ada, pilates, start)
+    appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
+    http = api(owner, studio)
+
+    (period,) = http.get(client_url(ada)).data['billing_summary']['owed_periods']
+
+    assert period['due_date'] == (start + timedelta(days=grace)).isoformat()
+    assert period['overdue'] is overdue
+    assert billing_of(http, appointment)['Ada']['state'] == ('plan_owed' if overdue else 'covered')
+
+
+# -- The client file, with rules -----------------------------------------------
+
+
+def test_the_client_file_counts_the_sessions_booked_in_the_period(owner, studio, teacher, pilates, ada):
+    today = local_today(studio)
+    subscribe(ada, pilates, today)
+    for hour in (9, 10, 11):
+        turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1), hour))
+
+    current = api(owner, studio).get(client_url(ada)).data['billing_summary']['subscription']
+
+    assert (current['sessions_used'], current['sessions_total'], current['sessions_left']) == (3, 8, 5)
+
+
+@pytest.fixture
+def live_since_last_week(settings, studio):
+    settings.BILLING_GO_LIVE = local_today(studio) - timedelta(days=7)
+    return settings.BILLING_GO_LIVE
+
+
+def test_unpaid_past_turns_since_go_live_are_owed(owner, studio, teacher, ada, live_since_last_week):
+    today = local_today(studio)
+    owed = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=2)))
+    paid = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=3)))
+    turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=8)))  # before go-live
+    turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))  # not happened yet
+    cancelled = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=4)))
+    Appointment.objects.filter(pk=cancelled.pk).update(status='cancelled')
+    http = api(owner, studio)
+    http.post(charge_url(paid), {'client': str(ada.pk)}, format='json')
+
+    summary = http.get(client_url(ada)).data['billing_summary']
+
+    assert [t['appointment'] for t in summary['unpaid_turns']] == [str(owed.pk)]
+    assert summary['unpaid_turns'][0]['amount'] == 80000
+    assert summary['total'] == 80000
+
+
+def test_a_turn_attended_while_owing_is_settled_by_paying_the_month(
+    owner, studio, teacher, pilates, ada, live_since_last_week
+):
+    """Covered by the period it falls in: the plan debt is what is owed, not
+    the turn, so paying the month leaves nothing else."""
+    subscribe(ada, pilates, add_months(local_today(studio), -1))
+    turn(studio, teacher, [ada], start=at(studio, local_today(studio) - timedelta(days=1)))
+    http = api(owner, studio)
+
+    assert http.get(client_url(ada)).data['billing_summary']['unpaid_turns'] == []
+
+    pay_owed(http, ada)
+    assert http.get(client_url(ada)).data['billing_summary']['total'] == 0
+
+
+# -- Receivables ---------------------------------------------------------------
+
+
+def test_receivables_list_who_owes_oldest_debt_first(
+    staff, studio, teacher, pilates, ada, bob, live_since_last_week
+):
+    today = local_today(studio)
+    two_months_ago = add_months(today, -2)
+    # Ada's debt is one turn from yesterday; Bob's plan has been overdue for
+    # two months, so he leads although the alphabet says otherwise.
+    turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=1)))
+    subscribe(bob, pilates, two_months_ago)
+    Client.objects.create(tenant=studio, name='Carla')  # owes nothing
+
+    res = api(staff, studio).get(RECEIVABLES)
+
+    bob_row, ada_row = res.data['rows']
+    assert bob_row['client_name'] == 'Bob'
+    assert bob_row['client_phone'] == ''
+    assert bob_row['oldest_debt'] == two_months_ago.isoformat()
+    assert [p['start'] for p in bob_row['overdue_periods']] == [
+        two_months_ago.isoformat(), add_months(two_months_ago, 1).isoformat(),
+    ]
+    assert bob_row['amount'] == 500000
+    assert bob_row['subscription'] is not None
+    assert ada_row['client_name'] == 'Ada'
+    assert ada_row['client_phone'] == '+595981123456'
+    assert ada_row['subscription'] is None
+    assert ada_row['unpaid_turns'][0]['amount'] == 80000
+    assert ada_row['oldest_debt'] == (today - timedelta(days=1)).isoformat()
+    assert res.data['total'] == 580000
+
+
+@pytest.mark.parametrize('due_in, listed', [(0, True), (3, True), (4, False)])
+def test_due_soon_is_the_current_period_due_within_three_days(
+    staff, studio, pilates, ada, due_in, listed
+):
+    """Not overdue yet, so in neither the rows nor the total."""
+    subscribe(ada, pilates, local_today(studio) + timedelta(days=due_in - 9))
+
+    res = api(staff, studio).get(RECEIVABLES)
+
+    assert res.data['rows'] == []
+    assert res.data['total'] == 0
+    assert [row['client_name'] for row in res.data['due_soon']] == (['Ada'] if listed else [])
+
+
+def test_a_paid_current_period_is_not_due_soon(owner, studio, pilates, ada):
+    subscribe(ada, pilates, local_today(studio) - timedelta(days=8))
+    http = api(owner, studio)
+    pay_owed(http, ada)
+
+    assert http.get(RECEIVABLES).data['due_soon'] == []
+
+
+def test_turns_before_go_live_are_never_receivable(staff, studio, teacher, ada, settings):
+    settings.BILLING_GO_LIVE = local_today(studio)
+    turn(studio, teacher, [ada], start=at(studio, local_today(studio) - timedelta(days=1)))
+
+    assert api(staff, studio).get(RECEIVABLES).data['rows'] == []
+
+
+def test_receivables_are_isolated_per_tenant(django_user_model, studio, gym, pilates, ada):
+    subscribe(ada, pilates, add_months(local_today(studio), -2))
+    outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
+
+    assert api(outsider, gym).get(RECEIVABLES).data['rows'] == []
