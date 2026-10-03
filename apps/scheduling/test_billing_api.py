@@ -174,6 +174,22 @@ def test_the_counter_can_edit_the_amount_and_the_day(owner, studio, teacher, ada
     assert res.data['payment_method'] == 'cash'
 
 
+def test_staff_charge_the_price_but_do_not_edit_it(staff, studio, teacher, ada, bob):
+    appointment = turn(studio, teacher, [ada, bob])
+    unpriced = turn(studio, teacher, [ada], price=None, start=YESTERDAY - timedelta(hours=2))
+    http = api(staff, studio)
+
+    edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 70000}, format='json')
+    # The amount the form prefilled, sent back unchanged, is not an edit.
+    same = http.post(charge_url(appointment), {'client': str(bob.pk), 'amount': 80000}, format='json')
+    # A turn with no price has nothing to edit: whoever charges says how much.
+    typed = http.post(charge_url(unpriced), {'client': str(ada.pk), 'amount': 50000}, format='json')
+
+    assert (edited.status_code, edited.data['code']) == (403, 'amount_edit_forbidden')
+    assert same.status_code == 201
+    assert typed.status_code == 201
+
+
 def test_an_unpriced_turn_needs_an_amount(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada], price=None)
     http = api(owner, studio)

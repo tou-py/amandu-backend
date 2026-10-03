@@ -1225,8 +1225,9 @@ class ChargePeriodsSerializer(serializers.Serializer):
 class ChargeTurnSerializer(serializers.Serializer):
     """
     Body of charging one attendee for one turn. `amount` defaults to what the
-    billing state says and may be edited -- a discount at the counter is
-    recorded as it happened.
+    billing state says and may be edited by an owner or admin -- a discount at
+    the counter is recorded as it happened. Anyone may type it for a turn with
+    no price, where there is nothing to edit.
     """
 
     client = serializers.UUIDField()

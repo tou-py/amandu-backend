@@ -6,7 +6,7 @@ from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import action
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from drf_spectacular.types import OpenApiTypes
@@ -112,6 +112,15 @@ def _file_payments(entries):
             raise
         raise AlreadyPaid() from exc
     return entries
+
+
+def _admin_only(request, what, code):
+    """
+    The price layers above a charge are the owner's (plan, override, service
+    price), so the front desk takes money at those prices but does not set one.
+    """
+    if not IsTenantAdmin().has_permission(request, None):
+        raise PermissionDenied(f'Only an owner or admin may {what}.', code)
 
 
 class ClientViewSet(TenantScopedModelViewSet):
@@ -368,6 +377,8 @@ class SubscriptionViewSet(
         return rows
 
     def perform_create(self, serializer):
+        if serializer.validated_data.get('price_override') is not None:
+            _admin_only(self.request, 'override the price', 'price_override_forbidden')
         self._save_or_conflict(lambda: serializer.save(tenant=self.request.tenant))
 
     @staticmethod
@@ -439,6 +450,8 @@ class SubscriptionViewSet(
         body.is_valid(raise_exception=True)
         plan = body.validated_data['plan']
         override = body.validated_data.get('price_override')
+        if override is not None:
+            _admin_only(request, 'override the price', 'price_override_forbidden')
         today = billing.local_today(request.tenant)
 
         k = billing.period_index(subscription, today)
@@ -1066,6 +1079,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         # turn itself; plan_owed's amount is the plan's debt, not this turn's.
         default = state['amount'] if state['state'] in (billing.State.CHARGE, billing.State.EXTRA) else None
         amount = body.validated_data.get('amount', default)
+        if default is not None and amount != default:
+            _admin_only(request, 'edit the amount', 'amount_edit_forbidden')
         if amount is None:
             raise Refused('This turn has no price, so say how much was paid.', 'amount_required')
 

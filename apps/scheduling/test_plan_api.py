@@ -194,8 +194,8 @@ def test_join_day_prefills_today(desk, studio, pilates, ada):
     assert res.data['start_date'] == local_today(studio).isoformat()
 
 
-def test_front_desk_subscribes_with_its_own_start_date_and_price(desk, studio, pilates, ada):
-    res = api(desk, studio).post(
+def test_an_owner_subscribes_with_its_own_start_date_and_price(owner, studio, pilates, ada):
+    res = api(owner, studio).post(
         SUBSCRIPTIONS,
         {'client': ada.pk, 'plan': pilates.pk, 'start_date': '2026-08-25', 'price_override': 200000},
         format='json',
@@ -206,6 +206,43 @@ def test_front_desk_subscribes_with_its_own_start_date_and_price(desk, studio, p
     assert res.data['price'] == 200000
     assert res.data['plan_name'] == 'Pilates 8'
     assert res.data['end_date'] is None
+
+
+@pytest.mark.parametrize('role', [Membership.Role.COORDINATOR, Membership.Role.STAFF])
+def test_only_owner_or_admin_overrides_the_price(django_user_model, studio, pilates, ada, role):
+    http = api(member(django_user_model, studio, role, 'x@example.com'), studio)
+    libre = Plan.objects.create(tenant=studio, name='Libre', price=400000)
+    sub = Subscription.objects.create(
+        tenant=studio, client=ada, plan=pilates, start_date=add_months(local_today(studio), 1)
+    )
+
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    created = http.post(
+        SUBSCRIPTIONS, {'client': bob.pk, 'plan': pilates.pk, 'price_override': 1}, format='json'
+    )
+    moved = http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk, 'price_override': 1}, format='json')
+    # Sending no override at all -- null, as a form with the field empty does -- is fine.
+    plain = http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk, 'price_override': None}, format='json')
+
+    assert (created.status_code, created.data['code']) == (403, 'price_override_forbidden')
+    assert (moved.status_code, moved.data['code']) == (403, 'price_override_forbidden')
+    assert plain.status_code == 201
+    sub.refresh_from_db()
+    assert sub.price_override is None
+
+
+def test_an_admin_changes_plan_with_an_override(django_user_model, studio, pilates, ada):
+    admin = member(django_user_model, studio, Membership.Role.ADMIN, 'a@example.com')
+    libre = Plan.objects.create(tenant=studio, name='Libre', price=400000)
+    sub = Subscription.objects.create(
+        tenant=studio, client=ada, plan=pilates, start_date=add_months(local_today(studio), 1)
+    )
+
+    res = api(admin, studio).post(
+        sub_url(sub, 'change-plan'), {'plan': libre.pk, 'price_override': 350000}, format='json'
+    )
+
+    assert res.data['price'] == 350000
 
 
 def test_the_effective_price_follows_the_plan_without_an_override(desk, studio, pilates, ada):
