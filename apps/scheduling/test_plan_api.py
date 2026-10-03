@@ -102,7 +102,8 @@ def test_only_owner_or_admin_writes_the_catalogue_but_anyone_reads_it(
     caller = member(django_user_model, studio, role, 'x@example.com')
     http = api(caller, studio)
 
-    assert http.post(PLANS, {'name': 'Libre', 'price': 1}, format='json').status_code == 403
+    res = http.post(PLANS, {'name': 'Libre', 'price': 1}, format='json')
+    assert (res.status_code, res.data['code']) == (403, 'admin_required')
     assert http.patch(plan_url(pilates), {'price': 1}, format='json').status_code == 403
     listed = http.get(PLANS)
     assert listed.status_code == 200
@@ -126,7 +127,7 @@ def test_a_plan_cannot_cover_another_tenants_category(owner, studio, gym):
         PLANS, {'name': 'Mixto', 'price': 1, 'categories': [foreign.pk]}, format='json'
     )
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'does_not_exist')
 
 
 def test_plans_are_isolated_per_tenant(django_user_model, owner, studio, gym, pilates):
@@ -141,7 +142,7 @@ def test_plans_are_isolated_per_tenant(django_user_model, owner, studio, gym, pi
 def test_two_plans_cannot_share_a_name(owner, studio, pilates):
     res = api(owner, studio).post(PLANS, {'name': 'pilates 8', 'price': 1}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'name_taken')
 
 
 # -- Business settings ---------------------------------------------------------
@@ -220,7 +221,7 @@ def test_a_client_has_at_most_one_open_subscription(desk, studio, pilates, ada):
 
     res = http.post(SUBSCRIPTIONS, {'client': ada.pk, 'plan': pilates.pk}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'subscription_overlap')
     assert ada.subscriptions.count() == 1
 
 
@@ -238,7 +239,7 @@ def test_an_overlapping_closed_range_is_rejected(desk, studio, pilates, ada):
         SUBSCRIPTIONS, {'client': ada.pk, 'plan': pilates.pk, 'start_date': '2026-04-01'}, format='json'
     )
 
-    assert clash.status_code == 400
+    assert (clash.status_code, clash.data['code']) == (400, 'subscription_overlap')
     assert after.status_code == 201
 
 
@@ -248,7 +249,7 @@ def test_an_archived_plan_cannot_be_picked(desk, studio, pilates, ada):
 
     res = api(desk, studio).post(SUBSCRIPTIONS, {'client': ada.pk, 'plan': pilates.pk}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'plan_archived')
 
 
 def test_subscriptions_are_listed_per_client(desk, studio, pilates, ada):
@@ -330,7 +331,7 @@ def test_a_never_paid_subscription_needs_an_explicit_end_date(desk, studio, pila
 
     res = api(desk, studio).post(sub_url(sub, 'end'), {}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'end_date_required')
 
 
 def test_a_subscription_cannot_end_before_it_starts(desk, studio, pilates, ada):
@@ -338,7 +339,20 @@ def test_a_subscription_cannot_end_before_it_starts(desk, studio, pilates, ada):
 
     res = api(desk, studio).post(sub_url(sub, 'end'), {'end_date': '2026-01-13'}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'end_before_start')
+
+
+def test_an_ended_subscription_cannot_end_or_change_plan_again(desk, studio, pilates, ada):
+    sub = Subscription.objects.create(
+        tenant=studio, client=ada, plan=pilates, start_date='2026-01-14', end_date='2026-02-13'
+    )
+    http = api(desk, studio)
+
+    ended = http.post(sub_url(sub, 'end'), {'end_date': '2026-03-13'}, format='json')
+    moved = http.post(sub_url(sub, 'change-plan'), {'plan': pilates.pk}, format='json')
+
+    assert (ended.status_code, ended.data['code']) == (409, 'subscription_ended')
+    assert (moved.status_code, moved.data['code']) == (409, 'subscription_ended')
 
 
 def test_ending_frees_the_client_for_a_new_subscription(desk, studio, pilates, ada):
@@ -399,4 +413,4 @@ def test_changing_to_an_archived_plan_is_rejected(desk, studio, pilates, ada):
 
     res = api(desk, studio).post(sub_url(sub, 'change-plan'), {'plan': old.pk}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'plan_archived')

@@ -267,6 +267,8 @@ REST_FRAMEWORK = {
     # Every list is paginated: an unbounded agenda or client list is a slow query
     # waiting for the first busy tenant. Responses become {count, next, previous,
     # results}.
+    # Lifts each error's code to a top-level `code` (apps/commons/errors.py).
+    'EXCEPTION_HANDLER': 'apps.commons.errors.exception_handler',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
     # OpenAPI 3 schema generation. The subclass documents the X-Tenant-ID header

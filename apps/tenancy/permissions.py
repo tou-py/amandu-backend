@@ -78,6 +78,7 @@ class IsTenantAdmin(BasePermission):
     """
 
     message = 'Requires a tenant owner or admin role.'
+    code = 'admin_required'
 
     def has_permission(self, request, view):
         membership = getattr(request, 'membership', None)
@@ -98,6 +99,7 @@ class IsTenantOwner(BasePermission):
     """
 
     message = 'Requires the tenant owner role.'
+    code = 'owner_required'
 
     def has_permission(self, request, view):
         membership = getattr(request, 'membership', None)
@@ -118,6 +120,7 @@ class IsTenantCoordinator(BasePermission):
     """
 
     message = 'Requires a tenant owner, admin or coordinator role.'
+    code = 'coordinator_required'
 
     def has_permission(self, request, view):
         membership = getattr(request, 'membership', None)

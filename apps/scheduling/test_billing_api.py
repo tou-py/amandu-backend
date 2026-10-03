@@ -178,7 +178,8 @@ def test_an_unpriced_turn_needs_an_amount(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada], price=None)
     http = api(owner, studio)
 
-    assert http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json').status_code == 400
+    res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    assert (res.status_code, res.data['code']) == (400, 'amount_required')
     assert http.post(
         charge_url(appointment), {'client': str(ada.pk), 'amount': 50000}, format='json'
     ).status_code == 201
@@ -191,7 +192,7 @@ def test_a_paid_attendee_cannot_be_charged_twice(owner, studio, teacher, ada):
 
     res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (409, 'already_paid')
     assert CashEntry.objects.count() == 1
 
 
@@ -200,7 +201,7 @@ def test_only_someone_on_the_roster_is_charged(owner, studio, teacher, ada, bob)
 
     res = api(owner, studio).post(charge_url(appointment), {'client': str(bob.pk)}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'not_an_attendee')
 
 
 def test_another_tenants_turn_cannot_be_charged(django_user_model, studio, gym, teacher, ada):
@@ -241,7 +242,7 @@ def test_front_desk_charges_but_cannot_void(django_user_model, studio, teacher, 
     res = http.post(void_url(CashEntry.objects.get(pk=paid.data['id'])), {'reason': 'x'}, format='json')
 
     assert paid.status_code == 201
-    assert res.status_code == 403
+    assert (res.status_code, res.data['code']) == (403, 'admin_required')
 
 
 def test_a_void_needs_a_reason(owner, studio, teacher, ada):
@@ -251,7 +252,7 @@ def test_a_void_needs_a_reason(owner, studio, teacher, ada):
 
     res = api(owner, studio).post(void_url(entry), {'reason': '  '}, format='json')
 
-    assert res.status_code == 400
+    assert (res.status_code, res.data['code']) == (400, 'blank')
     entry.refresh_from_db()
     assert entry.voided_at is None
 
@@ -262,7 +263,9 @@ def test_a_payment_is_voided_once(owner, studio):
         voided_at=timezone.now(),
     )
 
-    assert api(owner, studio).post(void_url(entry), {'reason': 'x'}, format='json').status_code == 400
+    res = api(owner, studio).post(void_url(entry), {'reason': 'x'}, format='json')
+
+    assert (res.status_code, res.data['code']) == (409, 'already_voided')
 
 
 def test_another_tenants_payment_cannot_be_voided(django_user_model, studio, gym):
@@ -334,6 +337,7 @@ def test_an_ended_subscription_has_only_so_many_periods(owner, studio, pilates, 
     res = api(owner, studio).post(client_url(ada, 'charge-periods'), {'count': 3}, format='json')
 
     assert res.status_code == 400
+    assert res.data['code'] == 'not_enough_periods'
     assert not CashEntry.objects.exists()
 
 
@@ -341,6 +345,7 @@ def test_a_client_without_a_plan_has_no_periods_to_charge(owner, studio, ada):
     res = api(owner, studio).post(client_url(ada, 'charge-periods'), {}, format='json')
 
     assert res.status_code == 400
+    assert res.data['code'] == 'not_enough_periods'
 
 
 def test_another_tenants_client_cannot_be_charged_periods(django_user_model, studio, gym, pilates, ada):
@@ -458,6 +463,17 @@ def test_a_subscribed_attendee_inside_the_quota_is_covered(owner, studio, teache
         'quota_used': 1, 'quota_total': 8,
         'payment_method': None, 'cash_entry': None,
     }
+
+
+def test_a_covered_attendee_has_nothing_to_charge(owner, studio, teacher, pilates, ada):
+    today = local_today(studio)
+    subscribe(ada, pilates, today)
+    appointment = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
+
+    res = api(owner, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
+    assert not CashEntry.objects.exists()
 
 
 def test_an_unlimited_plan_covers_without_a_total(owner, studio, teacher, ada):

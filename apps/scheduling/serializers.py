@@ -279,7 +279,7 @@ class TenantUniqueNameMixin:
 
         if others.exists():
             label = self.Meta.model._meta.verbose_name
-            raise serializers.ValidationError(f'A {label} with this name already exists.')
+            raise serializers.ValidationError(f'A {label} with this name already exists.', code='name_taken')
         return value
 
 
@@ -1131,7 +1131,7 @@ class PlanSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
 class PickablePlanMixin:
     def validate_plan(self, plan):
         if plan.archived:
-            raise serializers.ValidationError('This plan is archived and cannot be picked.')
+            raise serializers.ValidationError('This plan is archived and cannot be picked.', code='plan_archived')
         return plan
 
 
@@ -1178,7 +1178,8 @@ class SubscriptionSerializer(PickablePlanMixin, serializers.ModelSerializer):
         )
         if clash.exists():
             raise serializers.ValidationError(
-                'This client already has a subscription running in that time.'
+                'This client already has a subscription running in that time.',
+                code='subscription_overlap',
             )
         return attrs
 

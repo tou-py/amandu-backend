@@ -23,6 +23,7 @@ from rest_framework.views import APIView
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership, Notification
+from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
 from apps.scheduling.models import (
@@ -158,8 +159,8 @@ class ClientViewSet(TenantScopedModelViewSet):
         today = billing.local_today(request.tenant)
         periods = billing.periods_to_charge(client, body.validated_data['count'], today)
         if len(periods) < body.validated_data['count']:
-            raise ValidationError(
-                {'count': 'This client does not have that many periods left to pay.'}
+            raise Refused(
+                'This client does not have that many periods left to pay.', 'not_enough_periods'
             )
         entries = _file_payments([
             CashEntry(
@@ -378,7 +379,7 @@ class SubscriptionViewSet(
         except IntegrityError as exc:
             if 'one_open_subscription_per_client' not in str(exc):
                 raise
-            raise ValidationError('This client already has a subscription running in that time.')
+            raise Refused('This client already has a subscription running in that time.', 'subscription_overlap')
 
     @extend_schema(responses=DefaultStartSerializer)
     @action(detail=False, methods=['get'], url_path='default-start')
@@ -403,16 +404,16 @@ class SubscriptionViewSet(
         """
         subscription = self.get_object()
         if subscription.end_date is not None:
-            raise ValidationError('This subscription has already ended.')
+            raise Refused('This subscription has already ended.', 'subscription_ended', status.HTTP_409_CONFLICT)
         body = SubscriptionEndSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         end = body.validated_data.get('end_date') or billing.last_paid_end(subscription)
         if end is None:
-            raise ValidationError(
-                {'end_date': 'Nothing was ever paid on this subscription, so name its last day.'}
+            raise Refused(
+                'Nothing was ever paid on this subscription, so name its last day.', 'end_date_required'
             )
         if end < subscription.start_date:
-            raise ValidationError({'end_date': 'A subscription cannot end before it starts.'})
+            raise Refused('A subscription cannot end before it starts.', 'end_before_start')
         subscription.end_date = end
         subscription.save(update_fields=['end_date', 'updated_at'])
         return Response(self.get_serializer(subscription).data)
@@ -433,7 +434,7 @@ class SubscriptionViewSet(
         """
         subscription = self.get_object()
         if subscription.end_date is not None:
-            raise ValidationError('This subscription has already ended.')
+            raise Refused('This subscription has already ended.', 'subscription_ended', status.HTTP_409_CONFLICT)
         body = SubscriptionChangePlanSerializer(data=request.data, context={'request': request})
         body.is_valid(raise_exception=True)
         plan = body.validated_data['plan']
@@ -1054,17 +1055,19 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             None,
         )
         if link is None:
-            raise ValidationError({'client': 'That client is not in this appointment.'})
+            raise Refused('That client is not in this appointment.', 'not_an_attendee')
 
         state = billing.attendee_billing(link)
-        if state['state'] in (billing.State.PAID, billing.State.COVERED):
-            raise ValidationError(f"Nothing to charge: this attendee is {state['state']}.")
+        if state['state'] == billing.State.PAID:
+            raise AlreadyPaid()
+        if state['state'] == billing.State.COVERED:
+            raise Refused('Nothing to charge: this turn is covered by the plan.', 'covered_by_plan')
         # The billing amount is a default only for the states that charge the
         # turn itself; plan_owed's amount is the plan's debt, not this turn's.
         default = state['amount'] if state['state'] in (billing.State.CHARGE, billing.State.EXTRA) else None
         amount = body.validated_data.get('amount', default)
         if amount is None:
-            raise ValidationError({'amount': 'This turn has no price, so say how much was paid.'})
+            raise Refused('This turn has no price, so say how much was paid.', 'amount_required')
 
         (entry,) = _file_payments([
             CashEntry(

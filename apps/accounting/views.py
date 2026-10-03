@@ -1,11 +1,12 @@
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework import status
 from rest_framework.response import Response
 
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer, VoidSerializer
+from apps.commons.errors import Refused
 from apps.tenancy.permissions import IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
@@ -32,8 +33,9 @@ class CashEntryViewSet(TenantScopedModelViewSet):
         permissions = super().get_permissions()
         if self.action == 'void':
             # Taking money is easy and undoing it is controlled: anyone may
-            # charge, only owner/admin may reverse a charge.
-            permissions.append(IsTenantAdmin())
+            # charge, only owner/admin may reverse a charge. Ahead of the
+            # coordinator check, so staff are told `admin_required` too.
+            permissions.insert(-1, IsTenantAdmin())
         return permissions
 
     @extend_schema(request=VoidSerializer, responses=CashEntrySerializer)
@@ -48,7 +50,7 @@ class CashEntryViewSet(TenantScopedModelViewSet):
         body = VoidSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         if entry.voided_at is not None:
-            raise ValidationError('This payment is already void.')
+            raise Refused('This payment is already void.', 'already_voided', status.HTTP_409_CONFLICT)
         entry.voided_at = timezone.now()
         entry.voided_by = request.membership
         entry.void_reason = body.validated_data['reason']
