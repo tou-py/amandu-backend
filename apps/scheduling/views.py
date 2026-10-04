@@ -46,6 +46,8 @@ from apps.scheduling.serializers import (
     AppointmentSerializer,
     AttendanceSerializer,
     CategorySerializer,
+    ChargeAllResultSerializer,
+    ChargeAllSerializer,
     ChargePeriodsSerializer,
     ChargeTurnSerializer,
     ClientDetailSerializer,
@@ -114,6 +116,33 @@ def _file_payments(entries):
     return entries
 
 
+def _period_payment(request, client, period, body):
+    return CashEntry(
+        tenant=request.tenant,
+        kind=CashEntry.Kind.INCOME,
+        amount=period.amount,
+        occurred_on=body.get('occurred_on', billing.local_today(request.tenant)),
+        concept=billing.concept_for_period(client, period),
+        payment_method=body['payment_method'],
+        client=client,
+        subscription=period.subscription,
+        period=period.start,
+    )
+
+
+def _turn_payment(request, client, appointment, amount, body):
+    return CashEntry(
+        tenant=request.tenant,
+        kind=CashEntry.Kind.INCOME,
+        amount=amount,
+        occurred_on=body.get('occurred_on', billing.local_today(request.tenant)),
+        concept=billing.concept_for_turn(client, appointment),
+        payment_method=body['payment_method'],
+        appointment=appointment,
+        client=client,
+    )
+
+
 def _admin_only(request, what, code):
     """
     The price layers above a charge are the owner's (plan, override, service
@@ -172,20 +201,46 @@ class ClientViewSet(TenantScopedModelViewSet):
                 'This client does not have that many periods left to pay.', 'not_enough_periods'
             )
         entries = _file_payments([
-            CashEntry(
-                tenant=request.tenant,
-                kind=CashEntry.Kind.INCOME,
-                amount=period.amount,
-                occurred_on=body.validated_data.get('occurred_on', today),
-                concept=billing.concept_for_period(client, period),
-                payment_method=body.validated_data['payment_method'],
-                client=client,
-                subscription=period.subscription,
-                period=period.start,
-            )
-            for period in periods
+            _period_payment(request, client, period, body.validated_data) for period in periods
         ])
         return Response(CashEntrySerializer(entries, many=True).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=ChargeAllSerializer, responses={201: ChargeAllResultSerializer})
+    @action(detail=True, methods=['post'], url_path='charge-all')
+    def charge_all(self, request, pk=None):
+        """
+        "Cobrar todo": every owed period and every unpaid turn on the client
+        file's billing summary, in one go -- exactly its `total`, all of it or
+        none of it. Nothing owed is a 409 `nothing_to_charge`.
+
+        The client row is locked first, so a double tap waits for the first
+        charge and then finds nothing left; a period or turn charged from
+        another screen in between trips the payment constraints, and the whole
+        charge is refused as `already_paid`.
+        """
+        client = self.get_object()
+        body = ChargeAllSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        with transaction.atomic():
+            client = Client.objects.select_for_update().get(pk=client.pk)
+            summary = billing.billing_summary(client)
+            turns = Appointment.objects.select_related('service').in_bulk(
+                [turn['appointment'] for turn in summary['unpaid_turns']]
+            )
+            entries = [
+                _period_payment(request, client, period, body.validated_data)
+                for period in summary['owed_periods']
+            ] + [
+                _turn_payment(request, client, turns[turn['appointment']], turn['amount'], body.validated_data)
+                for turn in summary['unpaid_turns']
+            ]
+            if not entries:
+                raise Refused('This client owes nothing.', 'nothing_to_charge', status.HTTP_409_CONFLICT)
+            _file_payments(entries)
+        return Response(
+            ChargeAllResultSerializer({'entries': entries, 'total': summary['total']}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @extend_schema(responses=CashEntrySerializer(many=True))
     @action(detail=True, methods=['get'])
@@ -1085,16 +1140,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             raise Refused('This turn has no price, so say how much was paid.', 'amount_required')
 
         (entry,) = _file_payments([
-            CashEntry(
-                tenant=request.tenant,
-                kind=CashEntry.Kind.INCOME,
-                amount=amount,
-                occurred_on=body.validated_data.get('occurred_on', billing.local_today(request.tenant)),
-                concept=billing.concept_for_turn(link.client, appointment),
-                payment_method=body.validated_data['payment_method'],
-                appointment=appointment,
-                client=link.client,
-            )
+            _turn_payment(request, link.client, appointment, amount, body.validated_data)
         ])
         return Response(CashEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
 

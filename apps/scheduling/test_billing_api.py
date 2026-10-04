@@ -818,3 +818,86 @@ def test_receivables_are_isolated_per_tenant(django_user_model, studio, gym, pil
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
 
     assert api(outsider, gym).get(RECEIVABLES).data['rows'] == []
+
+
+# -- Cobrar todo ---------------------------------------------------------------
+
+
+def test_charge_all_settles_owed_periods_and_unpaid_turns_at_once(
+    staff, studio, teacher, pilates, ada, live_since_last_week
+):
+    today = local_today(studio)
+    subscribe(ada, pilates, add_months(today, -1), price_override=200000)
+    # A turn the plan does not cover: its category is not the plan's.
+    pilates.categories.add(Category.objects.create(tenant=studio, name='Pilates'))
+    massage = Category.objects.create(tenant=studio, name='Masajes')
+    extra = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=1)), category=massage)
+    http = api(staff, studio)
+
+    res = http.post(client_url(ada, 'charge-all'), {'payment_method': 'transfer'}, format='json')
+
+    assert res.status_code == 201
+    # Last month's and this month's period, then the turn.
+    assert res.data['total'] == 200000 + 200000 + 80000
+    assert [(e['period'], e['appointment']) for e in res.data['entries']] == [
+        (add_months(today, -1).isoformat(), None),
+        (add_months(add_months(today, -1), 1).isoformat(), None),
+        (None, extra.pk),
+    ]
+    assert {e['payment_method'] for e in res.data['entries']} == {'transfer'}
+    assert http.get(client_url(ada)).data['billing_summary']['total'] == 0
+
+
+def test_charge_all_twice_charges_once(owner, studio, pilates, ada):
+    subscribe(ada, pilates, local_today(studio))
+    http = api(owner, studio)
+
+    first = http.post(client_url(ada, 'charge-all'), {}, format='json')
+    second = http.post(client_url(ada, 'charge-all'), {}, format='json')
+
+    assert first.status_code == 201
+    assert (second.status_code, second.data['code']) == (409, 'nothing_to_charge')
+    assert CashEntry.objects.count() == 1
+
+
+def test_charge_all_files_everything_or_nothing(
+    monkeypatch, owner, studio, teacher, pilates, ada, live_since_last_week
+):
+    """Another receptionist charges the turn between the read and the write:
+    the whole charge is refused, this month's period included."""
+    from apps.scheduling import billing
+
+    today = local_today(studio)
+    subscribe(ada, pilates, today)
+    # The day before the plan starts, so the turn is charged on its own.
+    before = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=1)))
+    read = billing.billing_summary
+
+    def raced(client):
+        summary = read(client)
+        CashEntry.objects.create(
+            tenant=studio, kind='income', amount=1, occurred_on=today, concept='x',
+            appointment=before, client=ada,
+        )
+        return summary
+
+    monkeypatch.setattr(billing, 'billing_summary', raced)
+
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+
+    assert (res.status_code, res.data['code']) == (409, 'already_paid')
+    assert not CashEntry.objects.filter(period__isnull=False).exists()
+
+
+def test_charge_all_with_nothing_owed(owner, studio, ada):
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+
+    assert (res.status_code, res.data['code']) == (409, 'nothing_to_charge')
+
+
+def test_another_tenants_client_cannot_be_charged_all(django_user_model, studio, gym, pilates, ada):
+    subscribe(ada, pilates, local_today(studio))
+    outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
+
+    assert api(outsider, gym).post(client_url(ada, 'charge-all'), {}, format='json').status_code == 404
+    assert not CashEntry.objects.exists()

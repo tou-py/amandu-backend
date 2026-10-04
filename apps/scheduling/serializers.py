@@ -9,6 +9,7 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.accounting.models import CashEntry
+from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership
 from apps.scheduling import billing
 from apps.scheduling.models import (
@@ -1209,7 +1210,23 @@ class DefaultStartSerializer(serializers.Serializer):
     start_date = serializers.DateField()
 
 
-class ChargePeriodsSerializer(serializers.Serializer):
+class ChargeAllSerializer(serializers.Serializer):
+    """Body of "Cobrar todo": only how the money arrived and when."""
+
+    payment_method = serializers.ChoiceField(
+        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
+    )
+    # The day the money arrived. Omitted, today in the business's calendar.
+    occurred_on = serializers.DateField(required=False)
+
+
+class ChargeAllResultSerializer(serializers.Serializer):
+    # Periods oldest first, then turns oldest first.
+    entries = CashEntrySerializer(many=True)
+    total = serializers.IntegerField()
+
+
+class ChargePeriodsSerializer(ChargeAllSerializer):
     """
     Body of charging plan periods: how many, oldest owed first and on into the
     future if the client pays ahead. Each period is charged at its own
@@ -1219,11 +1236,6 @@ class ChargePeriodsSerializer(serializers.Serializer):
     # Two years ahead is already a client paying for something nobody can
     # promise; past that it is a typo.
     count = serializers.IntegerField(min_value=1, max_value=24, default=1)
-    payment_method = serializers.ChoiceField(
-        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
-    )
-    # The day the money arrived. Omitted, today in the business's calendar.
-    occurred_on = serializers.DateField(required=False)
 
 
 class ChargeTurnSerializer(serializers.Serializer):
