@@ -220,6 +220,18 @@ def test_only_someone_on_the_roster_is_charged(owner, studio, teacher, ada, bob)
     assert (res.status_code, res.data['code']) == (400, 'not_an_attendee')
 
 
+@pytest.mark.parametrize('status', ['cancelled', 'pending'])
+def test_a_cancelled_or_pending_turn_cannot_be_charged(owner, studio, teacher, ada, status):
+    """Nothing happened (or nobody accepted it yet), so there is nothing to pay for."""
+    appointment = turn(studio, teacher, [ada])
+    Appointment.objects.filter(pk=appointment.pk).update(status=status)
+
+    res = api(owner, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert (res.status_code, res.data['code']) == (409, 'turn_not_chargeable')
+    assert not CashEntry.objects.exists()
+
+
 def test_another_tenants_turn_cannot_be_charged(django_user_model, studio, gym, teacher, ada):
     appointment = turn(studio, teacher, [ada])
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]

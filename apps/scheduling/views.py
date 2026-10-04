@@ -1108,13 +1108,18 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         counter typed another.
 
         Refused for an attendee who is covered by a plan or has already paid --
-        the two states with nothing to charge.
+        the two states with nothing to charge -- and for a turn that is
+        cancelled or still a pending request, which nobody owes anything for.
 
         Any member may charge, whoever's turn it is: looked up through the
         tenant's agenda and not get_object(), whose object permission would stop
         a stylist taking money for a colleague's client at the till.
         """
         appointment = get_object_or_404(self.get_queryset(), pk=pk)
+        if appointment.status in (Appointment.Status.CANCELLED, Appointment.Status.PENDING):
+            raise Refused(
+                'Only a booked turn can be charged.', 'turn_not_chargeable', status.HTTP_409_CONFLICT
+            )
         body = ChargeTurnSerializer(data=request.data)
         body.is_valid(raise_exception=True)
 
