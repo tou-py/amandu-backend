@@ -531,14 +531,40 @@ def test_a_client_who_owes_a_past_period_shows_it_on_any_turn(owner, studio, tea
 
 
 def test_a_paid_turn_wins_over_a_plan_debt(owner, studio, teacher, pilates, ada):
-    subscribe(ada, pilates, add_months(local_today(studio), -1))
-    appointment = turn(studio, teacher, [ada])
+    start = add_months(local_today(studio), -1)
+    subscribe(ada, pilates, start)
+    # Before the plan, so the turn itself is charged.
+    appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
     http = api(owner, studio)
 
     res = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 80000}, format='json')
 
     assert res.status_code == 201
     assert billing_of(http, appointment)['Ada']['state'] == 'paid'
+
+
+def test_a_covered_turn_is_not_charged_while_the_month_is_owed(staff, studio, teacher, pilates, ada):
+    """Paying the month settles it; taking money for the turn would charge twice."""
+    subscribe(ada, pilates, add_months(local_today(studio), -1))
+    appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
+
+    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
+
+    assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
+    assert not CashEntry.objects.exists()
+
+
+def test_a_turn_charged_while_the_month_is_owed_defaults_to_its_price(staff, studio, teacher, pilates, ada):
+    start = add_months(local_today(studio), -1)
+    subscribe(ada, pilates, start)
+    appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
+    http = api(staff, studio)
+
+    edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
+    priced = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert (edited.status_code, edited.data['code']) == (403, 'amount_edit_forbidden')
+    assert (priced.status_code, priced.data['amount']) == (201, 80000)
 
 
 def test_voiding_a_period_payment_brings_the_debt_back(owner, studio, teacher, pilates, ada):

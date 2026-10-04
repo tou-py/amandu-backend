@@ -1133,11 +1133,14 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         state = billing.attendee_billing(link)
         if state['state'] == billing.State.PAID:
             raise AlreadyPaid()
+        if state['state'] == billing.State.PLAN_OWED:
+            # plan_owed's amount is the plan's debt, not this turn's: judge the
+            # turn on itself, so a covered one is settled by paying the month.
+            state = billing._turn_state(link)
         if state['state'] == billing.State.COVERED:
             raise Refused('Nothing to charge: this turn is covered by the plan.', 'covered_by_plan')
-        # The billing amount is a default only for the states that charge the
-        # turn itself; plan_owed's amount is the plan's debt, not this turn's.
-        default = state['amount'] if state['state'] in (billing.State.CHARGE, billing.State.EXTRA) else None
+        # charge and extra carry the turn's price; no_price has none.
+        default = state.get('amount')
         amount = body.validated_data.get('amount', default)
         if default is not None and amount != default:
             _admin_only(request, 'edit the amount', 'amount_edit_forbidden')
