@@ -413,8 +413,12 @@ def billing_summary(client):
     if subscription is not None:
         k = max(period_index(subscription, today), 0)
         # Every booked turn in the period, past and future: the booking holds
-        # the quota, the same count that numbers each turn "5 de 8".
-        used = len(_counted(client, subscription, k))
+        # the quota, the same count that numbers each turn "5 de 8". So what is
+        # left is what can still be BOOKED ("quedan 3"), and `booked_ahead` is
+        # how much of `used` has not happened yet ("2 reservadas").
+        counted = _counted(client, subscription, k)
+        used = len(counted)
+        now = timezone.now()
         total = subscription.plan.sessions_per_period
         current = {
             'id': subscription.id,
@@ -430,6 +434,7 @@ def billing_summary(client):
                 'name': MONTH_NAMES[period_start(subscription, k).month - 1],
             },
             'sessions_used': used,
+            'booked_ahead': sum(1 for link in counted if link.appointment.start > now),
             'sessions_total': total,
             'sessions_left': None if total is None else max(total - used, 0),
         }

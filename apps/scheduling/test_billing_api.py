@@ -695,6 +695,23 @@ def test_the_client_file_counts_the_sessions_booked_in_the_period(owner, studio,
     assert (current['sessions_used'], current['sessions_total'], current['sessions_left']) == (3, 8, 5)
 
 
+def test_sessions_left_is_what_can_still_be_booked(owner, studio, teacher, pilates, ada):
+    """Quedan N = quota - (turns already had + turns booked ahead) in the
+    period: a no-show still spent its session, a cancelled one gave it back."""
+    today = local_today(studio)
+    subscribe(ada, pilates, today - timedelta(days=5))
+    turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=3)))  # attended
+    no_show = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=2)))
+    AppointmentClient.objects.filter(appointment=no_show).update(attendance='no_show')
+    cancelled = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
+    Appointment.objects.filter(pk=cancelled.pk).update(status='cancelled')
+    turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=2)))  # booked ahead
+
+    current = api(owner, studio).get(client_url(ada)).data['billing_summary']['subscription']
+
+    assert (current['sessions_used'], current['booked_ahead'], current['sessions_left']) == (3, 1, 5)
+
+
 @pytest.fixture
 def live_since_last_week(settings, studio):
     settings.BILLING_GO_LIVE = local_today(studio) - timedelta(days=7)

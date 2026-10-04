@@ -459,8 +459,12 @@ class CurrentSubscriptionSerializer(serializers.Serializer):
     end_date = serializers.DateField(allow_null=True)
     # The period running today, or the first one if the plan has not started.
     current_period = PeriodRangeSerializer()
+    # Turns in the period, had AND booked ahead (no-shows in, cancelled out).
     sessions_used = serializers.IntegerField()
-    # Both null on an unlimited plan.
+    # How many of `sessions_used` are still to come.
+    booked_ahead = serializers.IntegerField()
+    # Both null on an unlimited plan. sessions_left = total - sessions_used:
+    # what can still be booked.
     sessions_total = serializers.IntegerField(allow_null=True)
     sessions_left = serializers.IntegerField(allow_null=True)
 
