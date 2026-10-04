@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
@@ -429,6 +430,29 @@ def test_changing_plan_takes_effect_from_the_next_period_and_keeps_the_anchor(
     # The old row keeps its own price, so the periods it priced are untouched.
     assert sub.price == 200000
     assert res.data['price'] == 400000
+
+
+def test_changing_plan_through_a_short_month_keeps_the_anchor(monkeypatch, desk, studio, pilates, ada):
+    """An anchor of 31 that changes plan into February lands on the 28th and
+    comes back to the 31st, instead of re-anchoring on the 28th for good."""
+    def today_is(day):
+        moment = datetime.combine(day, time(12), tzinfo=ZoneInfo(studio.timezone))
+        monkeypatch.setattr('django.utils.timezone.now', lambda: moment)
+
+    libre = Plan.objects.create(tenant=studio, name='Libre', price=400000)
+    sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2025-12-31')
+    today_is(date(2026, 1, 31))
+    http = api(desk, studio)
+    http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk}, format='json')
+
+    today_is(date(2026, 5, 15))
+    owed = http.get(reverse('scheduling:client-detail', args=[ada.pk])).data['billing_summary']['owed_periods']
+
+    assert [(p['start'], p['end'], p['amount']) for p in owed[2:]] == [
+        ('2026-02-28', '2026-03-30', 400000),
+        ('2026-03-31', '2026-04-29', 400000),
+        ('2026-04-30', '2026-05-30', 400000),
+    ]
 
 
 def test_changing_plan_before_the_start_just_swaps_it(desk, studio, pilates, ada):

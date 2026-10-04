@@ -55,12 +55,10 @@ class Subscription(TenantOwnedMixin, TimestampMixin):
     A client on a plan, from a start date to (maybe) an end date.
 
     The start date's day of the month IS the anchor every period is counted
-    from (see apps/scheduling/billing.py). There is no separate anchor field on
-    purpose: two fields that must agree are two fields that eventually do not.
-    That is also why a subscription is never edited into another plan --
-    changing plan ends this row on the last day of its current period and opens
-    a new one the next day, so the anchor carries over and the periods already
-    owed or paid keep the price they had.
+    from (see apps/scheduling/billing.py), unless `anchor_day` says otherwise.
+    A subscription is never edited into another plan: changing plan ends this
+    row after its current (or last paid) period and opens a new one the next
+    day, so the periods already owed or paid keep the price they had.
 
     Nothing here says whether the client is up to date. Coverage and debt are
     computed from this row and the cash book every time they are asked, never
@@ -90,6 +88,9 @@ class Subscription(TenantOwnedMixin, TimestampMixin):
     # The LAST DAY covered, inclusive. NULL is open: the plan runs until somebody
     # ends it, which is a deliberate act, never a sweep.
     end_date = models.DateField(null=True, blank=True)
+    # Only set by a plan change: a successor that opens on a clamped day (Feb
+    # 28th for an anchor of 31) keeps the original anchor. NULL is start_date.day.
+    anchor_day = models.PositiveSmallIntegerField(null=True, blank=True)
 
     class Meta:
         db_table = 'tb_subscription'

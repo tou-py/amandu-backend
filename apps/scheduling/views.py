@@ -524,6 +524,7 @@ class SubscriptionViewSet(
                 plan=plan,
                 price_override=override,
                 start_date=billing.period_start(subscription, k + 1),
+                anchor_day=subscription.anchor_day or subscription.start_date.day,
             )
 
         successor = self._save_or_conflict(swap)

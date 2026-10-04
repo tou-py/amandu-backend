@@ -33,6 +33,7 @@ attendee: everything below reads a client through `client_prefetches()`, which
 a list view prefetches once per page and a single call loads on demand.
 """
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, timedelta
 from itertools import islice
@@ -119,7 +120,11 @@ def default_start_date(tenant, today=None):
 
 
 def period_start(subscription, k):
-    return add_months(subscription.start_date, k)
+    start = add_months(subscription.start_date, k)
+    if subscription.anchor_day is None:
+        return start
+    # A plan change opened this row on a clamped day; the periods keep the anchor.
+    return start.replace(day=min(subscription.anchor_day, monthrange(start.year, start.month)[1]))
 
 
 def period_end(subscription, k):
