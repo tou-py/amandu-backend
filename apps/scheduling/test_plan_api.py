@@ -364,6 +364,21 @@ def test_ending_with_a_chosen_date(desk, studio, pilates, ada):
     assert res.data['end_date'] == '2026-08-31'
 
 
+def test_ending_cannot_cut_off_paid_periods(desk, studio, pilates, ada):
+    sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
+    sub.cash_entries.create(
+        tenant=studio, kind='income', amount=1, occurred_on='2026-01-14', concept='x',
+        client=ada, period='2026-02-14',
+    )
+    http = api(desk, studio)
+
+    cut = http.post(sub_url(sub, 'end'), {'end_date': '2026-03-12'}, format='json')
+    kept = http.post(sub_url(sub, 'end'), {'end_date': '2026-03-13'}, format='json')
+
+    assert (cut.status_code, cut.data['code']) == (409, 'prepaid_periods')
+    assert kept.status_code == 200
+
+
 def test_a_never_paid_subscription_needs_an_explicit_end_date(desk, studio, pilates, ada):
     sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
 
@@ -430,6 +445,32 @@ def test_changing_plan_takes_effect_from_the_next_period_and_keeps_the_anchor(
     # The old row keeps its own price, so the periods it priced are untouched.
     assert sub.price == 200000
     assert res.data['price'] == 400000
+
+
+def client_url(client, name):
+    return reverse(f'scheduling:client-{name}', args=[client.pk])
+
+
+@pytest.mark.parametrize('months_ago', [2, -1])
+def test_changing_plan_starts_the_new_plan_at_the_first_unpaid_period(desk, studio, pilates, ada, months_ago):
+    """Paid ahead (also on a plan not started yet): the paid periods stay on
+    the old plan at the price paid, and nothing is charged twice."""
+    start = add_months(local_today(studio), -months_ago)
+    libre = Plan.objects.create(tenant=studio, name='Libre', price=400000)
+    sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date=start)
+    http = api(desk, studio)
+    paid = months_ago + 3 if months_ago > 0 else 2
+    http.post(client_url(ada, 'charge-periods'), {'count': paid}, format='json')
+
+    res = http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk}, format='json')
+    next_charge = http.post(client_url(ada, 'charge-periods'), {}, format='json')
+
+    sub.refresh_from_db()
+    assert sub.end_date == add_months(start, paid) - timedelta(days=1)
+    assert res.data['start_date'] == add_months(start, paid).isoformat()
+    assert [(e['period'], e['amount']) for e in next_charge.data] == [
+        (add_months(start, paid).isoformat(), 400000)
+    ]
 
 
 def test_changing_plan_through_a_short_month_keeps_the_anchor(monkeypatch, desk, studio, pilates, ada):

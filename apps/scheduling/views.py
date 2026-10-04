@@ -195,14 +195,18 @@ class ClientViewSet(TenantScopedModelViewSet):
         body = ChargePeriodsSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         today = billing.local_today(request.tenant)
-        periods = billing.periods_to_charge(client, body.validated_data['count'], today)
-        if len(periods) < body.validated_data['count']:
-            raise Refused(
-                'This client does not have that many periods left to pay.', 'not_enough_periods'
-            )
-        entries = _file_payments([
-            _period_payment(request, client, period, body.validated_data) for period in periods
-        ])
+        with transaction.atomic():
+            # Locked like charge-all, so a plan change or an end cannot move the
+            # subscription's dates between reading its periods and paying them.
+            client = Client.objects.select_for_update().get(pk=client.pk)
+            periods = billing.periods_to_charge(client, body.validated_data['count'], today)
+            if len(periods) < body.validated_data['count']:
+                raise Refused(
+                    'This client does not have that many periods left to pay.', 'not_enough_periods'
+                )
+            entries = _file_payments([
+                _period_payment(request, client, period, body.validated_data) for period in periods
+            ])
         return Response(CashEntrySerializer(entries, many=True).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(request=ChargeAllSerializer, responses={201: ChargeAllResultSerializer})
@@ -458,49 +462,67 @@ class SubscriptionViewSet(
         """
         return Response(DefaultStartSerializer({'start_date': billing.default_start_date(request.tenant)}).data)
 
+    def _locked(self):
+        """
+        This subscription, read under its client's row lock -- the lock
+        charge-periods and charge-all take -- so a payment cannot land between
+        reading what is paid and moving the end date. Call inside atomic().
+        """
+        subscription = self.get_object()
+        Client.objects.select_for_update().get(pk=subscription.client_id)
+        subscription.refresh_from_db()
+        if subscription.end_date is not None:
+            raise Refused('This subscription has already ended.', 'subscription_ended', status.HTTP_409_CONFLICT)
+        return subscription
+
     @extend_schema(request=SubscriptionEndSerializer, responses=SubscriptionSerializer)
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def end(self, request, pk=None):
         """
         Stop a running subscription. `end_date` is the last day covered; left
         out, it is the last day of the last paid period, so ending a plan the
         client stopped paying does not invent the months since as debt. A
         subscription nothing was ever paid on has no such day, and needs one
-        named.
+        named. A day before that one would drop periods already paid for, and
+        is refused as `prepaid_periods`.
         """
-        subscription = self.get_object()
-        if subscription.end_date is not None:
-            raise Refused('This subscription has already ended.', 'subscription_ended', status.HTTP_409_CONFLICT)
+        subscription = self._locked()
         body = SubscriptionEndSerializer(data=request.data)
         body.is_valid(raise_exception=True)
-        end = body.validated_data.get('end_date') or billing.last_paid_end(subscription)
+        paid_end = billing.last_paid_end(subscription)
+        end = body.validated_data.get('end_date') or paid_end
         if end is None:
             raise Refused(
                 'Nothing was ever paid on this subscription, so name its last day.', 'end_date_required'
             )
         if end < subscription.start_date:
             raise Refused('A subscription cannot end before it starts.', 'end_before_start')
+        if paid_end is not None and end < paid_end:
+            raise Refused(
+                'That would cut off periods already paid for.', 'prepaid_periods', status.HTTP_409_CONFLICT
+            )
         subscription.end_date = end
         subscription.save(update_fields=['end_date', 'updated_at'])
         return Response(self.get_serializer(subscription).data)
 
     @extend_schema(request=SubscriptionChangePlanSerializer, responses={201: SubscriptionSerializer})
     @action(detail=True, methods=['post'], url_path='change-plan')
+    @transaction.atomic
     def change_plan(self, request, pk=None):
         """
-        Move the client to another plan from their NEXT period.
+        Move the client to another plan from their first UNPAID period.
 
-        This subscription ends on the last day of the period running today and
-        a new one opens the day after, so the anchor carries over and every
-        period up to now keeps the plan and the price it had. A subscription
-        that has not started yet has no past to protect, so its plan is simply
-        swapped.
+        This subscription ends on the last day of the period running today, or
+        of the last paid period if that is later, and a new one opens the day
+        after with the same anchor. So every period up to now, and every one
+        paid ahead, keeps the plan and the price it was paid at. A subscription
+        that has not started and has nothing paid has no past to protect, so
+        its plan is simply swapped.
 
-        Answers with the subscription that now runs from the next period.
+        Answers with the subscription that now runs from that period.
         """
-        subscription = self.get_object()
-        if subscription.end_date is not None:
-            raise Refused('This subscription has already ended.', 'subscription_ended', status.HTTP_409_CONFLICT)
+        subscription = self._locked()
         body = SubscriptionChangePlanSerializer(data=request.data, context={'request': request})
         body.is_valid(raise_exception=True)
         plan = body.validated_data['plan']
@@ -509,21 +531,24 @@ class SubscriptionViewSet(
             _admin_only(request, 'override the price', 'price_override_forbidden')
         today = billing.local_today(request.tenant)
 
+        end = billing.last_paid_end(subscription)
         k = billing.period_index(subscription, today)
-        if k < 0:
+        if k >= 0:
+            end = max(filter(None, (end, billing.period_end(subscription, k))))
+        if end is None:
             subscription.plan, subscription.price_override = plan, override
             subscription.save(update_fields=['plan', 'price_override', 'updated_at'])
             return Response(self.get_serializer(subscription).data, status=status.HTTP_201_CREATED)
 
         def swap():
-            subscription.end_date = billing.period_end(subscription, k)
+            subscription.end_date = end
             subscription.save(update_fields=['end_date', 'updated_at'])
             return Subscription.objects.create(
                 tenant=request.tenant,
                 client=subscription.client,
                 plan=plan,
                 price_override=override,
-                start_date=billing.period_start(subscription, k + 1),
+                start_date=end + timedelta(days=1),
                 anchor_day=subscription.anchor_day or subscription.start_date.day,
             )
 
