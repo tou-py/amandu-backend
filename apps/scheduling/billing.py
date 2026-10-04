@@ -20,9 +20,10 @@ start date through add_months, never from the previous period, so an anchor of
 them instead of drifting. A period is named after the month it starts in, and a
 cash entry pays it by carrying its start date in `CashEntry.period`.
 
-Quota. Within one period of a subscription, the client's non-cancelled turns
-in the plan's categories are ordered by start time; the first N are covered and
-the rest are extra. No-shows count, because the booking held the slot. The
+Quota. Within one period of a subscription, the client's turns in the plan's
+categories (not cancelled, not a pending request) are ordered by start time;
+the first N are covered and the rest are extra. No-shows count, because the
+booking held the slot. The
 order is total (start, then id), so the same turn always gets the same answer --
 and booking a turn earlier in the period can push a later one into extra, which
 is the honest reading of "8 per month".
@@ -168,7 +169,8 @@ def client_prefetches(path=''):
         Prefetch(
             f'{path}appointment_links',
             queryset=AppointmentClient.objects
-            .exclude(appointment__status=Appointment.Status.CANCELLED)
+            # A pending public request is not a turn until the shop accepts it.
+            .exclude(appointment__status__in=(Appointment.Status.CANCELLED, Appointment.Status.PENDING))
             # Only the turns a rule can still ask about: from the first
             # subscription (the quota) or the go-live cutoff (unpaid turns),
             # whichever is earlier, less a day so a business east of UTC does not
@@ -272,7 +274,8 @@ def _covered_categories(subscription):
 def _counted(client, subscription, k):
     """
     The client's turns that count against period k of `subscription`.
-    Cancelled ones are already out (client_prefetches); no-shows stay in.
+    Cancelled ones and pending requests are already out (client_prefetches);
+    no-shows stay in.
     """
     start, end = period_start(subscription, k), period_end(subscription, k)
     categories = _covered_categories(subscription)
@@ -383,7 +386,8 @@ def _unpaid_turns(client, tenant):
     The client's past turns nobody paid for that the turn itself charges for
     (charge or extra), oldest first. Only from the go-live cutoff: history from
     before per-turn charging existed was never meant to be collected, and would
-    flood Por cobrar with debts nobody can reconstruct.
+    flood Por cobrar with debts nobody can reconstruct. A no-show spent its
+    quota but is not chased as a per-turn charge.
     """
     now = timezone.now()
     turns = []
@@ -391,7 +395,7 @@ def _unpaid_turns(client, tenant):
         appointment = link.appointment
         if appointment.start >= now or _day(appointment.start, tenant) < settings.BILLING_GO_LIVE:
             continue
-        if _payment(link) is not None:
+        if _payment(link) is not None or link.attendance == AppointmentClient.Attendance.NO_SHOW:
             continue
         state = _turn_state(link)
         if state['state'] in (State.CHARGE, State.EXTRA):

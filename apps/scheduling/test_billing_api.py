@@ -774,6 +774,34 @@ def test_unpaid_past_turns_since_go_live_are_owed(owner, studio, teacher, ada, l
     assert summary['total'] == 80000
 
 
+def test_pending_requests_and_no_shows_are_not_unpaid_turns(owner, studio, teacher, ada, live_since_last_week):
+    """A request nobody accepted is not a turn; a no-show is not charged per turn."""
+    today = local_today(studio)
+    pending = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=2)))
+    Appointment.objects.filter(pk=pending.pk).update(status='pending')
+    no_show = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=3)))
+    AppointmentClient.objects.filter(appointment=no_show).update(attendance='no_show')
+
+    summary = api(owner, studio).get(client_url(ada)).data['billing_summary']
+
+    assert (summary['unpaid_turns'], summary['total']) == ([], 0)
+
+
+def test_a_pending_request_does_not_use_the_quota(owner, studio, teacher, ada):
+    duo = Plan.objects.create(tenant=studio, name='Duo', price=100000, sessions_per_period=2)
+    today = local_today(studio)
+    subscribe(ada, duo, today)
+    tomorrow = today + timedelta(days=1)
+    pending = turn(studio, teacher, [ada], start=at(studio, tomorrow, 10))
+    Appointment.objects.filter(pk=pending.pk).update(status='pending')
+    turn(studio, teacher, [ada], start=at(studio, tomorrow, 11))
+    second = turn(studio, teacher, [ada], start=at(studio, tomorrow, 12))
+    http = api(owner, studio)
+
+    assert billing_of(http, second)['Ada']['state'] == 'covered'
+    assert http.get(client_url(ada)).data['billing_summary']['subscription']['sessions_used'] == 2
+
+
 def test_a_turn_attended_while_owing_is_settled_by_paying_the_month(
     owner, studio, teacher, pilates, ada, live_since_last_week
 ):
