@@ -10,7 +10,7 @@ everywhere (ports, regions, timeouts) carry a default.
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 import environ
 
@@ -345,11 +345,3 @@ EMAIL_TIMEOUT = 10  # seconds
 INVITATION_ACCEPT_URL = env.str(
     'INVITATION_ACCEPT_URL', default='http://localhost:3000/invitations/accept'
 )
-
-# The day per-turn charging went live (the deploy of monthly plans). A turn
-# before it is never reported unpaid: nobody was asked to charge it then, and
-# Por cobrar would otherwise open on years of "debts" nobody can reconstruct.
-# A setting, not a database field, because it is one fact about this
-# deployment, set once and never edited from a screen; the env var exists only
-# so a fresh install can start from its own first day.
-BILLING_GO_LIVE = date.fromisoformat(env.str('BILLING_GO_LIVE', default='2026-10-02'))
