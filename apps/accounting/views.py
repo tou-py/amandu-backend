@@ -1,6 +1,13 @@
+from django.utils import timezone
+from drf_spectacular.utils import extend_schema
+from rest_framework.decorators import action
+from rest_framework import status
+from rest_framework.response import Response
+
 from apps.accounting.models import CashEntry
-from apps.accounting.serializers import CashEntrySerializer
-from apps.tenancy.permissions import IsTenantCoordinator
+from apps.accounting.serializers import CashEntrySerializer, VoidSerializer
+from apps.commons.errors import Refused
+from apps.tenancy.permissions import IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -21,3 +28,34 @@ class CashEntryViewSet(TenantScopedModelViewSet):
     # Filing a movement is an act of the day, so the front desk may do it, not
     # only the people who own the shop's figures.
     permission_classes = (*TenantScopedModelViewSet.permission_classes, IsTenantCoordinator)
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.tenant, recorded_by=self.request.user)
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.action == 'void':
+            # Taking money is easy and undoing it is controlled: anyone may
+            # charge, only owner/admin may reverse a charge. Ahead of the
+            # coordinator check, so staff are told `admin_required` too.
+            permissions.insert(-1, IsTenantAdmin())
+        return permissions
+
+    @extend_schema(request=VoidSerializer, responses=CashEntrySerializer)
+    @action(detail=True, methods=['post'])
+    def void(self, request, pk=None):
+        """
+        Reverse a payment, with a reason. The entry stays in the book, marked;
+        from now on it counts for nothing -- not as cover, not against debt, not
+        in totals -- and the period or turn it paid can be charged again.
+        """
+        entry = self.get_object()
+        body = VoidSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        if entry.voided_at is not None:
+            raise Refused('This payment is already void.', 'already_voided', status.HTTP_409_CONFLICT)
+        entry.voided_at = timezone.now()
+        entry.voided_by = request.membership
+        entry.void_reason = body.validated_data['reason']
+        entry.save(update_fields=['voided_at', 'voided_by', 'void_reason', 'updated_at'])
+        return Response(self.get_serializer(entry).data)

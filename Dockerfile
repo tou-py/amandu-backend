@@ -66,7 +66,7 @@ COPY . .
 # never reach the final image: nothing is read from them but the static config.
 RUN SECRET_KEY=build ALLOWED_HOSTS=build POSTGRES_DB=build POSTGRES_USER=build POSTGRES_PASSWORD=build \
     POSTGRES_HOST=build POSTGRES_PORT=5432 REDIS_URL=redis://build:6379/0 \
-    CORS_ALLOWED_ORIGINS=http://build \
+    CORS_ALLOWED_ORIGINS=http://build BILLING_GO_LIVE=2000-01-01 \
     python manage.py collectstatic --noinput
 
 # --chmod: the exec bit is set here rather than relying on the one git recorded,

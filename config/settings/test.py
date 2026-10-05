@@ -11,6 +11,7 @@ So `docker compose up -d db` is now a prerequisite for running the tests.
 """
 
 import os
+from datetime import date
 
 # base.py requires all of these from the environment. Redis is replaced below, so a
 # placeholder is enough for it. The POSTGRES_* variables are deliberately NOT here:
@@ -41,3 +42,6 @@ STORAGES = {
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+
+# Required in production (see production.py). Tests that depend on it set their own.
+BILLING_GO_LIVE = date(2026, 10, 2)

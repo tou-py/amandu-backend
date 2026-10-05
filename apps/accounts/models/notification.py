@@ -35,6 +35,12 @@ class Notification(models.Model):
         # missed message, it is an hour of the diary nobody can sell and a
         # person who never got an answer.
         APPOINTMENT_REQUESTED = 'appointment_requested', 'Appointment requested'
+        # The morning summary of who owes (send_reminders). No actor and no
+        # appointment: it is about the whole business. It carries no counts of
+        # its own on purpose -- they would be stale by the time the bell is
+        # opened -- so tapping it opens Por cobrar, which is always current.
+        # Only the push, built at send time, spells the figures out.
+        PLAN_DIGEST = 'plan_digest', 'Plan digest'
 
     recipient = models.ForeignKey(
         'accounts.Membership',
