@@ -616,3 +616,37 @@ def test_enrolling_somebody_already_in_the_class_does_not_duplicate_them(
     assert res.data['skipped'] == []
     assert len(res.data['joined']) == 4
     assert all(a.client_links.count() == 1 for a in Appointment.objects.all())
+
+
+def test_reschedule_following_leaves_a_marked_occurrence_where_it_was(
+    receptionist, studio, teacher, reformer, ada
+):
+    """A turn with attendance marked already happened where it says it did."""
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    first = Appointment.objects.order_by('start')[0]
+    first.client_links.update(attendance='attended')
+
+    res = http.post(action_url(first, 'reschedule-following'), {'time': '19:30'}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['skipped'] == [local(first).date().isoformat()]
+    first.refresh_from_db()
+    assert local(first).strftime('%H:%M') == '07:00'
+
+
+def test_cancel_following_leaves_a_marked_occurrence_standing(
+    receptionist, studio, teacher, reformer, ada
+):
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    first, second = Appointment.objects.order_by('start')[:2]
+    first.client_links.update(attendance='attended')
+
+    res = http.post(action_url(first, 'cancel-following'), {}, format='json')
+
+    assert res.status_code == 200
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.status == Appointment.Status.SCHEDULED
+    assert second.status == Appointment.Status.CANCELLED

@@ -427,10 +427,14 @@ class BillingSerializer(serializers.Serializer):
                  category is not included, and the service has a price
       charge     nothing covers it and the service has a price
       no_price   nothing covers it and the service has no price
+      no_show    the attendee did not come and would otherwise be extra,
+                 charge or no_price: owes nothing, but the turn can still be
+                 charged on purpose (the shop bills absences)
 
     `amount` is what the action charges: the payment for `paid`, the owed
     periods' total for `plan_owed`, the service price for `extra`/`charge`,
-    null for `covered`/`no_price`. The other fields are label data and are only
+    null for `covered`/`no_price`; for `no_show`, the price charging the
+    absence would take (null if the service has none). The other fields are label data and are only
     filled for the state that uses them.
     """
 

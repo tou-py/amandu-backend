@@ -967,3 +967,79 @@ def test_another_tenants_client_cannot_be_charged_all(django_user_model, studio,
 
     assert api(outsider, gym).post(client_url(ada, 'charge-all'), {}, format='json').status_code == 404
     assert not CashEntry.objects.exists()
+
+
+# -- What the cash book line says, and who filed it ----------------------------
+
+
+def named(user, first, last):
+    user.first_name, user.last_name = first, last
+    user.save()
+    return user
+
+
+def test_a_turn_charge_names_the_turn_and_who_charged_it(staff, studio, teacher, ada):
+    named(teacher.user, 'Julián', 'Ferreyra')
+    named(staff, 'Lucía', 'Gómez')
+    # Monday 5 October, 13:00 on the business's wall clock.
+    appointment = turn(studio, teacher, [ada], start=at(studio, date(2026, 10, 5), 13))
+    Service.objects.filter(pk=appointment.service_id).update(name='Corte y peinado')
+
+    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert res.data['concept'] == 'Turno · Corte y peinado · Ada · lun 5/10 13:00 · con Julián Ferreyra'
+    assert res.data['recorded_by_name'] == 'Lucía Gómez'
+
+
+def test_a_period_charge_names_the_plan_and_the_range(staff, studio, ada):
+    plan = Plan.objects.create(tenant=studio, name='Corte mensual · 4', price=250000, sessions_per_period=4)
+    subscribe(ada, plan, date(2026, 10, 5))
+
+    res = api(staff, studio).post(client_url(ada, 'charge-periods'), {'count': 1}, format='json')
+
+    assert res.data[0]['concept'] == 'Mensualidad · Corte mensual · 4 · Ada · octubre (5/10 al 4/11)'
+    # No name on the account: the email stands in, as on the team list.
+    assert res.data[0]['recorded_by_name'] == 's@example.com'
+
+
+def test_charge_all_records_who_charged(owner, studio, pilates, ada):
+    subscribe(ada, pilates, local_today(studio))
+
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+
+    assert [e['recorded_by_name'] for e in res.data['entries']] == ['o@example.com']
+
+
+def test_an_entry_from_before_the_record_has_nobody(owner, studio, ada):
+    CashEntry.objects.create(tenant=studio, kind='income', amount=1, occurred_on='2026-09-30', concept='x', client=ada)
+
+    assert api(owner, studio).get(client_url(ada, 'payments')).data['results'][0]['recorded_by_name'] is None
+
+
+# -- A no-show -----------------------------------------------------------------
+
+
+def test_a_no_show_owes_nothing_but_can_still_be_charged(owner, studio, teacher, ada):
+    appointment = turn(studio, teacher, [ada])
+    AppointmentClient.objects.filter(appointment=appointment).update(attendance='no_show')
+    http = api(owner, studio)
+
+    assert billing_of(http, appointment)['Ada']['state'] == 'no_show'
+
+    # A business that bills absences charges it on purpose, at the turn's price.
+    res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    assert (res.status_code, res.data['amount']) == (201, 80000)
+    assert billing_of(http, appointment)['Ada']['state'] == 'paid'
+
+
+def test_a_no_show_past_the_quota_owes_nothing(owner, studio, teacher, ada):
+    plan = Plan.objects.create(tenant=studio, name='Uno', price=100000, sessions_per_period=1)
+    subscribe(ada, plan, add_months(local_today(studio), -1))
+    http = api(owner, studio)
+    http.post(client_url(ada, 'charge-periods'), {'count': 2}, format='json')
+    turn(studio, teacher, [ada], start=YESTERDAY - timedelta(hours=3))
+    absent = turn(studio, teacher, [ada])
+    AppointmentClient.objects.filter(appointment=absent).update(attendance='no_show')
+
+    assert billing_of(http, absent)['Ada']['state'] == 'no_show'
+    assert http.get(client_url(ada)).data['billing_summary']['unpaid_turns'] == []

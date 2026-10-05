@@ -125,6 +125,7 @@ def _period_payment(request, client, period, body):
         concept=billing.concept_for_period(client, period),
         payment_method=body['payment_method'],
         client=client,
+        recorded_by=request.user,
         subscription=period.subscription,
         period=period.start,
     )
@@ -140,6 +141,7 @@ def _turn_payment(request, client, appointment, amount, body):
         payment_method=body['payment_method'],
         appointment=appointment,
         client=client,
+        recorded_by=request.user,
     )
 
 
@@ -228,7 +230,7 @@ class ClientViewSet(TenantScopedModelViewSet):
         with transaction.atomic():
             client = Client.objects.select_for_update().get(pk=client.pk)
             summary = billing.billing_summary(client)
-            turns = Appointment.objects.select_related('service').in_bulk(
+            turns = Appointment.objects.select_related('service', 'tenant', 'professional__user').in_bulk(
                 [turn['appointment'] for turn in summary['unpaid_turns']]
             )
             entries = [
@@ -255,7 +257,7 @@ class ClientViewSet(TenantScopedModelViewSet):
         paginated like the timeline.
         """
         client = self.get_object()
-        entries = CashEntry.objects.for_tenant(request.tenant).filter(client=client)
+        entries = CashEntry.objects.for_tenant(request.tenant).filter(client=client).select_related('recorded_by')
         page = self.paginate_queryset(entries)
         serializer = CashEntrySerializer(page if page is not None else entries, many=True)
         if page is not None:
@@ -907,7 +909,25 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         )
 
     def perform_update(self, serializer):
+        # Once anybody is marked, the turn is the record of what happened:
+        # moving it or changing its service or roster would rewrite that record.
+        # Withdrawing every mark opens it again.
+        self._refuse_if_marked(serializer.instance)
         self._save_or_conflict(super().perform_update, serializer)
+
+    def _refuse_if_marked(self, appointment):
+        if self._has_marks(appointment):
+            raise Refused(
+                'Attendance is already marked on this appointment.',
+                'attendance_marked',
+                status.HTTP_409_CONFLICT,
+            )
+
+    @staticmethod
+    def _has_marks(appointment):
+        return appointment.client_links.exclude(
+            attendance=AppointmentClient.Attendance.PENDING
+        ).exists()
 
     @staticmethod
     def _save_or_conflict(save, serializer):
@@ -949,6 +969,9 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         appointment = self.get_object()
+        # Somebody already came, or failed to: the turn happened, so it cannot
+        # be called off. Withdrawing every mark makes it cancellable again.
+        self._refuse_if_marked(appointment)
         # Validated rather than read raw off request.data: `reason` is free text
         # that lands in the record, so it goes through a field like any other.
         body = AppointmentCancelSerializer(data=request.data)
@@ -1039,7 +1062,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         body.is_valid(raise_exception=True)
         reason = body.validated_data.get('reason', '')
 
-        cancelled = list(self._following(appointment))
+        # A marked occurrence already happened; it stays, like a completed one.
+        cancelled = [one for one in self._following(appointment) if not self._has_marks(one)]
         for one in cancelled:
             one.cancel(reason)
 
@@ -1090,6 +1114,11 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         for one in self._following(appointment):
             was_at = one.start
             local_day = was_at.astimezone(zone).date()
+            # Left where it was, like a clash: a turn with attendance marked
+            # already happened where it says it did.
+            if self._has_marks(one):
+                skipped.append(local_day)
+                continue
             # Rebuilt from the local date plus the new wall-clock time, the same
             # way the series was generated: adding an offset to a UTC instant
             # would move an occurrence on the far side of a DST boundary to the
@@ -1159,9 +1188,11 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         state = billing.attendee_billing(link)
         if state['state'] == billing.State.PAID:
             raise AlreadyPaid()
-        if state['state'] == billing.State.PLAN_OWED:
+        if state['state'] in (billing.State.PLAN_OWED, billing.State.NO_SHOW):
             # plan_owed's amount is the plan's debt, not this turn's: judge the
             # turn on itself, so a covered one is settled by paying the month.
+            # A no-show owes nothing, but a shop that bills absences charges it
+            # on purpose, at the turn's own price.
             state = billing._turn_state(link)
         if state['state'] == billing.State.COVERED:
             raise Refused('Nothing to charge: this turn is covered by the plan.', 'covered_by_plan')

@@ -72,8 +72,9 @@ class State:
     EXTRA = 'extra'
     CHARGE = 'charge'
     NO_PRICE = 'no_price'
+    NO_SHOW = 'no_show'
 
-    ALL = (PAID, PLAN_OWED, COVERED, EXTRA, CHARGE, NO_PRICE)
+    ALL = (PAID, PLAN_OWED, COVERED, EXTRA, CHARGE, NO_PRICE, NO_SHOW)
 
 
 @dataclass(frozen=True)
@@ -383,6 +384,10 @@ def attendee_billing(link):
             return answer
 
     answer.update(_turn_state(link))
+    if link.attendance == AppointmentClient.Attendance.NO_SHOW and answer['state'] != State.COVERED:
+        # Counted against the quota, never chased as a charge (_unpaid_turns).
+        # `amount` stays the turn's price, what charging the absence would take.
+        answer['state'] = State.NO_SHOW
     return answer
 
 
@@ -501,11 +506,27 @@ def receivables(tenant):
     return {'total': sum(row['amount'] for row in rows), 'rows': rows, 'due_soon': due_soon}
 
 
+WEEKDAYS = ('lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom')
+
+
+def _d_m(day):
+    return f'{day.day}/{day.month}'
+
+
 def concept_for_period(client, period):
     # Spanish: the line the shop reads in its cash book, next to the ones the
     # front end writes. Same separator as those.
-    return f'Mensualidad · {client.name} · {period.name} {period.start.year}'
+    return (
+        f'Mensualidad · {period.subscription.plan.name} · {client.name} · '
+        f'{period.name} ({_d_m(period.start)} al {_d_m(period.end)})'
+    )[:140]  # CashEntry.concept's length: a long plan name loses the tail, not the charge.
 
 
 def concept_for_turn(client, appointment):
-    return f'Turno · {appointment.service.name} · {client.name}'
+    # The professional is a required FK, so "· con …" is always there.
+    local = appointment.start.astimezone(ZoneInfo(appointment.tenant.timezone))
+    return (
+        f'Turno · {appointment.service.name} · {client.name} · '
+        f'{WEEKDAYS[local.weekday()]} {_d_m(local)} {local:%H:%M} · '
+        f'con {appointment.professional.display_name()}'
+    )[:140]

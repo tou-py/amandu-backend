@@ -29,6 +29,9 @@ class CashEntryViewSet(TenantScopedModelViewSet):
     # only the people who own the shop's figures.
     permission_classes = (*TenantScopedModelViewSet.permission_classes, IsTenantCoordinator)
 
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.tenant, recorded_by=self.request.user)
+
     def get_permissions(self):
         permissions = super().get_permissions()
         if self.action == 'void':

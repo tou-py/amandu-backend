@@ -100,6 +100,8 @@ def test_income_takes_its_tenant_from_the_request_not_the_payload(manager, salon
     assert created.tenant == salon
     assert created.amount == 150000
     assert created.payment_method == CashEntry.PaymentMethod.CASH
+    assert created.recorded_by == manager
+    assert res.data['recorded_by_name'] == 'r@example.com'
 
 
 def test_expense_is_recorded_as_a_positive_amount(manager, salon):

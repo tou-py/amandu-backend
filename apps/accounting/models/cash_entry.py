@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 from apps.commons.mixins import TimestampMixin
@@ -89,6 +90,17 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
     # because periods are anchored per subscription: Ana's "October" runs from
     # the 14th, and only its first day says so.
     period = models.DateField(null=True, blank=True)
+    # Who filed it, so the book can say who took the money. The user and not
+    # the membership: the person stays named after they leave the team.
+    # Null on rows from before it was recorded.
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name='+',
+    )
     # A void is a reversal, not a delete. The row stays, so the book still shows
     # that money was taken and given back and who decided it; everything that
     # reads payments -- coverage, debt, totals -- filters on voided_at IS NULL.

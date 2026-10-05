@@ -1251,3 +1251,66 @@ def test_the_list_does_not_query_per_row(
 
     assert response.status_code == 200
     assert len(response.data['results']) == 12
+
+
+def _marked_booking(http, stylist, clients, haircut):
+    created = http.post(LIST_URL, booking(stylist, clients, haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(clients[0].pk), 'attendance': 'attended'},
+        format='json',
+    )
+    return appointment
+
+
+def test_a_turn_with_any_attendance_marked_cannot_be_edited(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Once somebody is marked, the turn is a record of what happened: moving it,
+    changing its service or its roster would rewrite that record."""
+    bob = Client.objects.create(tenant=salon, name='Bob')
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_, bob], haircut)
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'attendance_marked'
+    appointment.refresh_from_db()
+    assert appointment.start == TOMORROW
+
+
+def test_withdrawing_every_mark_makes_the_turn_editable_again(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_], haircut)
+    http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'pending'},
+        format='json',
+    )
+
+    res = http.patch(detail_url(appointment), {'notes': 'Traer toalla'}, format='json')
+
+    assert res.status_code == 200
+
+
+def test_a_turn_with_any_attendance_marked_cannot_be_cancelled(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Somebody already came (or failed to): the turn happened, it was not called off."""
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_], haircut)
+
+    res = http.post(action_url(appointment, 'cancel'), {'reason': 'x'}, format='json')
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'attendance_marked'
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
