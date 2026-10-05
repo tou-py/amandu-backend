@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling.models import Appointment, Client, Service
+from apps.scheduling.models import Appointment, Client, Plan, Service, Subscription
 from apps.scheduling.serializers import AppointmentSerializer
 from apps.scheduling.views import AppointmentViewSet
 from apps.tenancy.models import Tenant
@@ -552,36 +552,6 @@ def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircu
     assert Appointment.objects.get(pk=res.data['id']).id.version == 7
 
 
-def test_an_appointment_carries_the_plan_state_of_every_attendee(
-    receptionist, salon, stylist, haircut
-):
-    """
-    Per person, not per slot: a group class holds several people and each is
-    covered by a plan or not on their own. The charge step reads this to decide
-    whether to ask THIS attendee for money at all.
-    """
-    covered = Client.objects.create(
-        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
-    )
-    lapsed = Client.objects.create(
-        tenant=salon,
-        name='Bob',
-        monthly_fee=300000,
-        paid_until=timezone.localdate() - timedelta(days=1),
-    )
-    per_session = Client.objects.create(tenant=salon, name='Grace')
-
-    res = api(receptionist, salon).post(
-        LIST_URL, booking(stylist, [covered, lapsed, per_session], haircut, TOMORROW),
-        format='json',
-    )
-
-    assert res.status_code == 201
-    assert {a['name']: a['plan_state'] for a in res.data['attendees']} == {
-        'Ada': 'active', 'Bob': 'expired', 'Grace': 'none',
-    }
-
-
 def test_an_appointment_carries_the_phone_of_every_attendee(
     receptionist, salon, stylist, haircut
 ):
@@ -630,11 +600,9 @@ def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, st
 def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
     """N+1 guard: the query count for the list must not grow with the number of
     appointments. Fails if `client_links__client` stops being prefetched, and
-    equally if `attendees.plan_state` or `service_price` ever start resolving
+    equally if `attendees.billing` or `service_price` ever start resolving
     through a relation the viewset does not already fetch."""
-    ada = Client.objects.create(
-        tenant=salon, name='Ada', monthly_fee=300000, paid_until=timezone.localdate()
-    )
+    ada = Client.objects.create(tenant=salon, name='Ada')
     bob = Client.objects.create(tenant=salon, name='Bob')
     haircut.price = 120000
     haircut.save(update_fields=['price'])
@@ -1252,6 +1220,12 @@ def test_the_list_does_not_query_per_row(
     passes against the broken queryset, exactly as the seed data did.
     """
     start = timezone.now() + timedelta(days=1)
+    # Subscribed, so every attendee's billing walks the plan, its categories,
+    # the periods paid and the quota turns -- the expensive path.
+    plan = Plan.objects.create(tenant=salon, name='Libre', price=100, sessions_per_period=8)
+    Subscription.objects.create(
+        tenant=salon, client=client_, plan=plan, start_date=timezone.localdate() - timedelta(days=1)
+    )
     for index in range(12):
         appointment = Appointment.objects.create(
             tenant=salon,
@@ -1267,11 +1241,76 @@ def test_the_list_does_not_query_per_row(
 
     http = api(stylist.user, salon)
 
-    # Membership, count, the page, the through rows, the clients. Five, and it
-    # stays five as rows are added -- that constancy is the property, not the
-    # number.
-    with django_assert_num_queries(5):
+    # Membership, count, the page, the through rows, the clients, the cash
+    # entries on each turn; then billing.client_prefetches(): subscriptions,
+    # their plans' categories, their payments, the client's quota turns and the
+    # payments on those. Eleven, and it stays eleven as rows are added -- that
+    # constancy is the property, not the number.
+    with django_assert_num_queries(11):
         response = http.get('/api/appointments/')
 
     assert response.status_code == 200
     assert len(response.data['results']) == 12
+
+
+def _marked_booking(http, stylist, clients, haircut):
+    created = http.post(LIST_URL, booking(stylist, clients, haircut, TOMORROW), format='json')
+    appointment = Appointment.objects.get(pk=created.data['id'])
+    http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(clients[0].pk), 'attendance': 'attended'},
+        format='json',
+    )
+    return appointment
+
+
+def test_a_turn_with_any_attendance_marked_cannot_be_edited(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Once somebody is marked, the turn is a record of what happened: moving it,
+    changing its service or its roster would rewrite that record."""
+    bob = Client.objects.create(tenant=salon, name='Bob')
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_, bob], haircut)
+
+    res = http.patch(
+        detail_url(appointment),
+        {'start': (TOMORROW + timedelta(hours=2)).isoformat()},
+        format='json',
+    )
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'attendance_marked'
+    appointment.refresh_from_db()
+    assert appointment.start == TOMORROW
+
+
+def test_withdrawing_every_mark_makes_the_turn_editable_again(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_], haircut)
+    http.post(
+        action_url(appointment, 'attendance'),
+        {'client': str(client_.pk), 'attendance': 'pending'},
+        format='json',
+    )
+
+    res = http.patch(detail_url(appointment), {'notes': 'Traer toalla'}, format='json')
+
+    assert res.status_code == 200
+
+
+def test_a_turn_with_any_attendance_marked_cannot_be_cancelled(
+    receptionist, salon, stylist, client_, haircut
+):
+    """Somebody already came (or failed to): the turn happened, it was not called off."""
+    http = api(receptionist, salon)
+    appointment = _marked_booking(http, stylist, [client_], haircut)
+
+    res = http.post(action_url(appointment, 'cancel'), {'reason': 'x'}, format='json')
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'attendance_marked'
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.SCHEDULED
