@@ -26,6 +26,7 @@ from apps.accounts.models import Membership, Notification
 from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
+from apps.scheduling.announce import ACCEPTED, REJECTED, announce
 from apps.scheduling.models import (
     Appointment,
     AppointmentClient,
@@ -977,17 +978,23 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         body = AppointmentCancelSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         reason = body.validated_data.get('reason', '')
-        response = self._transition(appointment, lambda: appointment.cancel(reason))
-        # Only a teammate cancelling on someone else's behalf is news to the
-        # professional -- cancelling your own slot is not something you need to
-        # be told about.
-        if request.membership.id != appointment.professional_id:
-            Notification.objects.create(
-                recipient=appointment.professional,
-                actor=request.membership,
-                appointment=appointment,
-                verb=Notification.Verb.APPOINTMENT_CANCELLED,
-            )
+        # Cancelling a request that is still waiting is the shop saying no:
+        # news to the client who asked, not only to the professional.
+        turning_down = appointment.status == Appointment.Status.PENDING
+        with transaction.atomic():
+            response = self._transition(appointment, lambda: appointment.cancel(reason))
+            if turning_down:
+                announce(appointment, REJECTED, actor=request.membership, reason=reason)
+            # Only a teammate cancelling on someone else's behalf is news to the
+            # professional -- cancelling your own slot is not something you
+            # need to be told about.
+            elif request.membership.id != appointment.professional_id:
+                Notification.objects.create(
+                    recipient=appointment.professional,
+                    actor=request.membership,
+                    appointment=appointment,
+                    verb=Notification.Verb.APPOINTMENT_CANCELLED,
+                )
         return response
 
     # No body: the URL already names the transition.
@@ -1009,7 +1016,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         reason the shop typed.
         """
         appointment = self.get_object()
-        return self._transition(appointment, appointment.confirm)
+        with transaction.atomic():
+            response = self._transition(appointment, appointment.confirm)
+            announce(appointment, ACCEPTED, actor=request.membership)
+        return response
 
     def _following(self, appointment):
         """

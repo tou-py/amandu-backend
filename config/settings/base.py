@@ -254,6 +254,16 @@ VAPID_PRIVATE_KEY = env.str('VAPID_PRIVATE_KEY', default='')
 VAPID_SUBJECT = env.str('VAPID_SUBJECT', default='')
 
 
+# WhatsApp through a self-hosted WAHA (apps/scheduling/whatsapp.py). Optional
+# like push: unset, no message is ever filed and the rest works as before.
+WAHA_URL = env.str('WAHA_URL', default='')
+WAHA_API_KEY = env.str('WAHA_API_KEY', default='')
+WAHA_SESSION = env.str('WAHA_SESSION', default='default')
+# The Kyo number paired with that session, international. Only used to offer
+# clients a wa.me link to write first.
+WHATSAPP_NUMBER = env.str('WHATSAPP_NUMBER', default='')
+
+
 # Django REST Framework
 # Fail closed by default: every endpoint requires authentication unless it opts
 # out explicitly (the login/refresh views set their own empty permissions).
@@ -296,6 +306,11 @@ REST_FRAMEWORK = {
         # Guessing the CURRENT password from inside a session someone else
         # opened. Always a deliberate act, so it can be tighter than login.
         'change-password': '5/min',
+        # The public booking page (PublicPageThrottle). Browsing is cheap;
+        # asking writes a held slot and can queue WhatsApp messages to any
+        # number typed, so it is counted per IP and kept tight.
+        'public-read': '120/min',
+        'public-booking': '10/hour',
     },
 }
 

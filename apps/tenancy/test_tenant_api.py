@@ -159,3 +159,15 @@ def test_staff_may_not_list_the_team(salon, member):
     staff = member('s@example.com', Membership.Role.STAFF)
 
     assert api(staff.user, salon).get(MEMBERS_URL).status_code == 403
+
+
+def test_the_business_number_is_read_in_its_own_country(salon, member):
+    """Setting it is what turns WhatsApp notices on, so it must be the real
+    number: local digits are read as Argentinian here, and stored E.164."""
+    owner = member('o@example.com', Membership.Role.OWNER)
+
+    res = api(owner.user, salon).patch(TENANT_URL, {'phone': '011 4321-5678'}, format='json')
+
+    assert res.status_code == 200
+    salon.refresh_from_db()
+    assert str(salon.phone) == '+541143215678'

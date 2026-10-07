@@ -14,12 +14,14 @@ BookingRequestSerializer and both land in create_booking(), so there is one
 meaning of "book" and two ways of asking for it.
 """
 
+import re
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.shortcuts import redirect
-from django.utils import timezone
+from django.utils import timezone, translation
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.decorators import (
@@ -31,16 +33,25 @@ from rest_framework.decorators import (
 from rest_framework.permissions import AllowAny
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import SimpleRateThrottle
 
 from apps.accounts.models import Membership
-from apps.scheduling.availability import free_slots
+from apps.scheduling import whatsapp
 from apps.scheduling.models import Service, WorkSchedule
-from apps.scheduling.public import BookingRequestSerializer, _shop, create_booking
+from apps.scheduling.public import (
+    BookingRequestSerializer,
+    _shop,
+    create_booking,
+    offered_slots,
+)
+from apps.scheduling.views import Overlaps
 
 # Two weeks. Long enough that somebody booking a colour in advance finds a day,
 # short enough that the page stays one scroll and one query.
 HORIZON_DAYS = 13
+
+# Where each field's error points, from the summary at the top of the form.
+ERROR_ANCHORS = {'start': 'cuando', 'name': 'f-name', 'phone': 'f-phone', 'email': 'f-email'}
 
 # The page speaks Spanish because its readers do. Activated by a {% language %}
 # block INSIDE the template, not around this Response: DRF renders a
@@ -51,15 +62,26 @@ HORIZON_DAYS = 13
 # error messages to a front end that does not expect it.
 
 
-class PublicPageThrottle(ScopedRateThrottle):
+class PublicPageThrottle(SimpleRateThrottle):
     """
     Reading the page and asking for a slot are the same URL and must not share
-    a budget: one is browsing, the other writes a row into a real diary.
+    a budget: one is browsing, the other writes a row into a real diary and
+    queues WhatsApp messages to whatever number was typed.
+
+    SimpleRateThrottle and not ScopedRateThrottle: the scoped one re-reads its
+    scope from the view's `throttle_scope`, which a function view does not have,
+    so it let every request through no matter what was set here.
     """
+
+    scope = 'public-read'  # read at construction, before any request is seen
 
     def allow_request(self, request, view):
         self.scope = 'public-booking' if request.method == 'POST' else 'public-read'
+        self.num_requests, self.duration = self.parse_rate(self.get_rate())
         return super().allow_request(request, view)
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
 
 # Out of the OpenAPI schema: it returns HTML to a person, and the schema is
@@ -80,61 +102,145 @@ def booking_page(request, slug):
         # better than an empty picker that looks broken.
         return _render(shop, {'unconfigured': True})
 
-    service = _pick(services, request.query_params.get('service'))
-    professional = _pick(professionals, request.query_params.get('professional'))
+    # A POST carries its choices in the body, a GET in the query; past this
+    # point both are just "what was asked for".
+    asked = request.data if request.method == 'POST' else request.query_params
+    service = _pick(services, asked.get('service'))
+    professional = _pick_professional(professionals, asked.get('professional'))
 
     errors = {}
     if request.method == 'POST':
         form = BookingRequestSerializer(data=request.data, shop=shop)
-        if form.is_valid():
-            booked = create_booking(shop, form.validated_data)
-            # Redirect after POST so a refresh does not book a second slot. The
-            # time travels in the query so the confirmation can name it; it is a
-            # time and not an identifier, so nothing here is a handle on the
-            # booking for whoever reads the URL over a shoulder.
-            #
-            # urlencode and not an f-string: an ISO instant ends in '+00:00',
-            # and a raw '+' in a query string decodes back as a space, so the
-            # confirmation would 400 on the timestamp it just wrote itself.
-            return redirect('{}?{}'.format(request.path, urlencode({
-                'service': booked.service_id,
-                'professional': booked.professional_id,
-                'at': booked.start.isoformat(),
-            })))
-        errors = form.errors
-        service = _pick(services, request.data.get('service')) or service
-        professional = _pick(professionals, request.data.get('professional')) or professional
+        # Validated in Spanish here, where it runs; the {% language %} block in
+        # the template only covers rendering, which happens after this returns.
+        with translation.override('es'):
+            valid = form.is_valid()
+        if valid:
+            try:
+                booked = create_booking(shop, form.validated_data)
+            except Overlaps:
+                # Somebody took the slot between validate() and the insert. On
+                # the JSON endpoint that is a 409; on a page it is a sentence
+                # next to the hours, with what they typed still in the boxes.
+                errors = {'start': ['Ese horario se acaba de ocupar. Elegí otro.']}
+            else:
+                # Redirect after POST so a refresh does not book a second slot.
+                # The time travels in the query so the confirmation can name it;
+                # it is a time and not an identifier, so nothing here is a
+                # handle on the booking for whoever reads the URL over a
+                # shoulder.
+                #
+                # urlencode and not an f-string: an ISO instant ends in
+                # '+00:00', and a raw '+' in a query string decodes back as a
+                # space, so the confirmation would 400 on the timestamp it just
+                # wrote itself.
+                return redirect('{}?{}'.format(request.path, urlencode({
+                    'service': booked.service_id,
+                    'professional': booked.professional_id,
+                    'at': booked.start.isoformat(),
+                })))
+        else:
+            errors = form.errors
 
     today = timezone.localdate(timezone=zone)
-    week = [
-        {'date': day, 'slots': slots}
-        for day, slots in free_slots(
-            professional, service, today, today + timedelta(days=HORIZON_DAYS),
-        ).items()
+    offered = offered_slots(
+        shop, service, professional, today, today + timedelta(days=HORIZON_DAYS),
+    )
+    days = [
+        {'date': today + timedelta(days=n), 'slots': offered.get(today + timedelta(days=n), [])}
+        for n in range(HORIZON_DAYS + 1)
     ]
-    opening_hours = _opening_hours(professionals)
-    first_slot = next((slot for day in week for slot in day['slots']), None)
+    open_days = [day for day in days if day['slots']]
+    # One day's hours at a time. Two weeks of every free half hour is a scroll
+    # of hundreds of rows on a phone; the day is picked first, as on paper.
+    day = next(
+        (one for one in open_days if one['date'].isoformat() == asked.get('day')),
+        open_days[0] if open_days else None,
+    )
+    picked_day = day['date'].isoformat() if day else ''
+    first_slot = open_days[0]['slots'][0] if open_days else None
+
+    def href(**changes):
+        params = {
+            'service': service.pk,
+            'professional': professional.pk if professional else '',
+            'day': picked_day,
+            **changes,
+        }
+        return '?' + urlencode(params)
+
+    for option in services:
+        option.href = href(service=option.pk) + '#servicio'
+        option.price_label = _money(option.price)
+    for n, one in enumerate(professionals):
+        # Which of the six tints names this person. Same rule as the staff
+        # panel, so a professional keeps one colour on both sides of the product.
+        one.hue = n % 6 + 1
+        one.initials = _initials(one.display_name())
+        one.href = href(professional=one.pk) + '#profesional'
+    for one in days:
+        one['href'] = href(day=one['date'].isoformat()) + '#cuando'
 
     return _render(shop, {
         'services': services,
         'service': service,
+        'service_price': _money(service.price),
         'professionals': professionals,
         'professional': professional,
-        # Which of the six tints names this stylist. Same rule as the staff
-        # panel, so a person keeps one colour on both sides of the product.
-        'hue': professionals.index(professional) % 6 + 1,
-        'week': week,
-        'has_any_slot': any(day['slots'] for day in week),
-        # The one fact somebody arrives for. It leads the page, so it is worth
-        # its own name in the context rather than being dug out of `week`.
+        'anyone_href': href(professional='') + '#profesional',
+        # "Cualquiera" names nobody, so it wears no tint: the selection is drawn
+        # in ink, as every other control is.
+        'hue': professional.hue if professional else 0,
+        'days': days,
+        'day': day,
+        'periods': _periods(day['slots'] if day else [], zone),
+        # The one fact somebody arrives for. It leads the page, and one tap on
+        # it lands on the form with that hour already ticked.
         'first_slot': first_slot,
+        'first_href': href(
+            day=first_slot.astimezone(zone).date().isoformat(), start=first_slot.isoformat(),
+        ) + '#datos' if first_slot else '',
         'first_is_today': bool(first_slot) and first_slot.astimezone(zone).date() == today,
+        'picked_start': asked.get('start', ''),
         'open_until': _open_until(professionals, zone),
         'errors': errors,
+        # Each message, with where its field is, for the summary above the form.
+        'error_list': [
+            (ERROR_ANCHORS.get(field, 'datos'), messages[0])
+            for field, messages in errors.items()
+        ],
+        # The box is a promise; it is only made where something will keep it.
+        'whatsapp_enabled': whatsapp.enabled_for(shop),
         'submitted': request.data if errors else {},
         'booked_at': _booked_at(request, zone),
-        'opening_hours': opening_hours,
+        'whatsapp_link': _whatsapp_link(shop),
+        'opening_hours': _opening_hours(professionals),
     })
+
+
+def _periods(slots, zone):
+    """A day's hours in the three blocks people think of a day in."""
+    periods = {'Mañana': [], 'Tarde': [], 'Noche': []}
+    for slot in slots:
+        hour = slot.astimezone(zone).hour
+        periods['Mañana' if hour < 12 else 'Tarde' if hour < 19 else 'Noche'].append(slot)
+    return [(name, slots) for name, slots in periods.items() if slots]
+
+
+def _money(amount):
+    """Gs. 80.000, as the panel prints it (es-PY). None is a service not charged
+    per session, which says nothing rather than 'Gs. 0'."""
+    return f'Gs. {amount:,}'.replace(',', '.') if amount is not None else ''
+
+
+def _initials(name):
+    """Two letters for the avatar disc, by the panel's own rule (theme.ts)."""
+    parts = [part for part in re.split(r'[\s@.]+', name.strip()) if part]
+    if not parts:
+        return '?'
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[1][0]).upper()
 
 
 def _booked_at(request, zone):
@@ -146,11 +252,36 @@ def _booked_at(request, zone):
     return parsed.astimezone(zone)
 
 
+def _whatsapp_link(shop):
+    """
+    A wa.me link to the Kyo number, offered once a request is in.
+
+    The single best defence the shared number has against being banned:
+    a client who writes first turns every notice after it into a reply, which
+    is what WhatsApp expects of an automated number (apps/scheduling/whatsapp.py).
+    """
+    if not (settings.WHATSAPP_NUMBER and shop.phone):
+        return None
+    number = settings.WHATSAPP_NUMBER.lstrip('+')
+    return f'https://wa.me/{number}?text=' + quote(f'Hola, pedí un turno en {shop.name}.')
+
+
 def _render(shop, context):
     return Response(
         {'shop': shop, 'shop_timezone': shop.timezone, **context},
         template_name='scheduling/booking.html',
     )
+
+
+def _pick_professional(professionals, raw):
+    """
+    The professional asked for, or None for "Cualquiera" -- the default, since
+    most people booking a cut do not mind who gives it. A shop of one has no
+    choice to offer, so that one person is simply who it is.
+    """
+    if len(professionals) == 1:
+        return professionals[0]
+    return next((one for one in professionals if str(one.pk) == str(raw)), None)
 
 
 def _pick(options, raw):

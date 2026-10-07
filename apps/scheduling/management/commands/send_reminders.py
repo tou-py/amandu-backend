@@ -7,7 +7,9 @@ The sweep. Four things come due on the same tick and share one run:
   * a reminder of the appointment a professional is about to give;
   * a Notification row nobody has been told about yet -- a teammate cancelling
     a slot that was not theirs (AppointmentViewSet.cancel), a request from the
-    public page, or the digest above.
+    public page and its answer (apps/scheduling/announce.py), or the digest
+    above;
+  * a few WhatsApp messages from the outbox, paced (apps/scheduling/whatsapp.py).
 
 Kept in one command, under a name that only says "reminders", deliberately: the
 cron entry lives in Dokploy's UI, not in this repo, and a second command means a
@@ -45,7 +47,7 @@ from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling import billing
+from apps.scheduling import billing, whatsapp
 from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
 
@@ -88,6 +90,21 @@ class Command(BaseCommand):
         # push half below picks the rows up on this same tick.
         self._run_digest()
 
+        if not cache.add(LOCK_KEY, True, LOCK_TIMEOUT):
+            self.stdout.write('Another send_reminders run is still in progress; skipping.')
+            return
+        try:
+            if settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT:
+                self._run()
+                self._run_notifications()
+            # Last, because it is the slow one: its pauses between messages
+            # are deliberate, and must not hold up a reminder about to be due.
+            # Not behind the VAPID check -- WhatsApp does not need push.
+            if settings.WAHA_URL:
+                self._run_whatsapp()
+        finally:
+            cache.delete(LOCK_KEY)
+
         if not (settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             # Loud here rather than at boot: the API must serve an agenda without
             # push configured, but a cron that silently sends nothing every five
@@ -96,14 +113,13 @@ class Command(BaseCommand):
                 'VAPID_PRIVATE_KEY and VAPID_SUBJECT are unset; push is not configured.'
             )
 
-        if not cache.add(LOCK_KEY, True, LOCK_TIMEOUT):
-            self.stdout.write('Another send_reminders run is still in progress; skipping.')
-            return
-        try:
-            self._run()
-            self._run_notifications()
-        finally:
-            cache.delete(LOCK_KEY)
+    def _run_whatsapp(self):
+        sent, failed = whatsapp.deliver_due()
+        if failed:
+            # Once per run at most: deliver_due stops at the first failure.
+            self.stderr.write('WhatsApp send failed; the rest waits for the next run.')
+        if sent or failed:
+            self.stdout.write(f'{sent} WhatsApp message(s) sent.')
 
     def _run_billing(self):
         """
@@ -293,7 +309,44 @@ class Command(BaseCommand):
     def notification_payload(self, notification):
         if notification.verb == Notification.Verb.PLAN_DIGEST:
             return self.digest_payload(notification)
-        return self.cancellation_payload(notification)
+        if notification.verb == Notification.Verb.APPOINTMENT_CANCELLED:
+            return self.cancellation_payload(notification)
+        return self.request_payload(notification)
+
+    # What a request and its answers say. Before these existed, every verb that
+    # was not the digest went out as "Turno cancelado" -- a new request told
+    # its professional that somebody had cancelled.
+    REQUEST_TITLES = {
+        Notification.Verb.APPOINTMENT_REQUESTED: 'Nuevo pedido de turno',
+        Notification.Verb.APPOINTMENT_CONFIRMED: 'Turno confirmado',
+        Notification.Verb.APPOINTMENT_REJECTED: 'Pedido rechazado',
+    }
+
+    def request_payload(self, notification):
+        """
+        A request off the public page, or a teammate's answer to one. Like a
+        cancellation, the appointment may be gone by now and the title has to
+        stand without it.
+        """
+        appointment = notification.appointment
+        if appointment is None:
+            body = 'Un pedido de turno del sitio.'
+        else:
+            local_start = appointment.start.astimezone(ZoneInfo(appointment.tenant.timezone))
+            body = f'{appointment.service.name} del {local_start:%d/%m a las %H:%M}'
+            clients = ', '.join(client.name for client in appointment.clients.all())
+            if clients:
+                body += f' · {clients}'
+            body += '.'
+        if notification.actor:
+            verb = 'confirmó' if notification.verb == Notification.Verb.APPOINTMENT_CONFIRMED else 'rechazó'
+            body = f'{notification.actor.display_name()} {verb}: {body}'
+        return {
+            'title': self.REQUEST_TITLES[notification.verb],
+            'body': body,
+            'url': '/',
+            'tag': f'notification-{notification.pk}',
+        }
 
     def digest_payload(self, notification):
         """

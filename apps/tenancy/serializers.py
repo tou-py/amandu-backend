@@ -1,5 +1,6 @@
 import re
 
+from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.tenancy.models import Tenant
@@ -30,6 +31,10 @@ class TenantSerializer(serializers.ModelSerializer):
     to make from a settings screen; the alternative is a support request for a
     checkbox. It defaults to off for the reason on the model field.
 
+    `phone` is the business's own number. Setting it is what turns WhatsApp
+    notices on for this business: every message gives it as the contact, and a
+    message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
+
     And so are `plan_period_start` and `plan_grace_days`, how this business
     collects its monthly plans. Changing them prefills the NEXT subscription
     and moves the due dates read from now on; no subscription's anchor moves.
@@ -41,14 +46,23 @@ class TenantSerializer(serializers.ModelSerializer):
     # same country written two ways is the same country, exactly as it is for
     # the phone numbers this field governs.
     country = serializers.CharField(max_length=2, allow_blank=True, required=False)
+    phone = PhoneNumberField(required=False, allow_blank=True)
 
     class Meta:
         model = Tenant
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
-            'public_booking', 'plan_period_start', 'plan_grace_days', 'created_at',
+            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'created_at',
         )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Read in the business's own country, like its clients' numbers.
+        # The stored one: a country changed in this same PATCH applies to
+        # numbers typed from the next request on.
+        if isinstance(self.instance, Tenant) and self.instance.country:
+            self.fields['phone'].region = self.instance.country
 
     def validate_name(self, value):
         # A business with a blank name would render as an empty header and an

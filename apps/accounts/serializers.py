@@ -2,10 +2,17 @@ from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_spectacular.utils import extend_schema_field
+from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.accounts.models import CustomUser, Invitation, Membership, Notification, PushSubscription
+from apps.accounts.models import (
+    CustomUser,
+    Invitation,
+    Membership,
+    Notification,
+    PushSubscription,
+)
 from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
 
@@ -89,6 +96,9 @@ class MeSerializer(serializers.ModelSerializer):
 
     memberships = serializers.SerializerMethodField()
     vapid_public_key = serializers.SerializerMethodField()
+    # Where this person gets their turno notices by WhatsApp. Blank turns that
+    # off; push is unaffected.
+    phone = PhoneNumberField(required=False, allow_blank=True)
 
     class Meta:
         model = CustomUser
@@ -98,10 +108,25 @@ class MeSerializer(serializers.ModelSerializer):
             'first_name',
             'last_name',
             'reminder_lead',
+            'phone',
             'memberships',
             'vapid_public_key',
         )
         read_only_fields = ('id', 'email', 'vapid_public_key')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A person has no country, their businesses do. A local number is read
+        # in the country of the first one with a country set -- for nearly
+        # everybody the only one; anyone else can type it international.
+        user = self.instance if isinstance(self.instance, CustomUser) else None
+        if user is not None:
+            country = (
+                user.memberships.exclude(tenant__country='')
+                .order_by('pk').values_list('tenant__country', flat=True).first()
+            )
+            if country:
+                self.fields['phone'].region = country
 
     @extend_schema_field(ActiveMembershipSerializer(many=True))
     def get_memberships(self, user):

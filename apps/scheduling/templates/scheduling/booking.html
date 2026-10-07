@@ -11,14 +11,17 @@
 <meta property="og:description" content="Elegí el servicio, mirá los horarios libres y pedí tu turno.">
 <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1a1715" media="(prefers-color-scheme: dark)">
-{# Structured data straight off the shop's own WorkSchedule rows, so what a
-   search engine prints as opening hours is what the diary actually enforces. #}
+{% comment %}Structured data straight off the shop's own WorkSchedule rows, so what a
+   search engine prints as opening hours is what the diary actually enforces.
+   A block comment: {# #} is single-line only, and the old two-line one was
+   printed at the top of the page.{% endcomment %}
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "HairSalon",
   "name": "{{ shop.name|escapejs }}",
-  "url": "{{ request.path }}",
+  "url": "{{ request.path }}",{% if shop.phone %}
+  "telephone": "{{ shop.phone.as_e164 }}",{% endif %}
   "openingHoursSpecification": [{% for row in opening_hours %}{
     "@type": "OpeningHoursSpecification",
     "dayOfWeek": "https://schema.org/{{ row.day }}",
@@ -29,22 +32,28 @@
 </script>
 <style>
   /* ---------------------------------------------------------------------
-     Kyo's own system, carried outside the login wall. Not a second
-     palette: these are the values from the panel's app.css, and the three
-     rules that govern it hold here too.
+     Kyo's own system, carried outside the login wall. Not a second palette:
+     the values are the panel's (amandu-frontend src/styles/app.css and
+     kyo-motion.css), and the panel's three rules hold here too.
 
        1. The interface is achromatic -- warm near-black on warm off-white.
           Every control, including the button that books, is drawn in ink.
-       2. The only colour on the page is the work itself: the tint that
-          names a professional in the staff panel is the tint that marks
-          the hour you are taking from them here. Same person, same colour,
-          both sides of the product.
-       3. The signal red is spent on nothing but a problem with the form.
+       2. The only colour is the work: the tint that names a professional in
+          the staff panel is the tint of the hour you take from them here.
+          "Cualquiera" names nobody, so it is drawn in ink.
+       3. The reserved red is spent on nothing but a problem with the form.
 
-     Type is system-ui on purpose. The panel's Inter ships in its bundle;
-     a stranger on cellular should not wait on a webfont to read a price,
-     and Kyo's display voice was never the typeface anyway -- it is the
-     tracking (see theme.ts).
+     The brand's sun appears where the brand kit allows it inside the
+     interface: the mark, and the confirmation of a booking.
+
+     Type is system-ui on purpose. The panel's Inter ships in its bundle; a
+     stranger on cellular should not wait on a webfont to read a price, and
+     Kyo's display voice was never the typeface anyway -- it is the tracking.
+
+     Where this departs from the panel, it is for the reader: lozenges and
+     small print are a size up (12px, not 10px), because the panel is glanced
+     at by staff who know it and this page is read once by somebody who
+     does not.
   --------------------------------------------------------------------- */
   :root {
     color-scheme: light dark;
@@ -52,30 +61,35 @@
     --canvas: #fafaf9;
     --surface: #ffffff;
     --sunken: #f5f5f4;
+    --hover: #f5f5f4;
     --border: #e7e5e4;
     --border-strong: #d6d3d1;
 
     --ink: #1c1917;
     --ink-secondary: #44403c;
-    --ink-subtle: #78716c;
+    --ink-subtle: #756e69;
 
     --accent: #1c1917;
     --accent-ink: #ffffff;
-    --signal: #e11d48;
+    --signal-ink: #be123c;
+    --signal-bg: #fff1f2;
 
     --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.06);
-    --shadow-md: 0 4px 12px -2px rgba(28, 25, 23, 0.1);
+    --shadow-md: 0 4px 12px -2px rgba(28, 25, 23, 0.1), 0 2px 4px -2px rgba(28, 25, 23, 0.06);
 
-    --prof-bg: #ede9fe;
-    --prof-ink: #5b21b6;
+    --kyo-ambar: #fda23b;
+    --kyo-naranja: #f5763a;
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
     --radius: 12px;
+    --radius-lg: 16px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --canvas: #1a1715;
       --surface: #211d1a;
       --sunken: #14110f;
+      --hover: #2a2521;
       --border: #3a332e;
       --border-strong: #4d4540;
 
@@ -85,35 +99,34 @@
 
       --accent: #f5f3f1;
       --accent-ink: #1a1715;
-      --signal: #fb7185;
+      --signal-ink: #fb7185;
+      --signal-bg: #3f1620;
 
       --shadow-sm: none;
       --shadow-md: none;
-
-      --prof-bg: #2e2350;
-      --prof-ink: #c4b5fd;
     }
   }
 
-  /* The six tints that name a professional, in the panel's own order. The
-     page wears the one belonging to whoever is being booked. */
-  .h1 { --prof-bg: #ede9fe; --prof-ink: #5b21b6; }
-  .h2 { --prof-bg: #d1fae5; --prof-ink: #065f46; }
-  .h3 { --prof-bg: #ffedd5; --prof-ink: #9a3412; }
-  .h4 { --prof-bg: #dbeafe; --prof-ink: #1e40af; }
-  .h5 { --prof-bg: #fce7f3; --prof-ink: #9d174d; }
-  .h6 { --prof-bg: #fef3c7; --prof-ink: #92400e; }
+  /* The six pairs that name a professional, in the panel's order, plus h0:
+     nobody named, so the selection is ink like any other control. */
+  .h0 { --sel-bg: var(--accent); --sel-ink: var(--accent-ink); }
+  .h1 { --sel-bg: #ede9fe; --sel-ink: #5b21b6; }
+  .h2 { --sel-bg: #d1fae5; --sel-ink: #065f46; }
+  .h3 { --sel-bg: #ffedd5; --sel-ink: #9a3412; }
+  .h4 { --sel-bg: #cfe3fe; --sel-ink: #1e3a8a; }
+  .h5 { --sel-bg: #fce7f3; --sel-ink: #9d174d; }
+  .h6 { --sel-bg: #fef3c7; --sel-ink: #78350f; }
   @media (prefers-color-scheme: dark) {
-    .h1 { --prof-bg: #2e2350; --prof-ink: #c4b5fd; }
-    .h2 { --prof-bg: #0f3328; --prof-ink: #6ee7b7; }
-    .h3 { --prof-bg: #3a2410; --prof-ink: #fdba74; }
-    .h4 { --prof-bg: #17284a; --prof-ink: #93c5fd; }
-    .h5 { --prof-bg: #3a1830; --prof-ink: #f9a8d4; }
-    .h6 { --prof-bg: #3a2c0d; --prof-ink: #fcd34d; }
+    .h1 { --sel-bg: #2e2350; --sel-ink: #c4b5fd; }
+    .h2 { --sel-bg: #0f3328; --sel-ink: #6ee7b7; }
+    .h3 { --sel-bg: #3a2410; --sel-ink: #fdba74; }
+    .h4 { --sel-bg: #0f1c38; --sel-ink: #60a5fa; }
+    .h5 { --sel-bg: #3a1830; --sel-ink: #f9a8d4; }
+    .h6 { --sel-bg: #4a3a0f; --sel-ink: #fcd34d; }
   }
 
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; overflow-x: clip; }
   body {
     margin: 0;
     background: var(--canvas);
@@ -122,344 +135,586 @@
     -webkit-font-smoothing: antialiased;
     -webkit-text-size-adjust: 100%;
   }
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    * { transition: none !important; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  [id] { scroll-margin-top: 1rem; }
+
+  .skip {
+    position: absolute; left: 1rem; top: -4rem;
+    padding: .6rem 1rem; border-radius: var(--radius);
+    background: var(--accent); color: var(--accent-ink); font-weight: 600;
   }
+  .skip:focus { top: 1rem; }
 
-  .wrap { max-width: 33rem; margin: 0 auto; padding: 1.25rem 1.25rem 4rem; }
-
-  /* Ported by name from the panel's app.css so the two surfaces share one
-     vocabulary rather than two lookalike sets of rules. */
+  /* Ported by name from the panel's app.css, one vocabulary on both sides. */
   .amandu-time { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
   .amandu-display { font-weight: 700; letter-spacing: -.03em; }
   .amandu-eyebrow {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .6px;
-    text-transform: uppercase;
-    color: var(--ink-subtle);
+    font-size: 12px; font-weight: 600; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--ink-subtle);
   }
   .amandu-lozenge {
-    display: inline-block;
-    padding: 2px 9px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .2px;
-    white-space: nowrap;
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; letter-spacing: .2px; white-space: nowrap;
   }
 
-  /* --- the hero: one fact, and the way in ------------------------------ */
+  .icon {
+    width: 20px; height: 20px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
 
-  .hero { padding: .75rem 0 2rem; }
-  /* Ink for open, grey for closed -- the panel's own convention for a state
-     that is news. The professional's tint is not spent here: it names a
-     person, and the door is not a person. */
+  /* --- layout ---------------------------------------------------------- */
+
+  .wrap { max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+  @media (min-width: 960px) {
+    /* Two columns on a desk: who and what stays in view while you pick. */
+    .wrap.split {
+      max-width: 64rem;
+      display: grid; grid-template-columns: 21rem minmax(0, 1fr);
+      gap: 4rem; align-items: start; padding-top: 3.5rem;
+    }
+    .split > .hero { position: sticky; top: 2rem; }
+  }
+
+  /* --- the hero: who, whether they are open, and the soonest hour ------ */
+
+  .hero { padding: 0 0 2rem; }
   .status { background: var(--sunken); color: var(--ink-secondary); }
   .status.now { background: var(--accent); color: var(--accent-ink); }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   h1 {
-    font-size: clamp(2.5rem, 12vw, 3.5rem);
-    line-height: 1;
-    margin: .75rem 0 .5rem;
+    font-size: clamp(2.25rem, 10vw, 3.25rem);
+    line-height: 1.1;
+    margin: .85rem 0 .6rem;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
   }
-  .promise { color: var(--ink-subtle); margin: 0 0 1.5rem; max-width: 26rem; }
+  .promise { color: var(--ink-secondary); margin: 0 0 1rem; max-width: 26rem; }
+  .contact {
+    display: inline-flex; align-items: center; gap: .5rem;
+    min-height: 44px; margin: 0 0 1.25rem;
+    color: var(--ink-secondary); font-size: .95rem; text-decoration: none;
+  }
+  .contact:hover { color: var(--ink); text-decoration: underline; }
 
-  /* The single thing a stranger came to find out, made the thing they can
-     press. Whose hour it is, is said by the tinted lozenge naming them --
-     the panel's own primitive, which carries a name rather than coding a
-     person into an edge stripe. */
+  /* The one fact somebody arrives for, made the thing they can press. */
   .next {
     display: block;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-md);
-    padding: 1rem 1.15rem;
+    padding: 1.1rem 1.2rem;
     text-decoration: none;
-    color: inherit;
+    transition: border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
   }
-  .who { background: var(--prof-bg); color: var(--prof-ink); }
   .next .when {
     display: block;
-    font-size: 1.75rem;
-    line-height: 1.1;
-    margin: .15rem 0 .35rem;
-    text-transform: capitalize;
+    font-size: 1.6rem; line-height: 1.15;
+    margin: .2rem 0 .5rem;
   }
   .next .go {
-    display: block;
-    margin-top: .6rem;
-    font-size: .9rem;
-    font-weight: 600;
-    color: var(--ink-secondary);
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: .9rem; padding-top: .8rem;
+    border-top: 1px solid var(--border);
+    font-weight: 650; font-size: .95rem;
   }
-  .next:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .next:active { transform: scale(.985); }
+  @media (hover: hover) { .next:hover { border-color: var(--border-strong); } }
 
-  /* --- sections -------------------------------------------------------- */
+  .who-line { display: inline-flex; align-items: center; gap: .45rem; color: var(--ink-secondary); font-size: .95rem; }
 
-  .step { margin: 0 0 2rem; }
-  .step > h2 {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .6px;
-    text-transform: uppercase;
-    color: var(--ink-subtle);
-    margin: 0 0 .75rem;
+  /* Initials on the professional's own tint: the panel's avatar, drawn with
+     the pale/deep pair so it reads without a white card behind it. */
+  .avatar {
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--sel-bg); color: var(--sel-ink);
+    font-size: 11px; font-weight: 700; letter-spacing: .3px;
   }
+  .avatar.any { background: var(--sunken); color: var(--ink-secondary); }
+  .avatar.any .icon { width: 16px; height: 16px; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: .5rem; padding: 0; margin: 0; list-style: none; }
-  .chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: .4rem;
-    padding: .55rem .9rem;
+  /* --- steps ----------------------------------------------------------- */
+
+  .step { margin: 0 0 2.25rem; }
+  .step-head { display: flex; align-items: center; gap: .6rem; margin: 0 0 .9rem; }
+  .step-head h2 { font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; margin: 0; }
+  .step-head .n {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--sunken); color: var(--ink-secondary);
+    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .hint { margin: .6rem 0 0; color: var(--ink-subtle); font-size: .9rem; }
+
+  /* Services: a list, because a name, a length and a price are read as a
+     row, and the price is half of why somebody picks. */
+  .options {
+    list-style: none; margin: 0; padding: 0;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--ink);
-    text-decoration: none;
-    font-size: .95rem;
-    box-shadow: var(--shadow-sm);
-  }
-  .chip small { color: var(--ink-subtle); font-size: .8rem; }
-  .chip[aria-current="true"] {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-ink);
-  }
-  .chip[aria-current="true"] small { color: var(--accent-ink); opacity: .7; }
-  .chip:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-
-  /* --- the signature: the shop's appointment book ---------------------- */
-
-  .day { margin: 0 0 1.25rem; }
-  .day h3 {
-    font-size: .9rem;
-    font-weight: 650;
-    color: var(--ink-secondary);
-    margin: 0 0 .4rem;
-    text-transform: capitalize;
-  }
-  .book {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
     overflow: hidden;
   }
-  .slot { display: block; cursor: pointer; }
-  .slot + .slot > span { border-top: 1px solid var(--border); }
-  .slot input { position: absolute; opacity: 0; pointer-events: none; }
-  .slot > span {
-    display: block;
-    padding: .85rem 1.15rem;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: .01em;
-    font-size: 1.05rem;
-    transition: background-color 120ms ease;
+  .options li + li { border-top: 1px solid var(--border); }
+  .option {
+    display: flex; align-items: center; gap: .9rem;
+    min-height: 56px; padding: .75rem 1rem;
+    text-decoration: none;
+    transition: background-color 140ms var(--ease-out);
   }
-  /* Exactly the appointment block from the staff panel: a pale tinted fill
-     with its own deeper ink, engineered to clear 6:1 against itself. That
-     fill alone is the selection -- the panel adds no edge stripe either. */
-  .slot input:checked + span {
-    background: var(--prof-bg);
-    color: var(--prof-ink);
-    font-weight: 700;
+  .option .name { flex: 1; min-width: 0; font-weight: 550; overflow-wrap: anywhere; }
+  .option .meta { color: var(--ink-subtle); font-size: .9rem; text-align: right; white-space: nowrap; }
+  .option .meta b { display: block; color: var(--ink); font-weight: 600; }
+  .radio {
+    flex: none; width: 20px; height: 20px; border-radius: 50%;
+    border: 1.5px solid var(--border-strong);
+    display: inline-flex; align-items: center; justify-content: center;
   }
-  .slot input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: -3px; }
-  @media (hover: hover) {
-    .slot > span:hover { background: var(--sunken); }
-    .slot input:checked + span:hover { background: var(--prof-bg); }
+  .option[aria-current="true"] .radio { border-color: var(--accent); background: var(--accent); }
+  .option[aria-current="true"] .radio::after {
+    content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink);
   }
+  @media (hover: hover) { .option:hover { background: var(--hover); } }
+
+  /* Professionals: chips, each with the person's own tint. */
+  .chips { display: flex; flex-wrap: wrap; gap: .5rem; padding: 0; margin: 0; list-style: none; }
+  .chip {
+    display: inline-flex; align-items: center; gap: .5rem;
+    min-height: 44px; padding: .4rem .95rem .4rem .45rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: var(--shadow-sm);
+    text-decoration: none; font-size: .95rem; font-weight: 550;
+    transition: border-color 140ms var(--ease-out), background-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+  }
+  .chip:active { transform: scale(.97); }
+  .chip[aria-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  @media (hover: hover) { .chip:hover { border-color: var(--border-strong); } }
+
+  /* --- the signature: two weeks of the shop's book --------------------- */
+
+  .month { margin: 0 0 .5rem; color: var(--ink-secondary); font-size: .9rem; font-weight: 600; }
+  .month::first-letter { text-transform: uppercase; }
+  .days {
+    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem;
+    list-style: none; margin: 0 0 1.5rem; padding: 0;
+  }
+  .d {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 58px; border-radius: var(--radius);
+    text-decoration: none; line-height: 1.15;
+    border: 1px solid transparent;
+    transition: background-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+  }
+  .d .wd { font-size: 12px; color: var(--ink-subtle); }
+  .d .num { font-size: 1.1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  a.d { background: var(--surface); border-color: var(--border); }
+  a.d:active { transform: scale(.95); }
+  @media (hover: hover) { a.d:hover { border-color: var(--border-strong); } }
+  a.d[aria-current="date"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  a.d[aria-current="date"] .wd { color: var(--accent-ink); opacity: .75; }
+  /* A day with nothing free is still drawn, so the fortnight keeps its shape,
+     but it is not a control. */
+  span.d { color: var(--ink-subtle); }
+  span.d .num { font-weight: 450; text-decoration: line-through; text-decoration-color: var(--border-strong); }
+
+  .day-title { font-size: 1.05rem; font-weight: 650; margin: 0 0 .15rem; }
+  .day-title::first-letter { text-transform: uppercase; }
+  .day-sub { margin: 0 0 1rem; color: var(--ink-subtle); font-size: .9rem; }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .period { margin: 0 0 1rem; }
+  .period .amandu-eyebrow { margin: 0 0 .5rem; }
+  .times {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(5.25rem, 1fr)); gap: .5rem;
+  }
+  .slot { position: relative; display: block; cursor: pointer; }
+  .slot input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .slot span {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 48px; border-radius: var(--radius);
+    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+    font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em;
+    transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+  }
+  .slot:active span { transform: scale(.96); }
+  @media (hover: hover) { .slot:hover span { border-color: var(--border-strong); } }
+  /* The appointment block from the staff panel: the person's pale tint with
+     its own deeper ink, the selection and the name of whose hour it is. */
+  .slot input:checked + span { background: var(--sel-bg); color: var(--sel-ink); border-color: var(--sel-bg); }
+  .slot input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
 
   /* --- form ------------------------------------------------------------ */
 
-  label.field { display: block; margin: 0 0 1rem; }
-  label.field > span { display: block; font-size: .85rem; color: var(--ink-subtle); margin-bottom: .35rem; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 1.25rem 1.1rem;
+  }
+  .field { margin: 0 0 1.1rem; }
+  .field label { display: block; font-size: .9rem; font-weight: 600; margin-bottom: .4rem; }
+  .field label small { font-weight: 400; color: var(--ink-subtle); }
   input[type=text], input[type=tel], input[type=email] {
-    width: 100%;
-    padding: .8rem .9rem;
-    font: inherit;
-    color: var(--ink);
+    width: 100%; min-height: 48px; padding: .7rem .9rem;
+    font: inherit; color: var(--ink);
     background: var(--surface);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
+    transition: border-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
   }
-  input:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  input[type=text]:focus, input[type=tel]:focus, input[type=email]:focus {
+    outline: none; border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink);
+  }
+  input[aria-invalid="true"] { border-color: var(--signal-ink); }
+  .help { margin: .4rem 0 0; color: var(--ink-subtle); font-size: .85rem; }
+
+  .consent {
+    display: flex; gap: .75rem; align-items: flex-start;
+    padding: .9rem 1rem; margin: .25rem 0 1.25rem;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--sunken); cursor: pointer;
+  }
+  .consent input { width: 20px; height: 20px; margin: .1rem 0 0; accent-color: var(--accent); flex: none; cursor: pointer; }
+  .consent strong { display: block; font-size: .95rem; font-weight: 600; }
+  .consent span span { display: block; font-size: .85rem; color: var(--ink-subtle); }
 
   button {
-    width: 100%;
-    padding: 1rem;
-    font: inherit;
-    font-weight: 650;
-    color: var(--accent-ink);
-    background: var(--accent);
-    border: 0;
-    border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    width: 100%; min-height: 52px; padding: .9rem 1rem;
+    font: inherit; font-weight: 650;
+    color: var(--accent-ink); background: var(--accent);
+    border: 0; border-radius: var(--radius);
     cursor: pointer;
+    transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
   }
-  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  button:active { transform: scale(.98); }
+  @media (hover: hover) { button:hover { opacity: .9; } }
+  .fine { margin: .75rem 0 0; text-align: center; color: var(--ink-subtle); font-size: .85rem; }
 
-  .error { color: var(--signal); font-size: .9rem; margin: .35rem 0 0; }
-  .notice {
-    background: var(--sunken);
-    border-radius: var(--radius);
-    padding: 1rem 1.15rem;
-    color: var(--ink-secondary);
+  .error { display: flex; gap: .35rem; color: var(--signal-ink); font-size: .9rem; margin: .4rem 0 0; }
+  .error::before { content: "!"; font-weight: 800; }
+  .alert {
+    border: 1px solid var(--signal-ink); background: var(--signal-bg);
+    border-radius: var(--radius); padding: .9rem 1rem; margin: 0 0 1.5rem;
   }
+  .alert:focus { outline: 2px solid var(--signal-ink); outline-offset: 2px; }
+  .alert h2 { font-size: 1rem; margin: 0 0 .35rem; color: var(--signal-ink); }
+  .alert ul { margin: 0; padding-left: 1.1rem; }
+  .alert a { color: var(--signal-ink); font-weight: 600; }
+
+  .notice {
+    display: flex; gap: .75rem; align-items: flex-start;
+    background: var(--sunken); border-radius: var(--radius);
+    padding: 1rem 1.1rem; color: var(--ink-secondary);
+  }
+  .notice p { margin: 0; }
 
   /* --- the confirmation ------------------------------------------------ */
 
-  .ticket {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-md);
-    padding: 1.5rem;
+  .done { text-align: center; padding-top: 1rem; }
+  .done h1 { font-size: clamp(2rem, 8vw, 2.6rem); }
+  .done .lede { color: var(--ink-secondary); margin: 0 auto 1.75rem; max-width: 24rem; }
+  .ticket { text-align: left; padding: 0; overflow: hidden; }
+  .ticket .top { padding: 1.25rem 1.2rem 1.1rem; }
+  .ticket .when { display: block; font-size: 1.6rem; line-height: 1.15; margin: .25rem 0 .75rem; }
+  .ticket .when::first-letter { text-transform: uppercase; }
+  .ticket dl { margin: 0; padding: .9rem 1.2rem; border-top: 1px dashed var(--border-strong); display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; font-size: .95rem; }
+  .ticket dt { color: var(--ink-subtle); }
+  .ticket dd { margin: 0; text-align: right; font-weight: 550; }
+  .pending { background: var(--accent); color: var(--accent-ink); }
+  .actions { display: grid; gap: .6rem; margin: 1.5rem 0 0; }
+  .button-link {
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    min-height: 52px; border-radius: var(--radius);
+    font-weight: 650; text-decoration: none;
+    background: var(--accent); color: var(--accent-ink);
   }
-  .ticket .when {
-    display: block;
-    font-size: 1.75rem;
-    line-height: 1.1;
-    margin: .25rem 0 .85rem;
-    text-transform: capitalize;
+  .button-link.quiet { background: transparent; color: var(--ink); border: 1px solid var(--border-strong); }
+
+  /* The brand kit's confirmation, verbatim: the whole sun and a check,
+     600ms, once (kyo-motion.css). */
+  .sun { display: block; width: 104px; height: auto; margin: 0 auto .5rem; }
+  .sun circle { fill: var(--kyo-naranja); transform-box: fill-box; transform-origin: center; animation: kyo-sol 320ms var(--ease-out) both; }
+  .sun path { stroke: #fff; stroke-dasharray: 36; animation: kyo-check 260ms ease-out 260ms both; }
+  .sun line { stroke: var(--kyo-naranja); stroke-width: 3.2; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: kyo-rayo 200ms var(--ease-out) calc(300ms + var(--i) * 25ms) both; }
+  .sun line:nth-child(even) { stroke: var(--kyo-ambar); }
+  @keyframes kyo-sol { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+  @keyframes kyo-check { from { stroke-dashoffset: 36; } to { stroke-dashoffset: 0; } }
+  @keyframes kyo-rayo { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: scale(1); } }
+
+  /* --- footer ---------------------------------------------------------- */
+
+  .foot {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    margin: 3rem 0 0; font-size: .85rem; color: var(--ink-subtle);
   }
-  .ticket p { margin: 0 0 .75rem; }
-  .ticket a { color: var(--ink); }
-  .foot { margin: 2.5rem 0 0; font-size: .8rem; color: var(--ink-subtle); text-align: center; }
+  .foot svg { height: 18px; width: auto; color: var(--ink); }
+  .kyo-sol-a { fill: var(--kyo-ambar); }
+  .kyo-sol-b { fill: var(--kyo-naranja); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
 </style>
 </head>
-<body class="h{{ hue|default:1 }}">
+<body class="h{{ hue|default:0 }}">
 {% timezone shop_timezone %}
-<main class="wrap">
+{% if not booked_at and not unconfigured %}<a class="skip" href="#cuando">Ir a los horarios</a>{% endif %}
 
-  {% if booked_at %}
-    <header class="hero">
-      <h1 class="amandu-display">{{ shop.name }}</h1>
-    </header>
-    <div class="ticket">
-      <p class="amandu-eyebrow">Tu pedido</p>
-      <strong class="when amandu-display amandu-time">{{ booked_at|date:"l j" }} de {{ booked_at|date:"F" }}, {{ booked_at|time:"H:i" }}</strong>
-      <p><span class="amandu-lozenge who">con {{ professional.display_name }}</span></p>
-      <p>Lo mandamos a {{ shop.name }}. Te confirman ellos — hasta entonces el horario te queda guardado.</p>
-      <p><a href="{{ request.path }}">Pedir otro turno</a></p>
+{% if booked_at %}
+  <main class="wrap done">
+    <svg class="sun" viewBox="0 0 100 100" role="img" aria-label="Pedido enviado">
+      <line style="--i:0" x1="83" y1="50" x2="89" y2="50"/>
+      <line style="--i:1" x1="78.58" y1="33.5" x2="83.77" y2="30.5"/>
+      <line style="--i:2" x1="66.5" y1="21.42" x2="69.5" y2="16.23"/>
+      <line style="--i:3" x1="50" y1="17" x2="50" y2="11"/>
+      <line style="--i:4" x1="33.5" y1="21.42" x2="30.5" y2="16.23"/>
+      <line style="--i:5" x1="21.42" y1="33.5" x2="16.23" y2="30.5"/>
+      <line style="--i:6" x1="17" y1="50" x2="11" y2="50"/>
+      <line style="--i:7" x1="21.42" y1="66.5" x2="16.23" y2="69.5"/>
+      <line style="--i:8" x1="33.5" y1="78.58" x2="30.5" y2="83.77"/>
+      <line style="--i:9" x1="50" y1="83" x2="50" y2="89"/>
+      <line style="--i:10" x1="66.5" y1="78.58" x2="69.5" y2="83.77"/>
+      <line style="--i:11" x1="78.58" y1="66.5" x2="83.77" y2="69.5"/>
+      <circle cx="50" cy="50" r="25"/>
+      <path d="M38 51 L46 59 L63 42" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1 class="amandu-display">¡Pedido enviado!</h1>
+    <p class="lede">Lo mandamos a {{ shop.name }}. Te confirman ellos — hasta entonces el horario te queda guardado.</p>
+
+    <div class="card ticket">
+      <div class="top">
+        <span class="amandu-lozenge pending">Esperando confirmación</span>
+        <strong class="when amandu-display amandu-time">{{ booked_at|date:"l j" }} de {{ booked_at|date:"F" }}, {{ booked_at|time:"H:i" }}</strong>
+        {% if professional %}
+          <span class="who-line h{{ professional.hue }}"><span class="avatar" aria-hidden="true">{{ professional.initials }}</span>con {{ professional.display_name }}</span>
+        {% endif %}
+      </div>
+      <dl>
+        <dt>Servicio</dt><dd>{{ service.name }}</dd>
+        <dt>Duración</dt><dd>{{ service.duration_minutes }} min</dd>
+        {% if service_price %}<dt>Precio</dt><dd class="amandu-time">{{ service_price }}</dd>{% endif %}
+        <dt>Lugar</dt><dd>{{ shop.name }}</dd>
+      </dl>
     </div>
 
-  {% elif unconfigured %}
+    <div class="actions">
+      {% if whatsapp_link %}
+        <a class="button-link" href="{{ whatsapp_link }}">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 1 3.6 6.7L4 20l1.3-3.6A8 8 0 0 1 4 12Z"/></svg>
+          Escribinos por WhatsApp
+        </a>
+        <p class="fine">Si nos escribís, te avisamos por ahí cuando te respondan.</p>
+      {% endif %}
+      {% if shop.phone %}
+        <a class="button-link quiet" href="tel:{{ shop.phone.as_e164 }}">Llamar a {{ shop.name }}</a>
+      {% endif %}
+      <a class="button-link quiet" href="{{ request.path }}">Pedir otro turno</a>
+    </div>
+
+{% elif unconfigured %}
+  <main class="wrap">
     <header class="hero">
       <h1 class="amandu-display">{{ shop.name }}</h1>
-      <p class="promise">Esta peluquería todavía no cargó sus servicios ni sus horarios, así que por ahora no se puede reservar en línea.</p>
+      <div class="notice">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+        <p>Este negocio todavía no cargó sus servicios ni sus horarios, así que por ahora no se puede reservar en línea.</p>
+      </div>
+      {% if shop.phone %}
+        <p><a class="contact" href="tel:{{ shop.phone.as_e164 }}">Llamar al {{ shop.phone.as_international }}</a></p>
+      {% endif %}
     </header>
 
-  {% else %}
+{% else %}
+  <main class="wrap split">
     <header class="hero">
       {% if open_until %}
-        <span class="amandu-lozenge status now">Abierto hasta las {{ open_until|time:"H:i" }}</span>
+        <span class="amandu-lozenge status now"><span class="dot" aria-hidden="true"></span>Abierto hasta las {{ open_until|time:"H:i" }}</span>
       {% else %}
         <span class="amandu-lozenge status">Cerrado ahora · reservá igual</span>
       {% endif %}
 
       <h1 class="amandu-display">{{ shop.name }}</h1>
-      <p class="promise">Elegí el horario que te sirve y pedilo. La peluquería te confirma.</p>
+      <p class="promise">Elegí el servicio y el horario que te sirven, y pedilo. Te confirman desde el negocio.</p>
+      {% if shop.phone %}
+        <a class="contact" href="tel:{{ shop.phone.as_e164 }}">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h3.5l1.5 4-2 1.5a11 11 0 0 0 6.5 6.5l1.5-2 4 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>
+          {{ shop.phone.as_international }}
+        </a>
+      {% endif %}
 
       {% if first_slot %}
-        <a class="next" href="#cuando">
+        <a class="next" href="{{ first_href }}">
           <span class="amandu-eyebrow">Lo más cercano</span>
           <strong class="when amandu-display amandu-time">{% if first_is_today %}Hoy{% else %}{{ first_slot|date:"l j" }} de {{ first_slot|date:"F" }}{% endif %} a las {{ first_slot|time:"H:i" }}</strong>
-          <span class="amandu-lozenge who">con {{ professional.display_name }}</span>
-          <span class="go">Ver todos los horarios →</span>
+          {% if professional %}
+            <span class="who-line"><span class="avatar" aria-hidden="true">{{ professional.initials }}</span>con {{ professional.display_name }}</span>
+          {% else %}
+            <span class="who-line"><span class="avatar any" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>con quien esté libre</span>
+          {% endif %}
+          <span class="go">Reservar este horario <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
         </a>
       {% endif %}
     </header>
 
-    <section class="step">
-      <h2>Qué te hacés</h2>
-      <ul class="chips">
-        {% for option in services %}
-          <li><a class="chip" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}"
-                 href="?service={{ option.pk }}&professional={{ professional.pk }}">
-            {{ option.name }} <small>{{ option.duration_minutes }} min</small>
-          </a></li>
-        {% endfor %}
-      </ul>
-    </section>
-
-    {% if professionals|length > 1 %}
-      <section class="step">
-        <h2>Con quién</h2>
-        <ul class="chips">
-          {% for option in professionals %}
-            <li><a class="chip" aria-current="{% if option.pk == professional.pk %}true{% else %}false{% endif %}"
-                   href="?service={{ service.pk }}&professional={{ option.pk }}">{{ option.display_name }}</a></li>
+    <div class="steps">
+      <section class="step" id="servicio" aria-labelledby="h-servicio">
+        <div class="step-head"><span class="n" aria-hidden="true">1</span><h2 id="h-servicio">Servicio</h2></div>
+        <ul class="options">
+          {% for option in services %}
+            <li><a class="option" href="{{ option.href }}" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}">
+              <span class="radio" aria-hidden="true"></span>
+              <span class="name">{{ option.name }}</span>
+              <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b>{% endif %}{{ option.duration_minutes }} min</span>
+            </a></li>
           {% endfor %}
         </ul>
       </section>
-    {% endif %}
 
-    <form method="post" action="">
-      <input type="hidden" name="service" value="{{ service.pk }}">
-      <input type="hidden" name="professional" value="{{ professional.pk }}">
-
-      <section class="step" id="cuando">
-        <h2>Cuándo</h2>
-
-        {% if errors.start %}<p class="error">{{ errors.start.0 }}</p>{% endif %}
-
-        {% if not has_any_slot %}
-          <p class="notice">No quedan horarios libres en las próximas dos semanas para este servicio. Probá con otro servicio, o escribile a la peluquería.</p>
-        {% endif %}
-
-        {% for day in week %}
-          {% if day.slots %}
-            <section class="day">
-              <h3>{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</h3>
-              <div class="book">
-                {% for slot in day.slots %}
-                  <label class="slot">
-                    <input type="radio" name="start" value="{{ slot.isoformat }}" required>
-                    <span>{{ slot|time:"H:i" }}</span>
-                  </label>
-                {% endfor %}
-              </div>
-            </section>
-          {% endif %}
-        {% endfor %}
-      </section>
-
-      {% if has_any_slot %}
-        <section class="step">
-          <h2>Tus datos</h2>
-
-          <label class="field">
-            <span>Nombre</span>
-            <input type="text" name="name" maxlength="120" required value="{{ submitted.name|default:'' }}"
-                   autocomplete="name">
-            {% if errors.name %}<p class="error">{{ errors.name.0 }}</p>{% endif %}
-          </label>
-
-          <label class="field">
-            <span>Teléfono</span>
-            <input type="tel" name="phone" maxlength="32" required value="{{ submitted.phone|default:'' }}"
-                   inputmode="tel" autocomplete="tel">
-            {% if errors.phone %}<p class="error">{{ errors.phone.0 }}</p>{% endif %}
-          </label>
-
-          <label class="field">
-            <span>Email <small>(opcional)</small></span>
-            <input type="email" name="email" value="{{ submitted.email|default:'' }}" autocomplete="email">
-            {% if errors.email %}<p class="error">{{ errors.email.0 }}</p>{% endif %}
-          </label>
-
-          <button type="submit">Pedir este turno</button>
+      {% if professionals|length > 1 %}
+        <section class="step" id="profesional" aria-labelledby="h-profesional">
+          <div class="step-head"><span class="n" aria-hidden="true">2</span><h2 id="h-profesional">Con quién</h2></div>
+          <ul class="chips">
+            <li><a class="chip" href="{{ anyone_href }}" aria-current="{% if professional %}false{% else %}true{% endif %}">
+              <span class="avatar any" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>
+              Cualquiera
+            </a></li>
+            {% for option in professionals %}
+              <li><a class="chip h{{ option.hue }}" href="{{ option.href }}" aria-current="{% if option.pk == professional.pk %}true{% else %}false{% endif %}">
+                <span class="avatar" aria-hidden="true">{{ option.initials }}</span>
+                {{ option.display_name }}
+              </a></li>
+            {% endfor %}
+          </ul>
+          {% if not professional %}<p class="hint">Ves los horarios de todo el equipo, y te atiende quien esté libre a esa hora.</p>{% endif %}
         </section>
       {% endif %}
-    </form>
-  {% endif %}
 
-  <p class="foot">Agenda de {{ shop.name }} en Kyo</p>
+      <form method="post" action="#datos" novalidate>
+        <input type="hidden" name="service" value="{{ service.pk }}">
+        <input type="hidden" name="professional" value="{{ professional.pk|default:'' }}">
+        <input type="hidden" name="day" value="{{ day.date.isoformat }}">
 
-</main>
+        <section class="step" id="cuando" aria-labelledby="h-cuando">
+          <div class="step-head"><span class="n" aria-hidden="true">{% if professionals|length > 1 %}3{% else %}2{% endif %}</span><h2 id="h-cuando">Día y hora</h2></div>
+
+          {% if day %}
+            <p class="month">{{ days.0.date|date:"F" }}{% with last=days|last %}{% if last.date.month != days.0.date.month %} – {{ last.date|date:"F" }}{% endif %}{% endwith %}</p>
+            <ol class="days">
+              {% for one in days %}
+                <li>
+                  {% if one.slots %}
+                    <a class="d" href="{{ one.href }}"{% if one.date == day.date %} aria-current="date"{% endif %} aria-label="{{ one.date|date:'l j' }} de {{ one.date|date:'F' }}, {{ one.slots|length }} horario{{ one.slots|length|pluralize }}">
+                      <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
+                    </a>
+                  {% else %}
+                    <span class="d" aria-label="{{ one.date|date:'l j' }}: sin horarios">
+                      <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
+                    </span>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+
+            <fieldset aria-describedby="{% if errors.start %}e-start{% endif %}">
+              <legend class="day-title">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</legend>
+              <p class="day-sub">{{ day.slots|length }} horario{{ day.slots|length|pluralize }} libre{{ day.slots|length|pluralize }} · {{ service.name }}, {{ service.duration_minutes }} min</p>
+              {% if errors.start %}<p class="error" id="e-start">{{ errors.start.0 }}</p>{% endif %}
+              {% for name, slots in periods %}
+                <div class="period">
+                  <p class="amandu-eyebrow">{{ name }}</p>
+                  <div class="times">
+                    {% for slot in slots %}
+                      <label class="slot">
+                        <input type="radio" name="start" value="{{ slot.isoformat }}" required{% if slot.isoformat == picked_start %} checked{% endif %}>
+                        <span>{{ slot|time:"H:i" }}</span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endfor %}
+            </fieldset>
+          {% else %}
+            <div class="notice">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+              <p>No quedan horarios libres en las próximas dos semanas para este servicio{% if professional %} con {{ professional.display_name }}{% endif %}. Probá con otro servicio{% if professional %} o con otra persona{% endif %}{% if shop.phone %}, o llamá al {{ shop.phone.as_international }}{% endif %}.</p>
+            </div>
+          {% endif %}
+        </section>
+
+        {% if day %}
+          <section class="step" id="datos" aria-labelledby="h-datos">
+            <div class="step-head"><span class="n" aria-hidden="true">{% if professionals|length > 1 %}4{% else %}3{% endif %}</span><h2 id="h-datos">Tus datos</h2></div>
+
+            {% if error_list %}
+              <div class="alert" role="alert" tabindex="-1" autofocus aria-labelledby="h-alert">
+                <h2 id="h-alert">Revisá {% if error_list|length > 1 %}estos datos{% else %}este dato{% endif %}</h2>
+                <ul>{% for anchor, message in error_list %}<li><a href="#{{ anchor }}">{{ message }}</a></li>{% endfor %}</ul>
+              </div>
+            {% endif %}
+
+            <div class="card">
+              <div class="field">
+                <label for="f-name">Nombre y apellido</label>
+                <input id="f-name" type="text" name="name" maxlength="120" required autocomplete="name"
+                       value="{{ submitted.name|default:'' }}"{% if errors.name %} aria-invalid="true" aria-describedby="e-name"{% endif %}>
+                {% if errors.name %}<p class="error" id="e-name">{{ errors.name.0 }}</p>{% endif %}
+              </div>
+
+              <div class="field">
+                <label for="f-phone">Teléfono</label>
+                <input id="f-phone" type="tel" name="phone" maxlength="32" required inputmode="tel" autocomplete="tel"
+                       value="{{ submitted.phone|default:'' }}" aria-describedby="h-phone{% if errors.phone %} e-phone{% endif %}"{% if errors.phone %} aria-invalid="true"{% endif %}>
+                <p class="help" id="h-phone">Con este número te reconocen en {{ shop.name }}.</p>
+                {% if errors.phone %}<p class="error" id="e-phone">{{ errors.phone.0 }}</p>{% endif %}
+              </div>
+
+              <div class="field">
+                <label for="f-email">Email <small>(opcional)</small></label>
+                <input id="f-email" type="email" name="email" autocomplete="email"
+                       value="{{ submitted.email|default:'' }}"{% if errors.email %} aria-invalid="true" aria-describedby="e-email"{% endif %}>
+                {% if errors.email %}<p class="error" id="e-email">{{ errors.email.0 }}</p>{% endif %}
+              </div>
+
+              {% if whatsapp_enabled %}
+                <label class="consent">
+                  <input type="checkbox" name="notify_whatsapp" value="true"{% if submitted.notify_whatsapp %} checked{% endif %}>
+                  <span><strong>Avisarme por WhatsApp</strong><span>Te escribimos a este teléfono cuando {{ shop.name }} confirme o rechace el pedido.</span></span>
+                </label>
+              {% endif %}
+
+              <button type="submit">Pedir turno</button>
+              <p class="fine">No pagás nada ahora. El turno queda firme cuando {{ shop.name }} lo confirma.</p>
+            </div>
+          </section>
+        {% endif %}
+      </form>
+    </div>
+{% endif %}
+
+    <footer class="foot">
+      Agenda de {{ shop.name }} en
+      <svg viewBox="-15 0 1739 465" role="img" aria-label="Kyo">
+        <g transform="translate(0 37.5) scale(10) translate(-9 -30.5)">
+          <path class="kyo-sol-a" d="M26 45.5 A30 30 0 0 1 74 45.5 Z"/>
+          <path class="kyo-sol-b" d="M20.95 56 L79.05 56 A30 30 0 0 0 76.26 49 L23.74 49 A30 30 0 0 0 20.95 56 Z"/>
+          <line x1="12" y1="63.5" x2="88" y2="63.5" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+        </g>
+        <g transform="translate(968 0) scale(0.246) translate(-69.7 1400)">
+          <path fill="currentColor" d="M403.4 -479.7 977.5 -1159.5Q1022.8 -1206.7 1034.5 -1251.9Q1046.2 -1297.2 1028.6 -1331.1Q1010.9 -1365 965.2 -1377.4L907.3 -1386.8Q902.2 -1388.3 900.2 -1389.8Q898.2 -1391.4 898.2 -1394.4Q898.2 -1396.9 900.4 -1398.5Q902.7 -1400 905.8 -1400H1307.2Q1310.8 -1400 1312.5 -1398.5Q1314.3 -1397 1314.3 -1394.4Q1314.3 -1391.4 1311.8 -1389.4Q1309.2 -1387.4 1305.7 -1386.3Q1276.7 -1379.1 1247.1 -1365Q1217.4 -1351 1182.2 -1325.9Q1146.9 -1300.8 1101.9 -1259.8Q1056.8 -1218.8 996.6 -1156.1L410.1 -465.3ZM632.4 -748.6 810.3 -926.7 1259.5 -97.1Q1282.1 -54.7 1304.6 -36.4Q1327 -18 1370.9 -14.1Q1375.4 -13.6 1377.7 -11.6Q1379.9 -9.6 1379.9 -7Q1379.9 -3.5 1377.4 -1.8Q1374.9 0 1370.4 0H894.2Q891.1 0 888.8 -1.8Q886.6 -3.6 886.6 -7.1Q886.6 -10.6 889.1 -12.1Q891.6 -13.6 895.7 -14.2L980.1 -25Q996.4 -27 1000.9 -40.3Q1005.4 -53.5 989.4 -84.3ZM454.4 -53.2Q454.4 -41.2 463.8 -35.2Q473.1 -29.1 491.8 -26.1L577.5 -13.2Q583.6 -12.7 586.2 -11.2Q588.7 -9.6 588.7 -6.1Q588.7 -4 586.4 -2Q584.2 0 579.6 0H78.8Q74.2 0 72 -2Q69.7 -4 69.7 -6.1Q69.7 -11.6 80.9 -13.2L166.6 -26.1Q185.8 -29.1 194.9 -35.2Q204 -41.2 204 -53.2V-1346.8Q204 -1358.8 194.9 -1365.1Q185.8 -1371.4 166.6 -1373.9L80.9 -1386.8Q69.7 -1388.4 69.7 -1393.9Q69.7 -1396.4 72 -1398.2Q74.2 -1400 78.8 -1400H579.6Q584.2 -1400 586.4 -1398.2Q588.7 -1396.4 588.7 -1393.9Q588.7 -1388.4 577.5 -1386.8L491.8 -1373.9Q473.1 -1371.4 463.8 -1365.1Q454.4 -1358.8 454.4 -1346.8ZM1888.7 -197.4 1782.8 75.8 1445.9 -732.5Q1421.2 -791.4 1390.5 -822.6Q1359.8 -853.7 1321.5 -859.7Q1312.3 -861.8 1310.2 -863.8Q1308.2 -865.8 1308.2 -867.8Q1308.2 -871.4 1310.5 -872.7Q1312.8 -873.9 1316.3 -873.9H1748.2Q1752.7 -873.9 1754.7 -872.4Q1756.8 -870.9 1756.8 -866.9Q1756.8 -863.4 1754.5 -861.9Q1752.2 -860.4 1747.2 -859.3L1673.7 -849.8Q1650.2 -846.8 1644.9 -828.1Q1639.6 -809.4 1652.4 -778.8ZM1712.5 233.2 1815.4 -28.2 1828 -61.2 2091.1 -744.8Q2110.6 -795.7 2099.5 -818.2Q2088.5 -840.6 2052.5 -847.7L1995.8 -858.8Q1989.8 -860.4 1987.3 -861.9Q1984.8 -863.4 1984.8 -866.4Q1984.8 -870.4 1987.1 -872.2Q1989.4 -873.9 1993.4 -873.9H2237.8Q2242.8 -873.9 2245.1 -872.2Q2247.4 -870.4 2247.4 -866.9Q2247.4 -863.9 2245.1 -862.4Q2242.8 -860.8 2236.8 -859.3Q2185.4 -850.6 2156 -825.4Q2126.6 -800.2 2105.7 -745.2L1722 245Q1689.8 330.3 1665.1 384.7Q1640.4 439 1608 464.5Q1575.7 490 1518.6 490Q1446.4 490 1402 446.5Q1357.6 403 1357.6 341Q1357.6 295.9 1381.6 270.4Q1405.6 244.9 1441.4 244.9Q1473 244.9 1493.5 265.9Q1513.9 287 1524.8 325.3L1534.7 362.9Q1541.5 391.6 1555.1 414.5Q1568.8 437.4 1591.9 437.4Q1610.9 437.4 1628.9 413.6Q1646.9 389.8 1667.3 343.9Q1687.6 298.1 1712.5 233.2ZM2697 -893.9Q2826.6 -893.9 2926.9 -835.4Q3027.3 -776.8 3085 -672.9Q3142.7 -569.1 3142.7 -433.4Q3142.7 -299.4 3083.7 -197.3Q3024.7 -95.2 2921.8 -37.6Q2818.9 20 2685.8 20Q2556.2 20 2456.3 -37.3Q2356.4 -94.6 2299.7 -196.7Q2243 -298.8 2243 -433.4Q2243 -568 2300.8 -671.6Q2358.6 -775.2 2461.1 -834.6Q2563.6 -893.9 2697 -893.9ZM2744.9 3.8Q2811.6 -2.1 2855.5 -56.7Q2899.4 -111.3 2915.9 -212.6Q2932.4 -313.8 2916.2 -458.6Q2900 -604.9 2861.9 -700.3Q2823.9 -795.6 2768 -839.9Q2712 -884.1 2641.4 -877.6Q2571.8 -871.2 2528.2 -815.4Q2484.5 -759.6 2470 -658.6Q2455.4 -557.6 2471.1 -414.7Q2487.4 -272.3 2526.1 -176.7Q2564.8 -81.1 2621 -35.7Q2677.2 9.8 2744.9 3.8Z"/>
+        </g>
+      </svg>
+    </footer>
+  </main>
 {% endtimezone %}
 </body>
 </html>
