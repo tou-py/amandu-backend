@@ -98,7 +98,7 @@ class BookingRequestSerializer(serializers.Serializer):
 
     def validate_start(self, start):
         if start < timezone.now():
-            raise serializers.ValidationError('That time has already passed.')
+            raise serializers.ValidationError('Ese horario ya pasó. Elegí otro.')
         return start
 
     def validate(self, attrs):
@@ -114,7 +114,7 @@ class BookingRequestSerializer(serializers.Serializer):
         start = attrs['start']
         if not candidates(self.shop, attrs['service'], attrs.get('professional'), start):
             raise serializers.ValidationError(
-                {'start': 'That slot is not available.'}
+                {'start': 'Ese horario ya no está libre. Elegí otro.'}
             )
         # Every pending request holds a real slot in somebody's diary, and a
         # stranger proved nothing by typing a phone number. Past this many, the

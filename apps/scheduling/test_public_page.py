@@ -183,10 +183,9 @@ def test_a_booked_slot_is_simply_absent_never_named(client, salon, stylist, hair
     )
     taken.client_links.create(client=Client.objects.create(tenant=salon, name='Grace'))
 
-    # Only the first Monday: the horizon spans two weeks, so the Monday after
-    # this one is legitimately free at nine and would make this assertion pass
-    # or fail for the wrong reason.
-    first_day = html(client, salon).split('class="day"')[1]
+    # The page shows one day's hours at a time, the first open one by default:
+    # this Monday, not the next one, which is legitimately free at nine.
+    first_day = html(client, salon)
 
     assert '>09:00<' not in first_day
     assert '>09:30<' in first_day
@@ -260,7 +259,58 @@ def test_a_rejected_form_comes_back_with_the_reason_and_the_typing(client, salon
 
 def test_a_day_with_no_hours_is_left_out(client, salon, stylist, haircut, open_monday,
                                          monday_morning):
-    """Two weeks are rendered but only the days that have something to offer."""
+    """Two weeks are drawn, but only the days that have something to offer can
+    be picked: the rest are there to keep the fortnight's shape."""
     body = html(client, salon)
 
-    assert body.count('class="day"') == 2
+    assert body.count('<a class="d"') == 2
+    assert body.count('<span class="d"') == 12
+
+
+def test_another_day_shows_its_own_hours(client, salon, stylist, haircut, open_monday,
+                                         monday_morning):
+    next_monday = MONDAY + timedelta(days=7)
+    body = html(client, salon, day=next_monday.isoformat())
+
+    assert local(9, day=next_monday).isoformat() in body
+    assert local(9).isoformat() not in body
+
+
+def test_the_soonest_hour_lands_on_the_form_already_ticked(client, salon, stylist, haircut,
+                                                           open_monday, monday_morning):
+    body = html(client, salon, day=MONDAY.isoformat(), start=local(9).isoformat())
+
+    assert f'value="{local(9).isoformat()}" required checked' in body
+
+
+def test_a_slot_taken_in_the_meantime_is_a_sentence_not_a_409(client, salon, stylist,
+                                                               haircut, open_monday,
+                                                               monday_morning, monkeypatch):
+    """Two strangers on the same slot: the loser keeps what they typed."""
+    from apps.scheduling import public_pages
+    from apps.scheduling.views import Overlaps
+
+    def taken(*args):
+        raise Overlaps()
+    monkeypatch.setattr(public_pages, 'create_booking', taken)
+
+    response = client.post(page_url(salon), {
+        'service': haircut.pk, 'professional': stylist.pk,
+        'start': local(9).isoformat(), 'name': 'Ada', 'phone': '+595981123456',
+    })
+    body = response.content.decode()
+
+    assert response.status_code == 200
+    assert 'se acaba de ocupar' in body
+    assert 'Ada' in body
+
+
+def test_the_form_errors_are_spanish(client, salon, stylist, haircut, open_monday,
+                                     monday_morning):
+    body = client.post(page_url(salon), {
+        'service': haircut.pk, 'professional': stylist.pk,
+        'start': local(9).isoformat(), 'name': '', 'phone': '+595981123456',
+    }).content.decode()
+
+    assert 'role="alert"' in body
+    assert 'This field' not in body
