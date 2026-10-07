@@ -276,6 +276,8 @@
   /* --- form ------------------------------------------------------------ */
 
   label.field { display: block; margin: 0 0 1rem; }
+  label.consent { display: flex; gap: .6rem; align-items: flex-start; margin: 0 0 1.25rem; font-size: .9rem; }
+  label.consent input { margin-top: .2rem; }
   label.field > span { display: block; font-size: .85rem; color: var(--ink-subtle); margin-bottom: .35rem; }
   input[type=text], input[type=tel], input[type=email] {
     width: 100%;
@@ -343,6 +345,9 @@
       <strong class="when amandu-display amandu-time">{{ booked_at|date:"l j" }} de {{ booked_at|date:"F" }}, {{ booked_at|time:"H:i" }}</strong>
       <p><span class="amandu-lozenge who">con {{ professional.display_name }}</span></p>
       <p>Lo mandamos a {{ shop.name }}. Te confirman ellos — hasta entonces el horario te queda guardado.</p>
+      {% if whatsapp_link %}
+        <p><a href="{{ whatsapp_link }}">Escribinos por WhatsApp</a> y te avisamos por ahí cuando te respondan.</p>
+      {% endif %}
       <p><a href="{{ request.path }}">Pedir otro turno</a></p>
     </div>
 
@@ -367,7 +372,7 @@
         <a class="next" href="#cuando">
           <span class="amandu-eyebrow">Lo más cercano</span>
           <strong class="when amandu-display amandu-time">{% if first_is_today %}Hoy{% else %}{{ first_slot|date:"l j" }} de {{ first_slot|date:"F" }}{% endif %} a las {{ first_slot|time:"H:i" }}</strong>
-          <span class="amandu-lozenge who">con {{ professional.display_name }}</span>
+          {% if professional %}<span class="amandu-lozenge who">con {{ professional.display_name }}</span>{% endif %}
           <span class="go">Ver todos los horarios →</span>
         </a>
       {% endif %}
@@ -378,7 +383,7 @@
       <ul class="chips">
         {% for option in services %}
           <li><a class="chip" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}"
-                 href="?service={{ option.pk }}&professional={{ professional.pk }}">
+                 href="?service={{ option.pk }}&professional={{ professional.pk|default:'' }}">
             {{ option.name }} <small>{{ option.duration_minutes }} min</small>
           </a></li>
         {% endfor %}
@@ -389,6 +394,8 @@
       <section class="step">
         <h2>Con quién</h2>
         <ul class="chips">
+          <li><a class="chip" aria-current="{% if professional %}false{% else %}true{% endif %}"
+                 href="?service={{ service.pk }}&professional=">Cualquiera</a></li>
           {% for option in professionals %}
             <li><a class="chip" aria-current="{% if option.pk == professional.pk %}true{% else %}false{% endif %}"
                    href="?service={{ service.pk }}&professional={{ option.pk }}">{{ option.display_name }}</a></li>
@@ -399,7 +406,7 @@
 
     <form method="post" action="">
       <input type="hidden" name="service" value="{{ service.pk }}">
-      <input type="hidden" name="professional" value="{{ professional.pk }}">
+      <input type="hidden" name="professional" value="{{ professional.pk|default:'' }}">
 
       <section class="step" id="cuando">
         <h2>Cuándo</h2>
@@ -449,6 +456,11 @@
             <span>Email <small>(opcional)</small></span>
             <input type="email" name="email" value="{{ submitted.email|default:'' }}" autocomplete="email">
             {% if errors.email %}<p class="error">{{ errors.email.0 }}</p>{% endif %}
+          </label>
+
+          <label class="consent">
+            <input type="checkbox" name="notify_whatsapp" value="true"{% if submitted.notify_whatsapp %} checked{% endif %}>
+            <span>Avisarme por WhatsApp a este teléfono cuando respondan</span>
           </label>
 
           <button type="submit">Pedir este turno</button>

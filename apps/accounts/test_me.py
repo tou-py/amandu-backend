@@ -214,3 +214,17 @@ def test_me_carries_the_tenant_country(db, django_user_model):
     res = api(user).get(ME_URL)
 
     assert res.data['memberships'][0]['tenant_country'] == 'PE'
+
+
+def test_a_local_number_is_read_in_the_country_of_their_business(db, django_user_model):
+    """A person has no country; the business they work for does. This is the
+    number their WhatsApp notices go to."""
+    shop = Tenant.objects.create(name='Salon', slug='py-salon', country='PY')
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=shop)
+
+    res = api(user).patch(ME_URL, {'phone': '0981 123456'}, format='json')
+
+    assert res.status_code == 200
+    user.refresh_from_db()
+    assert str(user.phone) == '+595981123456'

@@ -15,9 +15,10 @@ meaning of "book" and two ways of asking for it.
 """
 
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.shortcuts import redirect
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -31,12 +32,16 @@ from rest_framework.decorators import (
 from rest_framework.permissions import AllowAny
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import SimpleRateThrottle
 
 from apps.accounts.models import Membership
-from apps.scheduling.availability import free_slots
 from apps.scheduling.models import Service, WorkSchedule
-from apps.scheduling.public import BookingRequestSerializer, _shop, create_booking
+from apps.scheduling.public import (
+    BookingRequestSerializer,
+    _shop,
+    create_booking,
+    offered_slots,
+)
 
 # Two weeks. Long enough that somebody booking a colour in advance finds a day,
 # short enough that the page stays one scroll and one query.
@@ -51,15 +56,26 @@ HORIZON_DAYS = 13
 # error messages to a front end that does not expect it.
 
 
-class PublicPageThrottle(ScopedRateThrottle):
+class PublicPageThrottle(SimpleRateThrottle):
     """
     Reading the page and asking for a slot are the same URL and must not share
-    a budget: one is browsing, the other writes a row into a real diary.
+    a budget: one is browsing, the other writes a row into a real diary and
+    queues WhatsApp messages to whatever number was typed.
+
+    SimpleRateThrottle and not ScopedRateThrottle: the scoped one re-reads its
+    scope from the view's `throttle_scope`, which a function view does not have,
+    so it let every request through no matter what was set here.
     """
+
+    scope = 'public-read'  # read at construction, before any request is seen
 
     def allow_request(self, request, view):
         self.scope = 'public-booking' if request.method == 'POST' else 'public-read'
+        self.num_requests, self.duration = self.parse_rate(self.get_rate())
         return super().allow_request(request, view)
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
 
 # Out of the OpenAPI schema: it returns HTML to a person, and the schema is
@@ -81,7 +97,7 @@ def booking_page(request, slug):
         return _render(shop, {'unconfigured': True})
 
     service = _pick(services, request.query_params.get('service'))
-    professional = _pick(professionals, request.query_params.get('professional'))
+    professional = _pick_professional(professionals, request.query_params.get('professional'))
 
     errors = {}
     if request.method == 'POST':
@@ -103,13 +119,13 @@ def booking_page(request, slug):
             })))
         errors = form.errors
         service = _pick(services, request.data.get('service')) or service
-        professional = _pick(professionals, request.data.get('professional')) or professional
+        professional = _pick_professional(professionals, request.data.get('professional'))
 
     today = timezone.localdate(timezone=zone)
     week = [
         {'date': day, 'slots': slots}
-        for day, slots in free_slots(
-            professional, service, today, today + timedelta(days=HORIZON_DAYS),
+        for day, slots in offered_slots(
+            shop, service, professional, today, today + timedelta(days=HORIZON_DAYS),
         ).items()
     ]
     opening_hours = _opening_hours(professionals)
@@ -122,7 +138,8 @@ def booking_page(request, slug):
         'professional': professional,
         # Which of the six tints names this stylist. Same rule as the staff
         # panel, so a person keeps one colour on both sides of the product.
-        'hue': professionals.index(professional) % 6 + 1,
+        # "Cualquiera" names nobody, so it takes the first.
+        'hue': professionals.index(professional) % 6 + 1 if professional else 1,
         'week': week,
         'has_any_slot': any(day['slots'] for day in week),
         # The one fact somebody arrives for. It leads the page, so it is worth
@@ -133,6 +150,7 @@ def booking_page(request, slug):
         'errors': errors,
         'submitted': request.data if errors else {},
         'booked_at': _booked_at(request, zone),
+        'whatsapp_link': _whatsapp_link(shop),
         'opening_hours': opening_hours,
     })
 
@@ -146,11 +164,36 @@ def _booked_at(request, zone):
     return parsed.astimezone(zone)
 
 
+def _whatsapp_link(shop):
+    """
+    A wa.me link to the Kyo number, offered once a request is in.
+
+    The single best defence the shared number has against being banned:
+    a client who writes first turns every notice after it into a reply, which
+    is what WhatsApp expects of an automated number (apps/scheduling/whatsapp.py).
+    """
+    if not (settings.WHATSAPP_NUMBER and shop.phone):
+        return None
+    number = settings.WHATSAPP_NUMBER.lstrip('+')
+    return f'https://wa.me/{number}?text=' + quote(f'Hola, pedí un turno en {shop.name}.')
+
+
 def _render(shop, context):
     return Response(
         {'shop': shop, 'shop_timezone': shop.timezone, **context},
         template_name='scheduling/booking.html',
     )
+
+
+def _pick_professional(professionals, raw):
+    """
+    The professional asked for, or None for "Cualquiera" -- the default, since
+    most people booking a cut do not mind who gives it. A shop of one has no
+    choice to offer, so that one person is simply who it is.
+    """
+    if len(professionals) == 1:
+        return professionals[0]
+    return next((one for one in professionals if str(one.pk) == str(raw)), None)
 
 
 def _pick(options, raw):

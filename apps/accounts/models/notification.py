@@ -41,6 +41,10 @@ class Notification(models.Model):
         # opened -- so tapping it opens Por cobrar, which is always current.
         # Only the push, built at send time, spells the figures out.
         PLAN_DIGEST = 'plan_digest', 'Plan digest'
+        # A teammate answered a public request in this professional's name.
+        # Never filed for the professional's own answer (apps/scheduling/announce.py).
+        APPOINTMENT_CONFIRMED = 'appointment_confirmed', 'Appointment confirmed'
+        APPOINTMENT_REJECTED = 'appointment_rejected', 'Appointment rejected'
 
     recipient = models.ForeignKey(
         'accounts.Membership',
