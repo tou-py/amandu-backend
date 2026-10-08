@@ -1,7 +1,16 @@
+from django.core.exceptions import ObjectDoesNotExist
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounting.models import CashEntry
+from apps.invoicing.models import Invoice
 from apps.scheduling.models import Appointment
+
+
+class EntryInvoiceSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    status = serializers.ChoiceField(choices=Invoice.Status.choices)
+    display_number = serializers.CharField(source='__str__')
 
 
 class CashEntrySerializer(serializers.ModelSerializer):
@@ -13,13 +22,15 @@ class CashEntrySerializer(serializers.ModelSerializer):
 
     # The name the team list shows (Membership.display_name); null when unknown.
     recorded_by_name = serializers.SerializerMethodField()
+    # The payment's electronic invoice, if it has one (apps/invoicing).
+    invoice = serializers.SerializerMethodField()
 
     class Meta:
         model = CashEntry
         fields = (
             'id', 'kind', 'amount', 'occurred_on', 'concept', 'payment_method',
             'appointment', 'client', 'subscription', 'period',
-            'voided_at', 'void_reason', 'recorded_by_name', 'created_at', 'updated_at',
+            'voided_at', 'void_reason', 'recorded_by_name', 'invoice', 'created_at', 'updated_at',
         )
         # client/subscription/period are read-only HERE: a payment for a turn or
         # a plan period is filed through the charge actions, which work out the
@@ -40,6 +51,14 @@ class CashEntrySerializer(serializers.ModelSerializer):
             # turns a foreign id into a 400 instead of a cross-tenant link.
             self.fields['appointment'].queryset = Appointment.objects.for_tenant(tenant)
 
+
+    @extend_schema_field(EntryInvoiceSerializer(allow_null=True))
+    def get_invoice(self, entry):
+        try:
+            invoice = entry.invoice
+        except ObjectDoesNotExist:
+            return None
+        return EntryInvoiceSerializer(invoice).data
 
     def get_recorded_by_name(self, entry) -> str | None:
         user = entry.recorded_by

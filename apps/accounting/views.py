@@ -1,12 +1,14 @@
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
-from rest_framework.decorators import action
 from rest_framework import status
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer, VoidSerializer
 from apps.commons.errors import Refused
+from apps.invoicing import service as invoicing
 from apps.tenancy.permissions import IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
@@ -48,14 +50,20 @@ class CashEntryViewSet(TenantScopedModelViewSet):
         Reverse a payment, with a reason. The entry stays in the book, marked;
         from now on it counts for nothing -- not as cover, not against debt, not
         in totals -- and the period or turn it paid can be charged again.
+
+        An invoiced payment takes its invoice with it: the invoice is cancelled
+        at the SET first, and if that cannot happen (still pending, past the
+        48 hours, provider down) the payment is not voided either.
         """
         entry = self.get_object()
         body = VoidSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         if entry.voided_at is not None:
             raise Refused('This payment is already void.', 'already_voided', status.HTTP_409_CONFLICT)
-        entry.voided_at = timezone.now()
-        entry.voided_by = request.membership
-        entry.void_reason = body.validated_data['reason']
-        entry.save(update_fields=['voided_at', 'voided_by', 'void_reason', 'updated_at'])
+        with transaction.atomic():
+            invoicing.cancel_for_void(entry, request.user, body.validated_data['reason'])
+            entry.voided_at = timezone.now()
+            entry.voided_by = request.membership
+            entry.void_reason = body.validated_data['reason']
+            entry.save(update_fields=['voided_at', 'voided_by', 'void_reason', 'updated_at'])
         return Response(self.get_serializer(entry).data)

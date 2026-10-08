@@ -62,6 +62,7 @@ LOCAL_APPS = [
     'apps.accounts',
     'apps.scheduling',
     'apps.accounting',
+    'apps.invoicing',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -254,6 +255,19 @@ VAPID_PRIVATE_KEY = env.str('VAPID_PRIVATE_KEY', default='')
 VAPID_SUBJECT = env.str('VAPID_SUBJECT', default='')
 
 
+# Electronic invoicing (apps/invoicing). Optional like push: without these the
+# API serves everything else, and saving an invoicing account refuses instead.
+#
+# A Fernet key (`python -c "from cryptography.fernet import Fernet;
+# print(Fernet.generate_key().decode())"`) that encrypts each business's
+# provider credentials at rest. Never rotate it without re-encrypting
+# tb_invoicing_account: a new key cannot read the old rows.
+INVOICING_ENCRYPTION_KEY = env.str('INVOICING_ENCRYPTION_KEY', default='')
+# Where SifenSIS answers, without the /api/v1/de suffix. The environment
+# (sandbox, homologación, producción) is chosen by each business's API key.
+SIFENSIS_BASE_URL = env.str('SIFENSIS_BASE_URL', default='')
+
+
 # Django REST Framework
 # Fail closed by default: every endpoint requires authentication unless it opts
 # out explicitly (the login/refresh views set their own empty permissions).
@@ -309,6 +323,11 @@ SPECTACULAR_SETTINGS = {
     # The Swagger/Redoc pages already render the schema; don't also inline it there.
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
+    # Several models call their state `status`; without a name of its own the
+    # invoice's would come out as a hash-suffixed enum in the front's types.
+    'ENUM_NAME_OVERRIDES': {
+        'InvoiceStatusEnum': 'apps.invoicing.models.Invoice.Status',
+    },
 }
 
 # JWT

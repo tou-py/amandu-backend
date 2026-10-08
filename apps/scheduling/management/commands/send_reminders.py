@@ -1,5 +1,5 @@
 """
-The sweep. Four things come due on the same tick and share one run:
+The sweep. Five things come due on the same tick and share one run:
 
   * a tenant whose paid period ran out, which loses access;
   * a business's morning plan digest -- who owes, what falls due soon -- for
@@ -7,7 +7,8 @@ The sweep. Four things come due on the same tick and share one run:
   * a reminder of the appointment a professional is about to give;
   * a Notification row nobody has been told about yet -- a teammate cancelling
     a slot that was not theirs (AppointmentViewSet.cancel), a request from the
-    public page, or the digest above.
+    public page, or the digest above;
+  * an electronic invoice the SET has not settled yet (apps/invoicing).
 
 Kept in one command, under a name that only says "reminders", deliberately: the
 cron entry lives in Dokploy's UI, not in this repo, and a second command means a
@@ -45,6 +46,7 @@ from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
 from apps.accounts.models import Membership, Notification
+from apps.invoicing import service as invoicing
 from apps.scheduling import billing
 from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
@@ -72,7 +74,7 @@ DIGEST_HOUR = 5
 
 class Command(BaseCommand):
     help = (
-        'Suspend lapsed tenants, file the daily plan digest, push appointment '
+        'Suspend lapsed tenants, file the daily plan digest, follow unsettled invoices, push appointment '
         'reminders that have come due and any notification not yet delivered. '
         'Safe to run repeatedly.'
     )
@@ -87,6 +89,9 @@ class Command(BaseCommand):
         # in-app feed is how a device that never allowed push still sees it. The
         # push half below picks the rows up on this same tick.
         self._run_digest()
+        # Also before it: following an invoice to the SET has nothing to do with
+        # push. Idempotent per row, so an overlapping tick only asks twice.
+        invoicing.refresh_unsettled()
 
         if not (settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             # Loud here rather than at boot: the API must serve an agenda without

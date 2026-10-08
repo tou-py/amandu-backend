@@ -1,11 +1,19 @@
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Exists, OuterRef
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.accounts.models import CustomUser, Invitation, Membership, Notification, PushSubscription
+from apps.accounts.models import (
+    CustomUser,
+    Invitation,
+    Membership,
+    Notification,
+    PushSubscription,
+)
+from apps.invoicing.models import InvoicingAccount
 from apps.scheduling.models import Appointment
 from apps.tenancy.models import Tenant
 
@@ -24,11 +32,19 @@ def active_memberships(user):
             'tenant_slug': m.tenant.slug,
             'tenant_name': m.tenant.name,
             'tenant_country': str(m.tenant.country),
+            'tenant_invoicing': m.tenant_invoicing,
             'role': m.role,
         }
         for m in user.memberships.select_related('tenant').filter(
             status=Membership.Status.ACTIVE,
             tenant__status=Tenant.Status.ACTIVE,
+        ).annotate(
+            # Whether "Facturar" belongs on this business's payments at all. On
+            # the session, not behind the account endpoint, because that one is
+            # admin-only and the front desk is who invoices.
+            tenant_invoicing=Exists(InvoicingAccount.objects.filter(
+                tenant=OuterRef('tenant'), active=True,
+            ).exclude(credentials_encrypted='')),
         )
     ]
 
@@ -45,6 +61,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
     tenant_country = serializers.CharField()
+    tenant_invoicing = serializers.BooleanField()
     role = serializers.CharField()
 
 

@@ -45,3 +45,7 @@ EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
 
 # Required in production (see production.py). Tests that depend on it set their own.
 BILLING_GO_LIVE = date(2026, 10, 2)
+
+# Fixed so encrypted credentials round-trip; no test talks to a real provider.
+INVOICING_ENCRYPTION_KEY = 'kQx0b3Vf2X0m1yq8b0Zr3m6m8m3kq9Q2wq0eZ7m5n1E='
+SIFENSIS_BASE_URL = 'https://sifensis.test'

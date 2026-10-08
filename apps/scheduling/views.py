@@ -257,7 +257,7 @@ class ClientViewSet(TenantScopedModelViewSet):
         paginated like the timeline.
         """
         client = self.get_object()
-        entries = CashEntry.objects.for_tenant(request.tenant).filter(client=client).select_related('recorded_by')
+        entries = CashEntry.objects.for_tenant(request.tenant).filter(client=client).select_related('recorded_by', 'invoice')
         page = self.paginate_queryset(entries)
         serializer = CashEntrySerializer(page if page is not None else entries, many=True)
         if page is not None:

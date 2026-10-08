@@ -41,6 +41,7 @@ urlpatterns = [
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
     path('api/', include('apps.accounting.urls')),
+    path('api/', include('apps.invoicing.urls')),
     # API docs. AllowAny because DEFAULT_PERMISSION_CLASSES is IsAuthenticated and
     # the docs must be reachable without a token. Lock these down before exposing
     # the API publicly if the endpoint list itself is sensitive.
