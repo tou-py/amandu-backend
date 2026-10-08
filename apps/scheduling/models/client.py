@@ -29,6 +29,12 @@ class Client(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # pass without a word.
     phone = PhoneNumberField(blank=True)
     email = models.EmailField(blank=True)
+    # Who the invoice is made out to, when it is not the anonymous end
+    # consumer: a RUC with its check digit ("80012345-6") or a cédula, and the
+    # name registered with it -- a company's razón social is rarely the person
+    # sitting in the chair. Both optional; apps/invoicing reads them.
+    tax_id = models.CharField(max_length=20, blank=True)
+    tax_name = models.CharField(max_length=120, blank=True)
     # Deliberately a plain field, not a Note model: phase 1 notes are trivial. A
     # model earns its place when someone needs to know who wrote what and when.
     notes = models.TextField(blank=True)

@@ -145,10 +145,13 @@ class ClientSerializer(serializers.ModelSerializer):
     # always an object keyed by field key. DictField also rejects a list or a
     # string before validate() ever runs.
     custom_data = serializers.DictField(required=False)
+    # A RUC with its check digit, or a cédula: what SIFEN accepts as a receiver.
+    tax_id = serializers.RegexField(r'^(\d+(-\d)?)?$', max_length=20, required=False, allow_blank=True)
+
     class Meta:
         model = Client
         fields = (
-            'id', 'name', 'phone', 'email', 'notes', 'custom_data',
+            'id', 'name', 'phone', 'email', 'tax_id', 'tax_name', 'notes', 'custom_data',
             'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
