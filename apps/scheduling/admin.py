@@ -8,7 +8,9 @@ from apps.scheduling.models import (
     Category,
     Client,
     ClientField,
+    Plan,
     Service,
+    Subscription,
 )
 from apps.tenancy.admin import TenantOwnedAdmin
 
@@ -125,6 +127,42 @@ class AppointmentAdmin(TenantOwnedAdmin):
     list_select_related = ('tenant', 'professional__user', 'service')
     readonly_fields = ('id', 'end', 'cancelled_at', 'reminder_sent_at', 'created_at', 'updated_at')
     inlines = (AppointmentClientInline,)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(Plan)
+class PlanAdmin(TenantOwnedAdmin):
+    """
+    `categories` is read-only here: nothing in the database stops a plan from
+    covering another tenant's category, and this form would offer every one of
+    them. A plan created here covers everything (empty means all); narrow it in
+    the app. Archive rather than delete -- a plan in use is PROTECTed anyway.
+    """
+
+    list_display = ('name', 'tenant', 'price', 'sessions_per_period', 'archived', 'created_at')
+    list_filter = ('archived', ('tenant', admin.RelatedOnlyFieldListFilter))
+    search_fields = ('name', 'tenant__name')
+    readonly_fields = ('categories', 'created_at', 'updated_at')
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(TenantOwnedAdmin):
+    """
+    Add is off for the same reason as Appointment: client and plan reach their
+    tenant separately and only SubscriptionSerializer makes them agree, so both
+    are frozen on edit too. What stays editable is the date or price fix support
+    gets asked for. Changing plan is ending this row and opening another -- do
+    it in the app, where the periods already owed keep their price.
+    """
+
+    list_display = ('client', 'plan', 'tenant', 'start_date', 'end_date', 'price_override')
+    list_filter = (('tenant', admin.RelatedOnlyFieldListFilter),)
+    search_fields = ('client__name', 'plan__name', 'tenant__name')
+    date_hierarchy = 'start_date'
+    list_select_related = ('tenant', 'client', 'plan')
+    readonly_fields = ('client', 'plan', 'created_at', 'updated_at')
 
     def has_add_permission(self, request):
         return False
