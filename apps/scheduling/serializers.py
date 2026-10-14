@@ -344,6 +344,42 @@ class WorkScheduleSerializer(ProfessionalScopedMixin, serializers.ModelSerialize
         return attrs
 
 
+class ShiftSerializer(serializers.Serializer):
+    """One stretch of a week sent whole (WeekSerializer)."""
+
+    # The model's own choices, so the schema names one weekday enum, not two.
+    weekday = serializers.ChoiceField(choices=WorkSchedule._meta.get_field('weekday').choices)
+    start_time = serializers.TimeField()
+    end_time = serializers.TimeField()
+
+    def validate(self, attrs):
+        if attrs['end_time'] <= attrs['start_time']:
+            raise serializers.ValidationError(
+                {'end_time': 'The end of a shift must come after its start.'}
+            )
+        return attrs
+
+
+class WeekSerializer(ProfessionalScopedMixin, serializers.Serializer):
+    """
+    A professional's whole week, replacing what they had. The shape the
+    schedule screen thinks in -- "Monday to Friday, 9 to 6", "the same as Ana"
+    -- sent as one request, so a copy or a five-day change lands entirely or
+    not at all instead of leaving a half-written week behind a failed request.
+    """
+
+    professional = serializers.PrimaryKeyRelatedField(queryset=Membership.objects.none())
+    shifts = ShiftSerializer(many=True)
+
+    def validate_shifts(self, shifts):
+        # The same start twice on one day is the unique constraint's refusal;
+        # said here as a 400 rather than a 500 from the IntegrityError.
+        starts = [(shift['weekday'], shift['start_time']) for shift in shifts]
+        if len(starts) != len(set(starts)):
+            raise serializers.ValidationError('Two stretches start at the same time on one day.')
+        return shifts
+
+
 class TimeOffSerializer(ProfessionalScopedMixin, serializers.ModelSerializer):
     """
     A stretch taken out of the working week. `professional` null on purpose

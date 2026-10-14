@@ -66,6 +66,7 @@ from apps.scheduling.serializers import (
     ServiceSerializer,
     TimeOffSerializer,
     VisitSerializer,
+    WeekSerializer,
     WorkScheduleSerializer,
 )
 from apps.scheduling.workload import daily_load
@@ -609,6 +610,28 @@ class WorkScheduleViewSet(TenantScopedModelViewSet):
         if professional:
             rows = rows.filter(professional_id=professional)
         return rows
+
+    @extend_schema(request=WeekSerializer, responses=WorkScheduleSerializer(many=True))
+    @action(detail=False, methods=['put'])
+    @transaction.atomic
+    def week(self, request):
+        """
+        Replace one professional's whole week in one go: "Monday to Friday, 9
+        to 6", or the same week as a colleague. All or nothing, so a request
+        that fails halfway never leaves a week with three days copied.
+
+        An empty `shifts` closes every day. Owner/admin, like every write here.
+        """
+        body = WeekSerializer(data=request.data, context=self.get_serializer_context())
+        body.is_valid(raise_exception=True)
+        professional = body.validated_data['professional']
+        WorkSchedule.objects.for_tenant(request.tenant).filter(professional=professional).delete()
+        rows = WorkSchedule.objects.bulk_create(
+            WorkSchedule(tenant=request.tenant, professional=professional, **shift)
+            for shift in body.validated_data['shifts']
+        )
+        rows.sort(key=lambda row: (row.weekday, row.start_time))
+        return Response(WorkScheduleSerializer(rows, many=True).data)
 
 
 @extend_schema_view(
