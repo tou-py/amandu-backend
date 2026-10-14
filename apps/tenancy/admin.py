@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -12,6 +12,7 @@ from django.utils.html import format_html
 # apps.accounts.admin from here would be a real cycle.
 from apps.accounts.models import Invitation, Membership
 from apps.commons.dates import one_month_after
+from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 
 
@@ -113,8 +114,11 @@ class InvitationInline(admin.TabularInline):
 
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'status', 'paid_until', 'member_count', 'client_count', 'timezone')
-    list_filter = ('status',)
+    list_display = (
+        'name', 'slug', 'status', 'paid_until', 'monthly_total',
+        'member_count', 'client_count', 'timezone',
+    )
+    list_filter = ('status', 'addon_cobros', 'addon_facturacion')
     search_fields = ('name', 'slug')
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = ('created_at', 'updated_at')
@@ -123,11 +127,13 @@ class TenantAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {'fields': ('name', 'slug', 'status')}),
         ('Billing', {
-            'fields': ('paid_until',),
+            'fields': ('paid_until', 'addon_cobros', 'addon_facturacion'),
             'description': (
                 'Payment is a bank transfer confirmed by hand. Use the '
                 '"Register a monthly payment" action rather than editing the date: '
-                'it also lifts a suspension.'
+                'it also lifts a suspension. The plan is not set here: it is Solo '
+                'with one member attending appointments and Equipo with more '
+                '(see "Attends appointments" below).'
             ),
         }),
         ('Locale', {'fields': ('timezone', 'country')}),
@@ -141,7 +147,21 @@ class TenantAdmin(admin.ModelAdmin):
         return super().get_queryset(request).annotate(
             _members=Count('memberships', distinct=True),
             _clients=Count('scheduling_client_set', distinct=True),
+            _professionals=Count(
+                'memberships',
+                filter=Q(
+                    memberships__status=Membership.Status.ACTIVE,
+                    memberships__attends_appointments=True,
+                ),
+                distinct=True,
+            ),
         )
+
+    @admin.display(description='Gs./month')
+    def monthly_total(self, tenant):
+        """What the next transfer should be, so confirming one is a comparison."""
+        total = sum(line['amount'] for line in pricing.monthly_lines(tenant, tenant._professionals))
+        return f'{total:,}'.replace(',', '.')
 
     @admin.display(description='Members', ordering='_members')
     def member_count(self, tenant):

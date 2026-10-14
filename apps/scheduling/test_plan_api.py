@@ -35,12 +35,12 @@ def api(user=None, tenant=None):
 
 @pytest.fixture
 def studio(db):
-    return Tenant.objects.create(name='Studio', slug='studio', country='PY')
+    return Tenant.objects.create(name='Studio', slug='studio', country='PY', addon_cobros=True)
 
 
 @pytest.fixture
 def gym(db):
-    return Tenant.objects.create(name='Gym', slug='gym', country='PY')
+    return Tenant.objects.create(name='Gym', slug='gym', country='PY', addon_cobros=True)
 
 
 def member(django_user_model, tenant, role, email):

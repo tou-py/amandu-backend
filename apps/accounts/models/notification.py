@@ -41,6 +41,10 @@ class Notification(models.Model):
         # opened -- so tapping it opens Por cobrar, which is always current.
         # Only the push, built at send time, spells the figures out.
         PLAN_DIGEST = 'plan_digest', 'Plan digest'
+        # Paying Kyo is due or late (send_reminders), to the owner only, once a
+        # day from three days before paid_until until the sweep suspends. No
+        # actor and no appointment; it opens the business page.
+        BILLING_DUE = 'billing_due', 'Billing due'
 
     recipient = models.ForeignKey(
         'accounts.Membership',

@@ -1,7 +1,10 @@
-from rest_framework.permissions import BasePermission
+from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from apps.accounts.models import Membership
 from apps.tenancy.models import Tenant
+from apps.tenancy.pricing import READ_ONLY, billing_state
 
 
 class HasActiveMembership(BasePermission):
@@ -38,14 +41,18 @@ class HasActiveMembership(BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        memberships = list(
+        live = list(
             user.memberships.select_related('tenant').filter(
                 status=Membership.Status.ACTIVE,
                 # Mirrors Tenant.is_operational: a suspended tenant suspends
                 # everyone inside it, whatever their own membership says.
-                tenant__status=Tenant.Status.ACTIVE,
+                tenant__status__in=(Tenant.Status.ACTIVE, Tenant.Status.SUSPENDED),
             )
         )
+        # Resolution only ever picks among working tenants, exactly as before
+        # suspended ones were visible: a suspended tenant next to a working one
+        # must not turn "the only one" into "pick one".
+        memberships = [m for m in live if m.tenant.status == Tenant.Status.ACTIVE]
 
         raw_tenant_id = request.headers.get('X-Tenant-ID')
         if raw_tenant_id:
@@ -55,13 +62,36 @@ class HasActiveMembership(BasePermission):
                 (m for m in memberships if str(m.tenant_id) == raw_tenant_id),
                 None,
             )
+            asked = next((m for m in live if str(m.tenant_id) == raw_tenant_id), None)
         elif len(memberships) == 1:
             membership = memberships[0]
+            asked = None
         else:
             membership = None
+            asked = live[0] if not memberships and len(live) == 1 else None
 
         if membership is None:
+            if asked is not None and asked.tenant.status == Tenant.Status.SUSPENDED:
+                # Its own code, so the app can show "la cuenta está suspendida"
+                # instead of the same 403 a wrong header gets.
+                raise PermissionDenied(
+                    'This business is suspended.', code='tenant_suspended'
+                )
             return False
+
+        # The read-only window between paid_until and the sweep: today's
+        # clients can still be looked up, nothing new can be written. A view
+        # whose writes are not the business's work (marking notifications
+        # read) opts out with `billing_exempt`.
+        if (
+            request.method not in SAFE_METHODS
+            and not getattr(view, 'billing_exempt', False)
+            and billing_state(membership.tenant, timezone.localdate()) == READ_ONLY
+        ):
+            raise PermissionDenied(
+                'The payment period ended; the account is read-only.',
+                code='billing_read_only',
+            )
 
         request.tenant = membership.tenant
         # Carries the role. Views must read permissions from here, never from
@@ -129,3 +159,20 @@ class IsTenantCoordinator(BasePermission):
             Membership.Role.ADMIN,
             Membership.Role.COORDINATOR,
         )
+
+
+class HasCobros(BasePermission):
+    """
+    The tenant bought the Cobros add-on: monthly plans, charges, Por cobrar and
+    the cash book. Layered AFTER HasActiveMembership, which set request.tenant.
+
+    Reads stay behind it too. A tenant that stopped paying for Cobros keeps its
+    data (nothing is deleted), it just stops seeing the screens built on it.
+    """
+
+    message = 'This business does not have Cobros.'
+    code = 'addon_required'
+
+    def has_permission(self, request, view):
+        tenant = getattr(request, 'tenant', None)
+        return tenant is not None and tenant.addon_cobros

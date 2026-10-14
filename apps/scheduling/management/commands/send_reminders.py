@@ -35,6 +35,7 @@ Late is the failure mode, never silent and never twice. `reminder_sent_at`,
 guarantee hold no matter how often this runs.
 """
 import json
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -47,6 +48,7 @@ from pywebpush import WebPushException, webpush
 from apps.accounts.models import Membership, Notification
 from apps.scheduling import billing
 from apps.scheduling.models import Appointment
+from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 
 # RFC 8030 mandates 404 when the subscription has expired. Push services also
@@ -87,6 +89,7 @@ class Command(BaseCommand):
         # in-app feed is how a device that never allowed push still sees it. The
         # push half below picks the rows up on this same tick.
         self._run_digest()
+        self._run_billing_notice()
 
         if not (settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             # Loud here rather than at boot: the API must serve an agenda without
@@ -126,8 +129,10 @@ class Command(BaseCommand):
         suspended = Tenant.objects.filter(
             status=Tenant.Status.ACTIVE,
             # NULL never satisfies a comparison, which is exactly the wanted
-            # behaviour: a tenant with no paid_until is never swept.
-            paid_until__lt=timezone.localdate(),
+            # behaviour: a tenant with no paid_until is never swept. The window
+            # in between is read-only (pricing.billing_state), not suspended:
+            # today's clients can still be looked up while the transfer lands.
+            paid_until__lt=timezone.localdate() - timedelta(days=pricing.READ_ONLY_DAYS),
         ).update(status=Tenant.Status.SUSPENDED, updated_at=timezone.now())
 
         if suspended:
@@ -150,8 +155,11 @@ class Command(BaseCommand):
         """
         filed = 0
         # Only businesses that sell plans: a salon charging per turn has nothing
-        # to be woken up about, and is never even claimed.
-        tenants = Tenant.objects.filter(scheduling_subscription_set__isnull=False).distinct()
+        # to be woken up about, and is never even claimed. And only those with
+        # Cobros: the digest opens a screen they would otherwise not have.
+        tenants = Tenant.objects.filter(
+            addon_cobros=True, scheduling_subscription_set__isnull=False
+        ).distinct()
         for tenant in tenants:
             now = timezone.localtime(timezone=ZoneInfo(tenant.timezone))
             if now.hour < DIGEST_HOUR:
@@ -180,6 +188,41 @@ class Command(BaseCommand):
             ))
         if filed:
             self.stdout.write(f'{filed} plan digest(s) filed.')
+
+    def _run_billing_notice(self):
+        """
+        Tell the owner, once a day, that paying Kyo is due or late: from
+        NOTICE_DAYS before paid_until until the sweep suspends. The owner only --
+        the bill is the business's, and staff learn about it from the read-only
+        strip if it comes to that.
+
+        Same claim-then-send as the digest, on billing_notice_date, so
+        overlapping runs file it once. The server's date, like the sweep's.
+        """
+        today = timezone.localdate()
+        filed = 0
+        tenants = Tenant.objects.filter(
+            status=Tenant.Status.ACTIVE,
+            paid_until__lte=today + timedelta(days=pricing.NOTICE_DAYS),
+        ).exclude(billing_notice_date=today)
+        for tenant in tenants:
+            if pricing.billing_state(tenant, today) not in (pricing.DUE, pricing.READ_ONLY):
+                continue
+            claimed = (
+                Tenant.objects.filter(pk=tenant.pk)
+                .exclude(billing_notice_date=today)
+                .update(billing_notice_date=today)
+            )
+            if not claimed:
+                continue
+            filed += len(Notification.objects.bulk_create(
+                Notification(recipient=membership, verb=Notification.Verb.BILLING_DUE)
+                for membership in tenant.memberships.filter(
+                    role=Membership.Role.OWNER, status=Membership.Status.ACTIVE
+                )
+            ))
+        if filed:
+            self.stdout.write(f'{filed} billing notice(s) filed.')
 
     def _run(self):
         now = timezone.now()
@@ -293,7 +336,27 @@ class Command(BaseCommand):
     def notification_payload(self, notification):
         if notification.verb == Notification.Verb.PLAN_DIGEST:
             return self.digest_payload(notification)
+        if notification.verb == Notification.Verb.BILLING_DUE:
+            return self.billing_payload(notification)
         return self.cancellation_payload(notification)
+
+    def billing_payload(self, notification):
+        """Worked out now, like the digest: a push delivered after the transfer
+        was registered must not still say it is due."""
+        tenant = notification.recipient.tenant
+        state = pricing.billing_state(tenant, timezone.localdate())
+        if state == pricing.READ_ONLY:
+            body = 'La cuenta está en solo lectura. Pagá para seguir cargando turnos.'
+        elif state == pricing.DUE:
+            body = f'Tu mes de Kyo vence el {tenant.paid_until:%d/%m}.'
+        else:
+            body = 'Tu cuenta de Kyo está al día.'
+        return {
+            'title': 'Pago de Kyo',
+            'body': body,
+            'url': '/negocio',
+            'tag': f'notification-{notification.pk}',
+        }
 
     def digest_payload(self, notification):
         """

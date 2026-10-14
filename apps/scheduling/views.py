@@ -69,7 +69,7 @@ from apps.scheduling.serializers import (
     WorkScheduleSerializer,
 )
 from apps.scheduling.workload import daily_load
-from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
+from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -173,6 +173,9 @@ class ClientViewSet(TenantScopedModelViewSet):
         permissions = super().get_permissions()
         if self.request.method == 'DELETE':
             permissions.append(IsTenantAdmin())
+        # Taking money and reading what was paid are Cobros, not the file.
+        if self.action in ('charge_periods', 'charge_all', 'payments'):
+            permissions.append(HasCobros())
         return permissions
 
     def get_serializer_class(self):
@@ -399,6 +402,7 @@ class PlanViewSet(TenantScopedModelViewSet):
 
     def get_permissions(self):
         permissions = super().get_permissions()
+        permissions.append(HasCobros())
         if self.request.method not in SAFE_METHODS:
             permissions.append(IsTenantAdmin())
         return permissions
@@ -424,7 +428,7 @@ class SubscriptionViewSet(
     Any member: subscribing, ending and changing plan are front-desk work.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
     queryset = Subscription.objects.select_related('plan')
     serializer_class = SubscriptionSerializer
     # A client has a handful over its whole life; the list is read per client.
@@ -565,7 +569,7 @@ class ReceivablesView(APIView):
     desk is who chases.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
 
     @extend_schema(responses=ReceivablesSerializer)
     def get(self, request):
@@ -1155,7 +1159,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         })
 
     @extend_schema(request=ChargeTurnSerializer, responses={201: CashEntrySerializer})
-    @action(detail=True, methods=['post'])
+    # Taking money for a turn is Cobros. The tuple is the class's own plus the
+    # add-on: an action's permission_classes replaces the class's, it does not
+    # extend it.
+    @action(detail=True, methods=['post'], permission_classes=(*permission_classes, HasCobros))
     def charge(self, request, pk=None):
         """
         Take payment from ONE attendee for this turn: a cash entry linked to the
