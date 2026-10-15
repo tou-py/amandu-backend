@@ -219,6 +219,9 @@ class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets
 
     serializer_class = NotificationSerializer
     permission_classes = (IsAuthenticated, HasActiveMembership)
+    # Marking the bell read is not the business's work, and the bell is where
+    # the "pay Kyo" notice lives: it must keep working in the read-only window.
+    billing_exempt = True
 
     # Schema-only: drf-spectacular needs a class queryset to infer the model,
     # and get_queryset() below requires a real request (membership). .none()

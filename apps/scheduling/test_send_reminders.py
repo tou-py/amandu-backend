@@ -34,7 +34,7 @@ def vapid(settings):
 
 @pytest.fixture
 def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', timezone='America/Argentina/Buenos_Aires')
+    return Tenant.objects.create(name='Salon', slug='salon', timezone='America/Argentina/Buenos_Aires', addon_cobros=True)
 
 
 @pytest.fixture
@@ -400,13 +400,76 @@ def paid(db):
     return make
 
 
-def test_suspends_a_tenant_whose_paid_period_ended(paid, sent):
-    tenant = paid(days=-1)
+def test_suspends_a_tenant_once_the_read_only_window_is_over(paid, sent):
+    tenant = paid(days=-4)
 
     call_command('send_reminders')
 
     tenant.refresh_from_db()
     assert tenant.status == Tenant.Status.SUSPENDED
+
+
+@pytest.mark.parametrize('days', [-1, -3])
+def test_leaves_a_tenant_in_its_read_only_window_active(paid, sent, days):
+    """Up to three days past paid_until it can still read; the permission
+    refuses its writes (test_permissions), the sweep does not cut it off yet."""
+    tenant = paid(days=days)
+
+    call_command('send_reminders')
+
+    tenant.refresh_from_db()
+    assert tenant.status == Tenant.Status.ACTIVE
+
+
+@pytest.fixture
+def member_of(db, django_user_model):
+    def make(tenant, role=Membership.Role.OWNER):
+        user = django_user_model.objects.create_user(email=f'{role}@{tenant.slug}.com', password='pw')
+        return Membership.objects.create(user=user, tenant=tenant, role=role)
+    return make
+
+
+def billing_notices():
+    return Notification.objects.filter(verb=Notification.Verb.BILLING_DUE)
+
+
+@pytest.mark.parametrize('days, told', [(4, False), (3, True), (0, True), (-2, True)])
+def test_the_owner_is_told_from_three_days_before_paid_until(paid, sent, member_of, days, told):
+    owner = member_of(paid(days=days))
+
+    call_command('send_reminders')
+
+    assert billing_notices().filter(recipient=owner).exists() == told
+
+
+def test_the_billing_notice_goes_to_the_owner_only_once_a_day(paid, sent, member_of):
+    tenant = paid(days=1)
+    owner = member_of(tenant)
+    member_of(tenant, role=Membership.Role.ADMIN)
+
+    call_command('send_reminders')
+    call_command('send_reminders')
+
+    assert [n.recipient for n in billing_notices()] == [owner]
+
+
+def test_a_tenant_without_an_expiry_is_never_told_to_pay(salon, sent, member_of):
+    member_of(salon)
+
+    call_command('send_reminders')
+
+    assert not billing_notices().exists()
+
+
+def test_the_billing_push_opens_the_business_page(paid, sent, member_of):
+    owner = member_of(paid(days=-1))
+    PushSubscription.objects.create(user=owner.user, endpoint='https://push.example/o', p256dh='k', auth='a')
+
+    call_command('send_reminders')
+
+    payload = json.loads(sent.call_args.kwargs['data'])
+    assert payload['url'] == '/negocio'
+    assert 'solo lectura' in payload['body']
 
 
 def test_leaves_a_tenant_paid_through_today_alone(paid, sent):
@@ -447,7 +510,7 @@ def test_suspends_even_when_push_is_not_configured(paid, settings):
     The command still refuses to go on to the push half, and that is the point --
     the suspension already happened before it did."""
     settings.VAPID_PRIVATE_KEY = ''
-    tenant = paid(days=-1)
+    tenant = paid(days=-4)
 
     with pytest.raises(CommandError, match='not configured'):
         call_command('send_reminders')
@@ -570,7 +633,7 @@ def test_nothing_owed_claims_the_day_and_sends_nothing(salon, team, sent):
 
 
 def test_each_tenant_wakes_up_in_its_own_timezone(salon, team, owing, sent):
-    tokyo = Tenant.objects.create(name='Tokyo', slug='tokyo', timezone='Asia/Tokyo')
+    tokyo = Tenant.objects.create(name='Tokyo', slug='tokyo', timezone='Asia/Tokyo', addon_cobros=True)
     team(salon)
     team(tokyo)
     owing(salon)
