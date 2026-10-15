@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer, VoidSerializer
 from apps.commons.errors import Refused
-from apps.tenancy.permissions import IsTenantAdmin, IsTenantCoordinator
+from apps.tenancy.permissions import HasCobros, IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -27,7 +27,8 @@ class CashEntryViewSet(TenantScopedModelViewSet):
     http_method_names = ('post', 'options')
     # Filing a movement is an act of the day, so the front desk may do it, not
     # only the people who own the shop's figures.
-    permission_classes = (*TenantScopedModelViewSet.permission_classes, IsTenantCoordinator)
+    # The cash book is part of Cobros, so HasCobros goes before the role check.
+    permission_classes = (*TenantScopedModelViewSet.permission_classes, HasCobros, IsTenantCoordinator)
 
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.tenant, recorded_by=self.request.user)

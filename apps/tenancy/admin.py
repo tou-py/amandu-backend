@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -11,7 +11,8 @@ from django.utils.html import format_html
 # answer, and it cannot be answered without the join row. Models only; importing
 # apps.accounts.admin from here would be a real cycle.
 from apps.accounts.models import Invitation, Membership
-from apps.commons.dates import one_month_after
+from apps.commons.dates import add_months, one_month_after  # noqa: F401 -- tests import it from here
+from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 
 
@@ -113,21 +114,31 @@ class InvitationInline(admin.TabularInline):
 
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'status', 'paid_until', 'member_count', 'client_count', 'timezone')
-    list_filter = ('status',)
+    list_display = (
+        'name', 'slug', 'status', 'paid_until', 'monthly_total',
+        'member_count', 'client_count', 'timezone',
+    )
+    list_filter = ('status', 'addon_cobros', 'addon_facturacion')
     search_fields = ('name', 'slug')
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = ('created_at', 'updated_at')
     inlines = (MembershipInline, InvitationInline)
-    actions = ('register_monthly_payment', 'suspend', 'reactivate')
+    actions = (
+        'register_monthly_payment', 'register_three_months', 'register_six_months',
+        'suspend', 'reactivate',
+    )
     fieldsets = (
         (None, {'fields': ('name', 'slug', 'status')}),
         ('Billing', {
-            'fields': ('paid_until',),
+            'fields': ('paid_until', 'addon_cobros', 'addon_facturacion'),
             'description': (
                 'Payment is a bank transfer confirmed by hand. Use the '
                 '"Register a monthly payment" action rather than editing the date: '
-                'it also lifts a suspension.'
+                'it also lifts a suspension. Leave "Paid until" empty for founders and '
+                'courtesy accounts: they never expire, and their screens show the '
+                'agreement instead of list prices. The plan is not set here: it is Solo '
+                'with one member attending appointments and Equipo with more '
+                '(see "Attends appointments" below).'
             ),
         }),
         ('Locale', {'fields': ('timezone', 'country')}),
@@ -141,7 +152,21 @@ class TenantAdmin(admin.ModelAdmin):
         return super().get_queryset(request).annotate(
             _members=Count('memberships', distinct=True),
             _clients=Count('scheduling_client_set', distinct=True),
+            _professionals=Count(
+                'memberships',
+                filter=Q(
+                    memberships__status=Membership.Status.ACTIVE,
+                    memberships__attends_appointments=True,
+                ),
+                distinct=True,
+            ),
         )
+
+    @admin.display(description='Gs./month')
+    def monthly_total(self, tenant):
+        """What the next transfer should be, so confirming one is a comparison."""
+        total = sum(line['amount'] for line in pricing.monthly_lines(tenant, tenant._professionals))
+        return f'{total:,}'.replace(',', '.')
 
     @admin.display(description='Members', ordering='_members')
     def member_count(self, tenant):
@@ -156,6 +181,17 @@ class TenantAdmin(admin.ModelAdmin):
 
     @admin.action(description='Register a monthly payment (extend one month, restore access)')
     def register_monthly_payment(self, request, queryset):
+        self._register_payment(request, queryset, months=1)
+
+    @admin.action(description='Register 3 months paid ahead (extend three months, restore access)')
+    def register_three_months(self, request, queryset):
+        self._register_payment(request, queryset, months=3)
+
+    @admin.action(description='Register 6 months paid ahead (extend six months, restore access)')
+    def register_six_months(self, request, queryset):
+        self._register_payment(request, queryset, months=6)
+
+    def _register_payment(self, request, queryset, months):
         """
         What a confirmed bank transfer does. Kept as an action rather than left to
         editing the date by hand because this is the one thing that happens every
@@ -166,12 +202,20 @@ class TenantAdmin(admin.ModelAdmin):
         oversight: a tenant who paid late does not owe us the days they spent
         locked out. Paying early, on the other hand, stacks on top of what is
         left, so nobody is punished for being punctual.
+
+        Several months are counted from the original day in one step (add_months),
+        never as one month chained N times: chaining from the 31st drifts to the
+        28th and stays there.
+
+        On a tenant with no paid_until this STARTS its clock from today: that is
+        how a new paying tenant begins. So it is never the action for a founder
+        or courtesy account -- leave those NULL and they never expire.
         """
         today = timezone.localdate()
         restored = 0
 
         for tenant in queryset:
-            tenant.paid_until = one_month_after(max(tenant.paid_until or today, today))
+            tenant.paid_until = add_months(max(tenant.paid_until or today, today), months)
             fields = ['paid_until', 'updated_at']
             # Only ever lifts a suspension. A CLOSED tenant left the platform and
             # does not come back through a payment.
