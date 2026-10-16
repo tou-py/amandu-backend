@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, RegexValidator
 from django.db import models
+from phonenumber_field.modelfields import PhoneNumberField
 
 from apps.commons.mixins import TimestampMixin
 
@@ -94,6 +95,10 @@ class Tenant(TimestampMixin):
     # with six fields; a table earns its place when there are enough of these to
     # make Tenant unreadable.
     public_booking = models.BooleanField(default=False)
+    # The business's own number. It is what every WhatsApp sent on its behalf
+    # gives as the contact, and setting it is what turns those messages on:
+    # a message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
+    phone = PhoneNumberField(blank=True)
 
     class PlanPeriodStart(models.TextChoices):
         # "Everyone pays October by the 10th": a new subscription starts on the

@@ -8,6 +8,7 @@ from apps.scheduling.models import (
     Category,
     Client,
     ClientField,
+    OutboundMessage,
     Plan,
     Service,
     Subscription,
@@ -165,4 +166,24 @@ class SubscriptionAdmin(TenantOwnedAdmin):
     readonly_fields = ('client', 'plan', 'created_at', 'updated_at')
 
     def has_add_permission(self, request):
+        return False
+
+
+@admin.register(OutboundMessage)
+class OutboundMessageAdmin(TenantOwnedAdmin):
+    """
+    The WhatsApp outbox, to answer "did it go out, and if not why". Read-only:
+    a hand-edited body or a cleared `sent_at` would send twice or send words
+    nobody wrote. Deleting a stuck row is the one edit allowed.
+    """
+
+    list_display = ('to', 'tenant', 'created_at', 'sent_at', 'attempts')
+    list_filter = (('tenant', admin.RelatedOnlyFieldListFilter), ('sent_at', admin.EmptyFieldListFilter))
+    search_fields = ('to', 'body')
+    readonly_fields = ('tenant', 'appointment', 'to', 'body', 'attempts', 'sent_at', 'last_error', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False
