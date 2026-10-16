@@ -42,6 +42,10 @@ class Client(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # validates every key and value against this tenant's field definitions, and
     # is the only place that may write here.
     custom_data = models.JSONField(default=dict, blank=True)
+    # Ticked "Avisarme por WhatsApp" on the public page. Consent, so only the
+    # client ever turns it on, and an unticked box on a later booking does not
+    # take back what they said before.
+    whatsapp_opt_in = models.BooleanField(default=False)
     # No money on this row, on purpose. What a client pays lives in their
     # Subscription (a plan from the tenant's catalogue) and what they have paid
     # lives in the cash book, linked back here. The monthly fee and paid-until

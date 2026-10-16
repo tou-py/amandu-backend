@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from phonenumber_field.modelfields import PhoneNumberField
 
 from apps.accounts.managers import CustomUserManager
 from apps.commons.mixins import TimestampMixin
@@ -40,6 +41,10 @@ class CustomUser(AbstractUser, TimestampMixin):
     # PushSubscription -- see the note there on why a second flag would only be a
     # copy of the browser's answer.
     reminder_lead = models.DurationField(default=timedelta(minutes=30))
+    # Where this person hears about their turnos by WhatsApp. On the user, not the
+    # membership: it is their phone, the same in every tenant they work for.
+    # Blank is a defined state -- no WhatsApp, push only.
+    phone = PhoneNumberField(blank=True)
 
     USERNAME_FIELD = 'email'
     # USERNAME_FIELD and password are always prompted for; listing either here
