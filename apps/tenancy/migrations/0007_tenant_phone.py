@@ -7,7 +7,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0005_tenant_plan_settings'),
+        ('tenancy', '0006_tenant_addons'),
     ]
 
     operations = [

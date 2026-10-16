@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('accounts', '0009_notification_plan_digest'),
+        ('accounts', '0010_notification_billing_due'),
     ]
 
     operations = [
@@ -19,6 +19,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='notification',
             name='verb',
-            field=models.CharField(choices=[('appointment_cancelled', 'Appointment cancelled'), ('appointment_requested', 'Appointment requested'), ('plan_digest', 'Plan digest'), ('appointment_confirmed', 'Appointment confirmed'), ('appointment_rejected', 'Appointment rejected')], max_length=30),
+            field=models.CharField(choices=[('appointment_cancelled', 'Appointment cancelled'), ('appointment_requested', 'Appointment requested'), ('plan_digest', 'Plan digest'), ('appointment_confirmed', 'Appointment confirmed'), ('appointment_rejected', 'Appointment rejected'), ('billing_due', 'Billing due')], max_length=30),
         ),
     ]

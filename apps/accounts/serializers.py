@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
@@ -14,30 +15,50 @@ from apps.accounts.models import (
     PushSubscription,
 )
 from apps.scheduling.models import Appointment
+from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 
 
 def active_memberships(user):
     """
-    The tenants a user may currently act for, shaped for the client's tenant
-    switcher. Filtered to exactly what HasActiveMembership will accept per
-    request -- the membership is ACTIVE and its tenant is not suspended -- so the
-    switcher never offers an option that then 403s on every call.
+    The tenants a user belongs to, shaped for the client's tenant switcher, with
+    where each one stands on paying Kyo.
+
+    A SUSPENDED tenant is listed, flagged: hiding it used to leave its people on
+    a login that worked and an app with nothing in it, never told why. The
+    client shows "la cuenta está suspendida" for it instead of the agenda, and
+    HasActiveMembership refuses every other call with `tenant_suspended`.
+    CLOSED stays out: that business left.
+
+    `payment_instructions` only reaches the owner, and only when there is
+    something to pay -- it is how Kyo gets paid, not something staff act on.
     """
-    return [
-        {
+    today = timezone.localdate()
+    rows = []
+    for m in user.memberships.select_related('tenant').filter(
+        status=Membership.Status.ACTIVE,
+        tenant__status__in=(Tenant.Status.ACTIVE, Tenant.Status.SUSPENDED),
+    ):
+        tenant = m.tenant
+        state = pricing.billing_state(tenant, today)
+        rows.append({
             'membership_id': m.id,
             'tenant_id': m.tenant_id,
-            'tenant_slug': m.tenant.slug,
-            'tenant_name': m.tenant.name,
-            'tenant_country': str(m.tenant.country),
+            'tenant_slug': tenant.slug,
+            'tenant_name': tenant.name,
+            'tenant_country': str(tenant.country),
             'role': m.role,
-        }
-        for m in user.memberships.select_related('tenant').filter(
-            status=Membership.Status.ACTIVE,
-            tenant__status=Tenant.Status.ACTIVE,
-        )
-    ]
+            'tenant_status': tenant.status,
+            'billing': state,
+            'paid_until': tenant.paid_until,
+            'addons': pricing.addons(tenant),
+            'payment_instructions': (
+                pricing.payment_instructions()
+                if m.role == Membership.Role.OWNER and state != pricing.OK
+                else ''
+            ),
+        })
+    return rows
 
 
 class ActiveMembershipSerializer(serializers.Serializer):
@@ -53,6 +74,17 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_name = serializers.CharField()
     tenant_country = serializers.CharField()
     role = serializers.CharField()
+    tenant_status = serializers.ChoiceField(choices=('active', 'suspended'))
+    billing = serializers.ChoiceField(
+        choices=(pricing.OK, pricing.DUE, pricing.READ_ONLY, pricing.SUSPENDED),
+        help_text='ok; due (paid_until within 3 days); read_only (paid_until passed, '
+        'writes refused with billing_read_only); suspended.',
+    )
+    paid_until = serializers.DateField(allow_null=True)
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'facturacion')))
+    payment_instructions = serializers.CharField(
+        help_text='How to pay Kyo. Owner only, and only when billing is not ok; otherwise empty.'
+    )
 
 
 class MemberSerializer(serializers.ModelSerializer):

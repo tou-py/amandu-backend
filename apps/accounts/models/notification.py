@@ -45,6 +45,10 @@ class Notification(models.Model):
         # Never filed for the professional's own answer (apps/scheduling/announce.py).
         APPOINTMENT_CONFIRMED = 'appointment_confirmed', 'Appointment confirmed'
         APPOINTMENT_REJECTED = 'appointment_rejected', 'Appointment rejected'
+        # Paying Kyo is due or late (send_reminders), to the owner only, once a
+        # day from three days before paid_until until the sweep suspends. No
+        # actor and no appointment; it opens the business page.
+        BILLING_DUE = 'billing_due', 'Billing due'
 
     recipient = models.ForeignKey(
         'accounts.Membership',

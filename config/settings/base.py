@@ -360,3 +360,10 @@ EMAIL_TIMEOUT = 10  # seconds
 INVITATION_ACCEPT_URL = env.str(
     'INVITATION_ACCEPT_URL', default='http://localhost:3000/invitations/accept'
 )
+
+# How a tenant pays Kyo, shown to its owner when a payment is due or late, and
+# Kyo's WhatsApp for asking to change the team or the add-ons. Payment is a bank
+# transfer confirmed by hand (TenantAdmin), so this is text, not an integration.
+# Empty by default: the screens say "escribinos" instead of showing nothing wrong.
+KYO_PAYMENT_INSTRUCTIONS = env.str('KYO_PAYMENT_INSTRUCTIONS', default='')
+KYO_CONTACT_WHATSAPP = env.str('KYO_CONTACT_WHATSAPP', default='')

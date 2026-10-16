@@ -1,4 +1,8 @@
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
 
@@ -77,12 +81,66 @@ def test_suspended_membership_is_refused(user, salon):
     assert not allows(make_request(user, salon.pk))
 
 
-def test_suspended_tenant_is_refused(user, salon):
+@pytest.mark.parametrize('header', [True, False])
+def test_suspended_tenant_is_refused_with_its_own_code(user, salon, header):
+    """Refused, as before, but saying why: the app shows "la cuenta está
+    suspendida" instead of the 403 a wrong header gets."""
     Membership.objects.create(user=user, tenant=salon)
     salon.status = Tenant.Status.SUSPENDED
     salon.save()
 
-    assert not allows(make_request(user, salon.pk))
+    with pytest.raises(PermissionDenied) as refused:
+        allows(make_request(user, salon.pk if header else None))
+
+    assert refused.value.get_codes() == 'tenant_suspended'
+
+
+def test_a_suspended_tenant_does_not_make_the_working_one_ambiguous(user, salon, clinic):
+    """With no header and one working tenant, that one is still "the only one",
+    however many suspended ones sit next to it."""
+    working = Membership.objects.create(user=user, tenant=salon)
+    Membership.objects.create(user=user, tenant=clinic)
+    clinic.status = Tenant.Status.SUSPENDED
+    clinic.save()
+    request = make_request(user)
+
+    assert allows(request)
+    assert request.membership == working
+
+
+def write(user, tenant_id, view=None):
+    request = Request(APIRequestFactory().post('/', HTTP_X_TENANT_ID=str(tenant_id)))
+    request.user = user
+    return HasActiveMembership().has_permission(request, view=view)
+
+
+def test_the_read_only_window_lets_reads_through_and_refuses_writes(user, salon):
+    Membership.objects.create(user=user, tenant=salon)
+    salon.paid_until = timezone.localdate() - timedelta(days=1)
+    salon.save()
+
+    assert allows(make_request(user, salon.pk))
+    with pytest.raises(PermissionDenied) as refused:
+        write(user, salon.pk)
+    assert refused.value.get_codes() == 'billing_read_only'
+
+
+def test_a_view_can_opt_out_of_the_read_only_window(user, salon):
+    """Marking the bell read is not the business's work."""
+    Membership.objects.create(user=user, tenant=salon)
+    salon.paid_until = timezone.localdate() - timedelta(days=1)
+    salon.save()
+
+    assert write(user, salon.pk, view=type('Exempt', (), {'billing_exempt': True})())
+
+
+@pytest.mark.parametrize('days', [0, 2])
+def test_writes_work_until_paid_until_passes(user, salon, days):
+    Membership.objects.create(user=user, tenant=salon)
+    salon.paid_until = timezone.localdate() + timedelta(days=days)
+    salon.save()
+
+    assert write(user, salon.pk)
 
 
 def test_unparseable_header_is_refused_not_an_error(user, salon):

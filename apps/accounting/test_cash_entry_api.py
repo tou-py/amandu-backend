@@ -24,12 +24,12 @@ def api(user=None, tenant=None):
 
 @pytest.fixture
 def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='PY')
+    return Tenant.objects.create(name='Salon', slug='salon', country='PY', addon_cobros=True)
 
 
 @pytest.fixture
 def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='PY')
+    return Tenant.objects.create(name='Clinic', slug='clinic', country='PY', addon_cobros=True)
 
 
 @pytest.fixture

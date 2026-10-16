@@ -78,3 +78,34 @@ class TenantSerializer(serializers.ModelSerializer):
         if code and not re.fullmatch(r'[A-Z]{2}', code):
             raise serializers.ValidationError('Use an ISO 3166-1 alpha-2 code.')
         return code
+
+
+class SubscriptionLineSerializer(serializers.Serializer):
+    concept = serializers.ChoiceField(choices=('base', 'extra_professionals', 'cobros', 'facturacion'))
+    quantity = serializers.IntegerField()
+    amount = serializers.IntegerField(help_text='Guaraníes a month.')
+
+
+class KyoSubscriptionSerializer(serializers.Serializer):
+    """What this business pays Kyo, read-only: everything here is changed by
+    Kyo in the admin, on a transfer or a conversation."""
+
+    plan = serializers.ChoiceField(choices=('solo', 'equipo'))
+    professionals = serializers.ListField(
+        child=serializers.CharField(),
+        help_text='Names of the members who attend appointments: who the plan counts.',
+    )
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'facturacion')))
+    lines = SubscriptionLineSerializer(many=True)
+    total = serializers.IntegerField(help_text='Guaraníes a month.')
+    paid_until = serializers.DateField(allow_null=True)
+    suspends_after = serializers.DateField(
+        allow_null=True, help_text='Last day of the read-only window.'
+    )
+    billing = serializers.ChoiceField(choices=('ok', 'due', 'read_only'))
+    payment_instructions = serializers.CharField()
+    contact_whatsapp = serializers.CharField(help_text="Kyo's WhatsApp, digits only.")
+    prices = serializers.DictField(
+        child=serializers.IntegerField(),
+        help_text='The price list, so screens never hard-code a price.',
+    )

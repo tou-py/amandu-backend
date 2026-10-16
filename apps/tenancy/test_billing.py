@@ -10,6 +10,7 @@ from datetime import date, timedelta
 import pytest
 from django.utils import timezone
 
+from apps.commons.dates import add_months
 from apps.tenancy.admin import TenantAdmin, one_month_after
 from apps.tenancy.models import Tenant
 
@@ -81,6 +82,28 @@ def test_registering_a_payment_stacks_on_time_still_left(tenant, admin_action):
 
     studio.refresh_from_db()
     assert studio.paid_until == one_month_after(remaining)
+
+
+@pytest.mark.parametrize('action, months', [('register_three_months', 3), ('register_six_months', 6)])
+def test_paying_ahead_counts_the_months_from_the_original_day(tenant, admin_action, action, months):
+    """Not one month chained N times: from a 31st, chaining drifts to the 28th."""
+    remaining = timezone.localdate() + timedelta(days=10)
+    studio = tenant(paid_until=remaining)
+
+    admin_action(action, Tenant.objects.filter(pk=studio.pk))
+
+    studio.refresh_from_db()
+    assert studio.paid_until == add_months(remaining, months)
+
+
+def test_a_first_payment_starts_the_clock_from_today(tenant, admin_action):
+    """How a new paying tenant begins. A founder is simply never given one."""
+    studio = tenant(paid_until=None)
+
+    admin_action('register_three_months', Tenant.objects.filter(pk=studio.pk))
+
+    studio.refresh_from_db()
+    assert studio.paid_until == add_months(timezone.localdate(), 3)
 
 
 def test_registering_a_payment_lifts_a_suspension(tenant, admin_action):

@@ -67,10 +67,11 @@ from apps.scheduling.serializers import (
     ServiceSerializer,
     TimeOffSerializer,
     VisitSerializer,
+    WeekSerializer,
     WorkScheduleSerializer,
 )
 from apps.scheduling.workload import daily_load
-from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
+from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -174,6 +175,9 @@ class ClientViewSet(TenantScopedModelViewSet):
         permissions = super().get_permissions()
         if self.request.method == 'DELETE':
             permissions.append(IsTenantAdmin())
+        # Taking money and reading what was paid are Cobros, not the file.
+        if self.action in ('charge_periods', 'charge_all', 'payments'):
+            permissions.append(HasCobros())
         return permissions
 
     def get_serializer_class(self):
@@ -400,6 +404,7 @@ class PlanViewSet(TenantScopedModelViewSet):
 
     def get_permissions(self):
         permissions = super().get_permissions()
+        permissions.append(HasCobros())
         if self.request.method not in SAFE_METHODS:
             permissions.append(IsTenantAdmin())
         return permissions
@@ -425,7 +430,7 @@ class SubscriptionViewSet(
     Any member: subscribing, ending and changing plan are front-desk work.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
     queryset = Subscription.objects.select_related('plan')
     serializer_class = SubscriptionSerializer
     # A client has a handful over its whole life; the list is read per client.
@@ -566,7 +571,7 @@ class ReceivablesView(APIView):
     desk is who chases.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
 
     @extend_schema(responses=ReceivablesSerializer)
     def get(self, request):
@@ -610,6 +615,28 @@ class WorkScheduleViewSet(TenantScopedModelViewSet):
         if professional:
             rows = rows.filter(professional_id=professional)
         return rows
+
+    @extend_schema(request=WeekSerializer, responses=WorkScheduleSerializer(many=True))
+    @action(detail=False, methods=['put'])
+    @transaction.atomic
+    def week(self, request):
+        """
+        Replace one professional's whole week in one go: "Monday to Friday, 9
+        to 6", or the same week as a colleague. All or nothing, so a request
+        that fails halfway never leaves a week with three days copied.
+
+        An empty `shifts` closes every day. Owner/admin, like every write here.
+        """
+        body = WeekSerializer(data=request.data, context=self.get_serializer_context())
+        body.is_valid(raise_exception=True)
+        professional = body.validated_data['professional']
+        WorkSchedule.objects.for_tenant(request.tenant).filter(professional=professional).delete()
+        rows = WorkSchedule.objects.bulk_create(
+            WorkSchedule(tenant=request.tenant, professional=professional, **shift)
+            for shift in body.validated_data['shifts']
+        )
+        rows.sort(key=lambda row: (row.weekday, row.start_time))
+        return Response(WorkScheduleSerializer(rows, many=True).data)
 
 
 @extend_schema_view(
@@ -1165,7 +1192,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         })
 
     @extend_schema(request=ChargeTurnSerializer, responses={201: CashEntrySerializer})
-    @action(detail=True, methods=['post'])
+    # Taking money for a turn is Cobros. The tuple is the class's own plus the
+    # add-on: an action's permission_classes replaces the class's, it does not
+    # extend it.
+    @action(detail=True, methods=['post'], permission_classes=(*permission_classes, HasCobros))
     def charge(self, request, pk=None):
         """
         Take payment from ONE attendee for this turn: a cash entry linked to the

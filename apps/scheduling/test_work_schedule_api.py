@@ -186,6 +186,100 @@ def test_dropping_a_shift_takes_it_off_the_week(owner, salon, stylist):
     assert not WorkSchedule.objects.exists()
 
 
+# --- the whole week at once -------------------------------------------------
+
+WEEK_URL = reverse('scheduling:workschedule-week')
+
+
+def weekdays_nine_to_six(professional):
+    return {
+        'professional': professional.pk,
+        'shifts': [
+            {'weekday': day, 'start_time': '09:00', 'end_time': '18:00'} for day in range(5)
+        ],
+    }
+
+
+def test_monday_to_friday_is_one_request(owner, salon, stylist):
+    response = api(owner, salon).put(WEEK_URL, weekdays_nine_to_six(stylist), format='json')
+
+    assert response.status_code == 200
+    assert [row['weekday'] for row in response.data] == [0, 1, 2, 3, 4]
+    assert WorkSchedule.objects.filter(professional=stylist, tenant=salon).count() == 5
+
+
+def test_the_week_replaces_what_was_there(owner, salon, stylist):
+    WorkSchedule.objects.create(
+        tenant=salon, professional=stylist, weekday=6, start_time=time(10), end_time=time(14),
+    )
+
+    api(owner, salon).put(WEEK_URL, weekdays_nine_to_six(stylist), format='json')
+
+    assert not WorkSchedule.objects.filter(weekday=6).exists()
+
+
+def test_the_week_touches_only_that_professional(owner, salon, stylist, django_user_model):
+    user = django_user_model.objects.create_user(email='b@example.com', password='pw')
+    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+    kept = WorkSchedule.objects.create(
+        tenant=salon, professional=other, weekday=0, start_time=time(9), end_time=time(12),
+    )
+
+    api(owner, salon).put(WEEK_URL, weekdays_nine_to_six(stylist), format='json')
+
+    assert WorkSchedule.objects.filter(pk=kept.pk).exists()
+
+
+def test_an_empty_week_closes_every_day(owner, salon, stylist):
+    WorkSchedule.objects.create(
+        tenant=salon, professional=stylist, weekday=0, start_time=time(9), end_time=time(12),
+    )
+
+    response = api(owner, salon).put(
+        WEEK_URL, {'professional': stylist.pk, 'shifts': []}, format='json'
+    )
+
+    assert response.status_code == 200
+    assert not WorkSchedule.objects.exists()
+
+
+@pytest.mark.parametrize('shifts', [
+    # One stretch backwards: nothing is written, the old week stays.
+    [{'weekday': 0, 'start_time': '09:00', 'end_time': '18:00'},
+     {'weekday': 1, 'start_time': '18:00', 'end_time': '09:00'}],
+    # The same start twice on one day is the unique constraint, as a 400.
+    [{'weekday': 0, 'start_time': '09:00', 'end_time': '12:00'},
+     {'weekday': 0, 'start_time': '09:00', 'end_time': '13:00'}],
+])
+def test_a_bad_week_writes_nothing(owner, salon, stylist, shifts):
+    old = WorkSchedule.objects.create(
+        tenant=salon, professional=stylist, weekday=3, start_time=time(9), end_time=time(12),
+    )
+
+    response = api(owner, salon).put(
+        WEEK_URL, {'professional': stylist.pk, 'shifts': shifts}, format='json'
+    )
+
+    assert response.status_code == 400
+    assert list(WorkSchedule.objects.all()) == [old]
+
+
+def test_staff_cannot_replace_a_week(staff, salon, stylist):
+    response = api(staff, salon).put(WEEK_URL, weekdays_nine_to_six(stylist), format='json')
+
+    assert response.status_code == 403
+
+
+def test_a_week_cannot_be_written_into_another_tenant(owner, salon, clinic, django_user_model):
+    user = django_user_model.objects.create_user(email='x@example.com', password='pw')
+    theirs = Membership.objects.create(user=user, tenant=clinic, attends_appointments=True)
+
+    response = api(owner, salon).put(WEEK_URL, weekdays_nine_to_six(theirs), format='json')
+
+    assert response.status_code == 400
+    assert not WorkSchedule.objects.exists()
+
+
 # --- what comes out of the week ---------------------------------------------
 
 def test_closing_the_whole_shop_names_nobody(owner, salon):

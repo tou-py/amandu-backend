@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
@@ -80,19 +83,53 @@ def test_me_hides_a_suspended_membership(db, django_user_model, salon, clinic):
     assert [m['tenant_slug'] for m in res.data['memberships']] == ['salon']
 
 
-def test_me_hides_a_suspended_tenant(db, django_user_model, salon):
-    """A membership to a suspended tenant is not actionable (HasActiveMembership
-    would 403 it), so the switcher must not offer it."""
-    closed = Tenant.objects.create(
-        name='Closed', slug='closed', status=Tenant.Status.SUSPENDED
-    )
+def test_me_lists_a_suspended_tenant_flagged_and_hides_a_closed_one(db, django_user_model, salon):
+    """A suspended business is listed so the app can say it is suspended --
+    hiding it left its people on an empty app with no reason given. A closed
+    one left the platform and is not listed."""
+    paused = Tenant.objects.create(name='Paused', slug='paused', status=Tenant.Status.SUSPENDED)
+    gone = Tenant.objects.create(name='Gone', slug='gone', status=Tenant.Status.CLOSED)
     user = django_user_model.objects.create_user(email='u@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon)
-    Membership.objects.create(user=user, tenant=closed)
+    for tenant in (salon, paused, gone):
+        Membership.objects.create(user=user, tenant=tenant)
 
     res = api(user).get(ME_URL)
 
-    assert [m['tenant_slug'] for m in res.data['memberships']] == ['salon']
+    listed = {m['tenant_slug']: m for m in res.data['memberships']}
+    assert set(listed) == {'salon', 'paused'}
+    assert listed['paused']['tenant_status'] == 'suspended'
+    assert listed['paused']['billing'] == 'suspended'
+    assert listed['salon']['billing'] == 'ok'
+
+
+def test_me_says_where_each_tenant_stands_on_paying_kyo(db, django_user_model, settings):
+    settings.KYO_PAYMENT_INSTRUCTIONS = 'Transferí a la cuenta 123.'
+    late = Tenant.objects.create(
+        name='Late', slug='late', addon_cobros=True,
+        paid_until=timezone.localdate() - timedelta(days=1),
+    )
+    owner = django_user_model.objects.create_user(email='o@example.com', password='pw')
+    staff = django_user_model.objects.create_user(email='s@example.com', password='pw')
+    Membership.objects.create(user=owner, tenant=late, role=Membership.Role.OWNER)
+    Membership.objects.create(user=staff, tenant=late, role=Membership.Role.STAFF)
+
+    mine = api(owner).get(ME_URL).data['memberships'][0]
+    theirs = api(staff).get(ME_URL).data['memberships'][0]
+
+    assert mine['billing'] == 'read_only'
+    assert mine['addons'] == ['cobros']
+    assert mine['paid_until'] == late.paid_until
+    # How Kyo gets paid is the owner's business, not the staff's.
+    assert mine['payment_instructions'] == 'Transferí a la cuenta 123.'
+    assert theirs['payment_instructions'] == ''
+
+
+def test_payment_instructions_stay_out_when_nothing_is_owed(db, django_user_model, salon, settings):
+    settings.KYO_PAYMENT_INSTRUCTIONS = 'Transferí a la cuenta 123.'
+    owner = django_user_model.objects.create_user(email='o@example.com', password='pw')
+    Membership.objects.create(user=owner, tenant=salon, role=Membership.Role.OWNER)
+
+    assert api(owner).get(ME_URL).data['memberships'][0]['payment_instructions'] == ''
 
 
 def test_editing_the_name_relabels_the_person_in_every_agenda(

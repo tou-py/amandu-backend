@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('scheduling', '0017_subscription_anchor_day'),
-        ('tenancy', '0006_tenant_phone'),
+        ('tenancy', '0007_tenant_phone'),
     ]
 
     operations = [

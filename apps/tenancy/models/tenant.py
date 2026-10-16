@@ -129,6 +129,22 @@ class Tenant(TimestampMixin):
     # "never claimed".
     plan_digest_date = models.DateField(null=True, blank=True, editable=False)
 
+    # What this tenant pays Kyo for beyond the agenda itself. Flags and not a
+    # plan table: the price is the same for everyone and lives in
+    # apps/tenancy/pricing.py, so the only fact that varies per tenant is
+    # whether they bought it. Switched by a human in the admin, like paid_until.
+    #
+    # Cobros: monthly plans, charges and Por cobrar. Off for a new tenant; the
+    # migration that added it turned it on for every tenant already using it,
+    # so a pilot does not wake up to its money screens gone.
+    addon_cobros = models.BooleanField(default=False)
+    # Facturación electrónica. The flag is the purchase; whether the tenant has
+    # also configured its provider is a separate question the invoicing app asks.
+    addon_facturacion = models.BooleanField(default=False)
+    # Same claim pattern as plan_digest_date, for the daily "pay Kyo" notice:
+    # the last LOCAL date it was claimed, so overlapping runs send it once.
+    billing_notice_date = models.DateField(null=True, blank=True, editable=False)
+
     class Meta:
         db_table = 'tb_tenant'
         ordering = ('name',)
