@@ -151,7 +151,8 @@ def test_a_name_that_differs_only_in_case_is_refused(receptionist, salon):
 def test_saving_a_row_under_its_own_name_is_not_a_duplicate(receptionist, salon):
     """The check must exclude the instance being edited, or no edit could save."""
     service = Service.objects.create(
-        tenant=salon, name='Haircut', duration=timedelta(minutes=30)
+        tenant=salon, name='Haircut', duration=timedelta(minutes=30),
+        created_by=receptionist.memberships.get(),
     )
 
     res = api(receptionist, salon).patch(
@@ -211,3 +212,36 @@ def test_a_service_round_trips_with_and_without_a_price(receptionist, salon):
     assert unpriced.status_code == 201
     assert unpriced.data['price'] is None
     assert Service.objects.get(name='Pilates').price is None
+
+
+def _member(django_user_model, tenant, email, role):
+    user = django_user_model.objects.create_user(email=email, password='pw')
+    return Membership.objects.create(user=user, tenant=tenant, role=role)
+
+
+def test_staff_keep_the_services_they_create_and_only_those(django_user_model, salon):
+    ana = _member(django_user_model, salon, 'ana@example.com', Membership.Role.STAFF)
+    bea = _member(django_user_model, salon, 'bea@example.com', Membership.Role.STAFF)
+    res = api(ana.user, salon).post(SERVICE_LIST, {'name': 'Cut', 'duration': '00:30:00'}, format='json')
+    assert res.status_code == 201
+    assert res.data['created_by'] == ana.pk
+    own = reverse('scheduling:service-detail', args=[res.data['id']])
+    legacy = Service.objects.create(tenant=salon, name='Old', duration=timedelta(minutes=30))
+    legacy_url = reverse('scheduling:service-detail', args=[legacy.pk])
+
+    assert api(ana.user, salon).patch(own, {'price': 100}, format='json').status_code == 200
+    assert api(bea.user, salon).patch(own, {'price': 1}, format='json').status_code == 403
+    assert api(bea.user, salon).delete(own).status_code == 403
+    assert api(ana.user, salon).patch(legacy_url, {'price': 1}, format='json').status_code == 403
+    assert api(bea.user, salon).get(own).status_code == 200
+    assert api(ana.user, salon).delete(own).status_code == 204
+
+
+@pytest.mark.parametrize('role', [Membership.Role.COORDINATOR, Membership.Role.ADMIN, Membership.Role.OWNER])
+def test_the_team_roles_manage_every_service(django_user_model, salon, role):
+    lead = _member(django_user_model, salon, 'lead@example.com', role)
+    legacy = Service.objects.create(tenant=salon, name='Old', duration=timedelta(minutes=30))
+    url = reverse('scheduling:service-detail', args=[legacy.pk])
+
+    assert api(lead.user, salon).patch(url, {'price': 1}, format='json').status_code == 200
+    assert api(lead.user, salon).delete(url).status_code == 204

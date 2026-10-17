@@ -53,6 +53,8 @@ THIRD_PARTY_APPS = [
     'corsheaders',
     'phonenumber_field',
     'rest_framework',
+    # Rotated refresh tokens are blacklisted here, which is also what logout writes.
+    'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
 ]
 
@@ -332,7 +334,13 @@ SPECTACULAR_SETTINGS = {
 # every request, so authorization is never frozen into the token.
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    # A sliding month: every refresh hands back a NEW refresh token and
+    # blacklists the old one, so a phone used at least once a month never sees
+    # the login screen, and a stolen refresh token dies the first time either
+    # copy is used. The client must store the refresh token each refresh returns.
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
 }
 
 # Email

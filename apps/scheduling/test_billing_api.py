@@ -81,6 +81,12 @@ def staff(django_user_model, studio):
 
 
 @pytest.fixture
+def desk(django_user_model, studio):
+    """The coordinator at the front desk, who chases what is owed."""
+    return member(django_user_model, studio, Membership.Role.COORDINATOR, 'desk@example.com')[0]
+
+
+@pytest.fixture
 def teacher(django_user_model, studio):
     return member(
         django_user_model, studio, Membership.Role.STAFF, 't@example.com', attends=True
@@ -141,10 +147,9 @@ def test_an_attendee_of_an_unpriced_turn_has_no_price(owner, studio, teacher, ad
 def test_charging_a_turn_files_a_payment_and_shows_the_attendee_paid(
     staff, studio, teacher, ada, bob
 ):
-    """Any member charges, even for a colleague's turn; the others in the
-    group class are untouched."""
+    """Staff charge their own turn; the others in the group class are untouched."""
     appointment = turn(studio, teacher, [ada, bob])
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     res = http.post(charge_url(appointment), {'client': str(ada.pk), 'payment_method': 'transfer'}, format='json')
 
@@ -174,10 +179,20 @@ def test_the_counter_can_edit_the_amount_and_the_day(owner, studio, teacher, ada
     assert res.data['payment_method'] == 'cash'
 
 
+def test_staff_do_not_charge_a_colleagues_turn(staff, studio, teacher, ada):
+    """Staff write only their own appointments, and a charge is one of those writes."""
+    appointment = turn(studio, teacher, [ada])
+
+    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert res.status_code == 403
+    assert not CashEntry.objects.exists()
+
+
 def test_staff_charge_the_price_but_do_not_edit_it(staff, studio, teacher, ada, bob):
     appointment = turn(studio, teacher, [ada, bob])
     unpriced = turn(studio, teacher, [ada], price=None, start=YESTERDAY - timedelta(hours=2))
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 70000}, format='json')
     # The amount the form prefilled, sent back unchanged, is not an edit.
@@ -262,7 +277,8 @@ def test_an_owner_voids_a_payment_and_the_attendee_owes_again(owner, studio, tea
 
 @pytest.mark.parametrize('role', [Membership.Role.COORDINATOR, Membership.Role.STAFF])
 def test_front_desk_charges_but_cannot_void(django_user_model, studio, teacher, ada, role):
-    caller = member(django_user_model, studio, role, 'x@example.com')[0]
+    # Staff charge their own turns only (test_staff_do_not_charge_a_colleagues_turn).
+    caller = teacher.user if role == Membership.Role.STAFF else member(django_user_model, studio, role, 'x@example.com')[0]
     appointment = turn(studio, teacher, [ada])
     http = api(caller, studio)
     paid = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
@@ -453,8 +469,8 @@ def test_deleting_a_client_keeps_the_money_they_paid(owner, studio, pilates, ada
 # -- Receivables ---------------------------------------------------------------
 
 
-def test_receivables_answer_in_their_final_shape(staff, studio):
-    res = api(staff, studio).get(RECEIVABLES)
+def test_receivables_answer_in_their_final_shape(desk, studio):
+    res = api(desk, studio).get(RECEIVABLES)
 
     assert res.status_code == 200
     assert res.data == {'total': 0, 'rows': [], 'due_soon': []}
@@ -548,7 +564,7 @@ def test_a_covered_turn_is_not_charged_while_the_month_is_owed(staff, studio, te
     subscribe(ada, pilates, add_months(local_today(studio), -1))
     appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
 
-    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
+    res = api(teacher.user, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
     assert not CashEntry.objects.exists()
@@ -558,7 +574,7 @@ def test_a_turn_charged_while_the_month_is_owed_defaults_to_its_price(staff, stu
     start = add_months(local_today(studio), -1)
     subscribe(ada, pilates, start)
     appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
     priced = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
@@ -821,7 +837,7 @@ def test_a_turn_attended_while_owing_is_settled_by_paying_the_month(
 
 
 def test_receivables_list_who_owes_oldest_debt_first(
-    staff, studio, teacher, pilates, ada, bob, live_since_last_week
+    desk, studio, teacher, pilates, ada, bob, live_since_last_week
 ):
     today = local_today(studio)
     two_months_ago = add_months(today, -2)
@@ -831,7 +847,7 @@ def test_receivables_list_who_owes_oldest_debt_first(
     subscribe(bob, pilates, two_months_ago)
     Client.objects.create(tenant=studio, name='Carla')  # owes nothing
 
-    res = api(staff, studio).get(RECEIVABLES)
+    res = api(desk, studio).get(RECEIVABLES)
 
     bob_row, ada_row = res.data['rows']
     assert bob_row['client_name'] == 'Bob'
@@ -852,12 +868,12 @@ def test_receivables_list_who_owes_oldest_debt_first(
 
 @pytest.mark.parametrize('due_in, listed', [(0, True), (3, True), (4, False)])
 def test_due_soon_is_the_current_period_due_within_three_days(
-    staff, studio, pilates, ada, due_in, listed
+    desk, studio, pilates, ada, due_in, listed
 ):
     """Not overdue yet, so in neither the rows nor the total."""
     subscribe(ada, pilates, local_today(studio) + timedelta(days=due_in - 9))
 
-    res = api(staff, studio).get(RECEIVABLES)
+    res = api(desk, studio).get(RECEIVABLES)
 
     assert res.data['rows'] == []
     assert res.data['total'] == 0
@@ -872,11 +888,11 @@ def test_a_paid_current_period_is_not_due_soon(owner, studio, pilates, ada):
     assert http.get(RECEIVABLES).data['due_soon'] == []
 
 
-def test_turns_before_go_live_are_never_receivable(staff, studio, teacher, ada, settings):
+def test_turns_before_go_live_are_never_receivable(desk, studio, teacher, ada, settings):
     settings.BILLING_GO_LIVE = local_today(studio)
     turn(studio, teacher, [ada], start=at(studio, local_today(studio) - timedelta(days=1)))
 
-    assert api(staff, studio).get(RECEIVABLES).data['rows'] == []
+    assert api(desk, studio).get(RECEIVABLES).data['rows'] == []
 
 
 def test_receivables_are_isolated_per_tenant(django_user_model, studio, gym, pilates, ada):
@@ -978,8 +994,9 @@ def named(user, first, last):
     return user
 
 
-def test_a_turn_charge_names_the_turn_and_who_charged_it(staff, studio, teacher, ada):
+def test_a_turn_charge_names_the_turn_and_who_charged_it(django_user_model, studio, teacher, ada):
     named(teacher.user, 'Julián', 'Ferreyra')
+    staff = member(django_user_model, studio, Membership.Role.COORDINATOR, 'desk@example.com')[0]
     named(staff, 'Lucía', 'Gómez')
     # Monday 5 October, 13:00 on the business's wall clock.
     appointment = turn(studio, teacher, [ada], start=at(studio, date(2026, 10, 5), 13))
@@ -1043,3 +1060,9 @@ def test_a_no_show_past_the_quota_owes_nothing(owner, studio, teacher, ada):
 
     assert billing_of(http, absent)['Ada']['state'] == 'no_show'
     assert http.get(client_url(ada)).data['billing_summary']['unpaid_turns'] == []
+
+
+def test_staff_do_not_read_the_business_receivables(staff, studio):
+    res = api(staff, studio).get(RECEIVABLES)
+
+    assert (res.status_code, res.data['code']) == (403, 'coordinator_required')

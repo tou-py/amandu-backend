@@ -3,7 +3,6 @@ from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
@@ -27,6 +26,7 @@ from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
 from apps.scheduling.announce import ACCEPTED, REJECTED, announce
+from apps.scheduling.availability import opening_check
 from apps.scheduling.models import (
     Appointment,
     AppointmentClient,
@@ -40,7 +40,7 @@ from apps.scheduling.models import (
     TimeOff,
     WorkSchedule,
 )
-from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
+from apps.scheduling.permissions import ManagesService, OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSeriesSerializer,
@@ -65,13 +65,14 @@ from apps.scheduling.serializers import (
     SubscriptionEndSerializer,
     SubscriptionSerializer,
     ServiceSerializer,
+    refuse_if_closed,
     TimeOffSerializer,
     VisitSerializer,
     WeekSerializer,
     WorkScheduleSerializer,
 )
 from apps.scheduling.workload import daily_load
-from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin
+from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -145,6 +146,19 @@ def _turn_payment(request, client, appointment, amount, body):
         client=client,
         recorded_by=request.user,
     )
+
+
+def _tell(request, appointment, verb, recipient=None):
+    """
+    File a notification for whoever's diary this is -- unless they did it
+    themselves, which is not news. `recipient` names someone else, for the
+    professional a turn was taken away from.
+    """
+    recipient = recipient or appointment.professional
+    if recipient.pk != request.membership.pk:
+        Notification.objects.create(
+            recipient=recipient, actor=request.membership, appointment=appointment, verb=verb,
+        )
 
 
 def _admin_only(request, what, code):
@@ -376,6 +390,11 @@ class AppointmentSeriesViewSet(
     def get_queryset(self):
         return super().get_queryset().for_tenant(self.request.tenant)
 
+    def perform_create(self, serializer):
+        series = serializer.save()
+        # One row for the whole run, pointing at its first occurrence.
+        _tell(self.request, series.appointments_created[0], Notification.Verb.APPOINTMENT_BOOKED)
+
 
 class CategoryViewSet(TenantScopedModelViewSet):
     queryset = Category.objects.all()
@@ -383,8 +402,14 @@ class CategoryViewSet(TenantScopedModelViewSet):
 
 
 class ServiceViewSet(TenantScopedModelViewSet):
+    """The catalogue. Anyone adds to it; staff change only what they added."""
+
+    permission_classes = (*TenantScopedModelViewSet.permission_classes, ManagesService)
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.tenant, created_by=self.request.membership)
 
 
 class PlanViewSet(TenantScopedModelViewSet):
@@ -567,11 +592,12 @@ class SubscriptionViewSet(
 class ReceivablesView(APIView):
     """
     Por cobrar: everyone who owes, oldest debt first, and whose current period
-    falls due within three days. Readable by any member, because the front
-    desk is who chases.
+    falls due within three days. The front desk chases, so the coordinator
+    reads it; staff do not, because it is the whole business's money. A client
+    file still shows that one client's debt to anyone.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros, IsTenantCoordinator)
 
     @extend_schema(responses=ReceivablesSerializer)
     def get(self, request):
@@ -935,13 +961,33 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             lambda s: s.save(tenant=self.request.tenant, created_by=self.request.membership),
             serializer,
         )
+        _tell(self.request, serializer.instance, Notification.Verb.APPOINTMENT_BOOKED)
 
     def perform_update(self, serializer):
         # Once anybody is marked, the turn is the record of what happened:
         # moving it or changing its service or roster would rewrite that record.
         # Withdrawing every mark opens it again.
-        self._refuse_if_marked(serializer.instance)
+        appointment = serializer.instance
+        self._refuse_if_marked(appointment)
+        was_with, was_at = appointment.professional, appointment.start
         self._save_or_conflict(super().perform_update, serializer)
+        self._tell_change(appointment, was_with, was_at)
+
+    def _tell_change(self, appointment, was_with, was_at):
+        """The notice for an edit by a teammate: who it now belongs to, and what moved."""
+        if appointment.professional_id != was_with.pk:
+            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_BOOKED)
+            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_REASSIGNED, recipient=was_with)
+        elif appointment.start != was_at:
+            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_RESCHEDULED)
+        else:
+            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_UPDATED)
+
+    def perform_destroy(self, instance):
+        # Filed first: the FK is SET_NULL, so the row survives the slot it names.
+        with transaction.atomic():
+            _tell(self.request, instance, Notification.Verb.APPOINTMENT_CANCELLED)
+            super().perform_destroy(instance)
 
     def _refuse_if_marked(self, appointment):
         if self._has_marks(appointment):
@@ -1043,6 +1089,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         reason the shop typed.
         """
         appointment = self.get_object()
+        # A request for an hour that has gone by can only be turned down: the
+        # client was never told yes, and saying it now is for a turn that is over.
+        # ponytail: it still holds its (past) slot until cancelled; expire them
+        # in the sweep if back-filling past turns ever trips on one.
+        if appointment.status == Appointment.Status.PENDING and appointment.start <= timezone.now():
+            raise Refused('This request is for a time that has already passed.', 'request_expired')
         with transaction.atomic():
             response = self._transition(appointment, appointment.confirm)
             announce(appointment, ACCEPTED, actor=request.membership)
@@ -1148,7 +1200,25 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         new_time = body.validated_data['time']
         moved, skipped = [], []
 
-        for one in self._following(appointment):
+        # The occurrence acted on is refused outright when the new hour is
+        # closed; a later one on a holiday stays where it was, like a clash.
+        new_start = datetime.combine(appointment.start.astimezone(zone).date(), new_time).replace(tzinfo=zone)
+        refuse_if_closed(
+            request.tenant, professional or appointment.professional,
+            new_start, new_start + appointment.service.duration, field='time',
+        )
+        following = list(self._following(appointment))
+        checks = {}
+
+        def closed(one):
+            # Per professional: occurrences of one run can have been handed out.
+            if one.professional_id not in checks:
+                checks[one.professional_id] = opening_check(
+                    request.tenant, one.professional, new_start, following[-1].end + timedelta(days=1),
+                )
+            return checks[one.professional_id](one.start, one.end)
+
+        for one in following:
             was_at = one.start
             local_day = was_at.astimezone(zone).date()
             # Left where it was, like a clash: a turn with attendance marked
@@ -1164,6 +1234,9 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             one.end = one.start + one.service.duration
             if professional is not None:
                 one.professional = professional
+            if closed(one):
+                skipped.append(local_day)
+                continue
             # Handing the series to someone else without changing the hour moves
             # nobody's day, so it leaves the badge off.
             if one.start != was_at:
@@ -1186,6 +1259,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
                 continue
             moved.append(one)
 
+        # One row for the run, like cancel-following.
+        if moved:
+            self._tell_change(moved[0], appointment.professional, appointment.start)
+
         return Response({
             'appointments': self.get_serializer(moved, many=True).data,
             'skipped': [day.isoformat() for day in skipped],
@@ -1206,11 +1283,11 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         the two states with nothing to charge -- and for a turn that is
         cancelled or still a pending request, which nobody owes anything for.
 
-        Any member may charge, whoever's turn it is: looked up through the
-        tenant's agenda and not get_object(), whose object permission would stop
-        a stylist taking money for a colleague's client at the till.
+        Through get_object(), so the appointment rule applies: staff charge
+        their own turns, the team roles anyone's. A colleague's client at the
+        till is charged from the client file (charge-all) or by the front desk.
         """
-        appointment = get_object_or_404(self.get_queryset(), pk=pk)
+        appointment = self.get_object()
         if appointment.status in (Appointment.Status.CANCELLED, Appointment.Status.PENDING):
             raise Refused(
                 'Only a booked turn can be charged.', 'turn_not_chargeable', status.HTTP_409_CONFLICT

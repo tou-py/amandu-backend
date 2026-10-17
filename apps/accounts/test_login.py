@@ -59,3 +59,33 @@ def test_superuser_logs_in_with_no_memberships(django_user_model):
 
     assert res.status_code == 200
     assert res.data['memberships'] == []
+
+
+def _login(client):
+    return client.post(
+        reverse('accounts:login'), {'email': 'u@example.com', 'password': 'pw'}, format='json'
+    ).data
+
+
+@pytest.mark.django_db
+def test_refresh_rotates_and_the_old_refresh_token_is_dead(user):
+    client = APIClient()
+    old = _login(client)['refresh']
+
+    res = client.post(reverse('accounts:token-refresh'), {'refresh': old}, format='json')
+    assert res.status_code == 200
+    assert res.data['refresh'] != old
+
+    assert client.post(reverse('accounts:token-refresh'), {'refresh': old}, format='json').status_code == 401
+    assert client.post(
+        reverse('accounts:token-refresh'), {'refresh': res.data['refresh']}, format='json'
+    ).status_code == 200
+
+
+@pytest.mark.django_db
+def test_logout_blacklists_the_refresh_token(user):
+    client = APIClient()
+    refresh = _login(client)['refresh']
+
+    assert client.post(reverse('accounts:logout'), {'refresh': refresh}, format='json').status_code == 200
+    assert client.post(reverse('accounts:token-refresh'), {'refresh': refresh}, format='json').status_code == 401

@@ -49,6 +49,15 @@ class Notification(models.Model):
         # day from three days before paid_until until the sweep suspends. No
         # actor and no appointment; it opens the business page.
         BILLING_DUE = 'billing_due', 'Billing due'
+        # A teammate changed this professional's diary: booked them a turn (or a
+        # whole series, as one row), moved one, edited one, or handed one of
+        # theirs to somebody else. Never filed for the professional's own doing.
+        # Series moves file ONE row for the run, like a series cancellation.
+        APPOINTMENT_BOOKED = 'appointment_booked', 'Appointment booked'
+        APPOINTMENT_RESCHEDULED = 'appointment_rescheduled', 'Appointment rescheduled'
+        APPOINTMENT_UPDATED = 'appointment_updated', 'Appointment updated'
+        # To the professional the turn was taken FROM; the new one gets `booked`.
+        APPOINTMENT_REASSIGNED = 'appointment_reassigned', 'Appointment reassigned'
 
     recipient = models.ForeignKey(
         'accounts.Membership',

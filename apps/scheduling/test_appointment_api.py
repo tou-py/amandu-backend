@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
+from apps.scheduling.management.commands.send_reminders import Command
 from apps.scheduling.models import Appointment, Client, Plan, Service, Subscription
 from apps.scheduling.serializers import AppointmentSerializer
 from apps.scheduling.views import AppointmentViewSet
@@ -341,7 +342,7 @@ def test_cancelling_a_teammates_appointment_notifies_them(
 
     http.post(action_url(appointment, 'cancel'))
 
-    notification = Notification.objects.get()
+    notification = Notification.objects.get(verb=Notification.Verb.APPOINTMENT_CANCELLED)
     caller = Membership.objects.get(user__email='r@example.com', tenant=salon)
     assert notification.recipient == stylist
     assert notification.actor == caller
@@ -1314,3 +1315,90 @@ def test_a_turn_with_any_attendance_marked_cannot_be_cancelled(
     assert res.data['code'] == 'attendance_marked'
     appointment.refresh_from_db()
     assert appointment.status == Appointment.Status.SCHEDULED
+
+
+# -- A teammate changing your diary tells you ---------------------------------
+
+
+def _verbs(recipient):
+    return list(Notification.objects.filter(recipient=recipient).order_by('created_at').values_list('verb', flat=True))
+
+
+def test_a_teammate_booking_moving_and_editing_your_turn_tells_you(
+    receptionist, salon, stylist, client_, haircut
+):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    url = reverse('scheduling:appointment-detail', args=[created.data['id']])
+
+    http.patch(url, {'start': (TOMORROW + timedelta(hours=2)).isoformat()}, format='json')
+    http.patch(url, {'notes': 'Trae fotos'}, format='json')
+
+    assert _verbs(stylist) == ['appointment_booked', 'appointment_rescheduled', 'appointment_updated']
+    caller = Membership.objects.get(user__email='r@example.com', tenant=salon)
+    assert set(Notification.objects.values_list('actor', flat=True)) == {caller.pk}
+
+
+def test_handing_a_turn_to_a_colleague_tells_both(
+    django_user_model, receptionist, salon, stylist, client_, haircut
+):
+    other = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='o@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+
+    http.patch(reverse('scheduling:appointment-detail', args=[created.data['id']]), {'professional': other.pk}, format='json')
+
+    assert _verbs(stylist) == ['appointment_booked', 'appointment_reassigned']
+    assert _verbs(other) == ['appointment_booked']
+
+
+def test_your_own_changes_tell_nobody(salon, stylist, client_, haircut):
+    http = api(stylist.user, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+    url = reverse('scheduling:appointment-detail', args=[created.data['id']])
+    http.patch(url, {'start': (TOMORROW + timedelta(hours=2)).isoformat()}, format='json')
+    http.delete(url)
+
+    assert not Notification.objects.exists()
+
+
+def test_deleting_a_teammates_turn_tells_them(receptionist, salon, stylist, client_, haircut):
+    http = api(receptionist, salon)
+    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+
+    assert http.delete(reverse('scheduling:appointment-detail', args=[created.data['id']])).status_code == 204
+
+    notice = Notification.objects.get(verb=Notification.Verb.APPOINTMENT_CANCELLED)
+    assert notice.recipient == stylist and notice.appointment is None
+
+
+def test_staff_cannot_write_a_colleagues_turn(django_user_model, salon, stylist, client_, haircut):
+    colleague = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='c@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    appointment = Appointment.objects.create(
+        tenant=salon, professional=stylist, service=haircut, start=TOMORROW, end=TOMORROW + haircut.duration,
+    )
+    appointment.clients.add(client_)
+    http = api(colleague.user, salon)
+
+    assert http.patch(detail_url(appointment), {'notes': 'x'}, format='json').status_code == 403
+    assert http.delete(detail_url(appointment)).status_code == 403
+    for name, body in (
+        ('cancel', {}), ('complete', {}), ('confirm', {}),
+        ('attendance', {'client': str(client_.pk), 'attendance': 'attended'}),
+    ):
+        assert http.post(action_url(appointment, name), body, format='json').status_code == 403, name
+    assert http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW + timedelta(days=1)), format='json').status_code == 400
+
+
+def test_a_teammates_change_is_pushed_with_its_own_title(receptionist, salon, stylist, client_, haircut):
+    api(receptionist, salon).post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+
+    payload = Command().notification_payload(Notification.objects.get())
+    assert payload['title'] == 'Turno nuevo'
+    assert ' te agendó: Haircut del ' in payload['body']
