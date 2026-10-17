@@ -46,6 +46,10 @@ class Client(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # client ever turns it on, and an unticked box on a later booking does not
     # take back what they said before.
     whatsapp_opt_in = models.BooleanField(default=False)
+    # Stopped coming. Hidden from the client list and the booking pickers, never
+    # erased: deleting is refused anyway once someone has been on a roster, and
+    # the history and payments are the business's record. Reversible either way.
+    active = models.BooleanField(default=True)
     # No money on this row, on purpose. What a client pays lives in their
     # Subscription (a plan from the tenant's catalogue) and what they have paid
     # lives in the cash book, linked back here. The monthly fee and paid-until

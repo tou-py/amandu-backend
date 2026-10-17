@@ -194,6 +194,18 @@ class ClientViewSet(TenantScopedModelViewSet):
             permissions.append(HasCobros())
         return permissions
 
+    def perform_update(self, serializer):
+        # A running plan keeps owing every month, and a hidden client is one
+        # nobody chases: the plan is ended first, on purpose, by a person.
+        client = serializer.instance
+        if serializer.validated_data.get('active') is False and client.subscriptions.filter(
+            end_date__isnull=True
+        ).exists():
+            raise Refused(
+                "End this client's plan before deactivating them.", 'client_on_plan', status.HTTP_409_CONFLICT
+            )
+        super().perform_update(serializer)
+
     def get_serializer_class(self):
         # The list is names; the file carries its money header (see
         # ClientDetailSerializer for why the list does not).
@@ -444,6 +456,7 @@ class SubscriptionViewSet(
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
     mixins.ListModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
     """
@@ -451,6 +464,10 @@ class SubscriptionViewSet(
     each through its own action: there is deliberately no update, because
     editing the start date or the plan of a running subscription would rewrite
     periods that were already owed or paid.
+
+    Deleting is for a plan given by mistake: it goes as if it never existed,
+    which is only true while nothing was paid on it -- `subscription_paid`
+    otherwise, and the payment is voided first.
 
     Any member: subscribing, ending and changing plan are front-desk work.
     """
@@ -472,6 +489,19 @@ class SubscriptionViewSet(
         if serializer.validated_data.get('price_override') is not None:
             _admin_only(self.request, 'override the price', 'price_override_forbidden')
         self._save_or_conflict(lambda: serializer.save(tenant=self.request.tenant))
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        # Under the client's lock, like end and change-plan, so a payment cannot
+        # land between the check and the delete.
+        Client.objects.select_for_update().get(pk=instance.client_id)
+        if instance.cash_entries.filter(voided_at__isnull=True).exists():
+            raise Refused(
+                'Payments were taken on this subscription; void them first.',
+                'subscription_paid',
+                status.HTTP_409_CONFLICT,
+            )
+        instance.delete()
 
     @staticmethod
     def _save_or_conflict(save):
