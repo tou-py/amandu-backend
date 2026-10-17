@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import phonenumbers
@@ -12,6 +12,7 @@ from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership
 from apps.scheduling import billing
+from apps.scheduling.availability import REFUSALS, opening_check
 from apps.scheduling.models import (
     MAX_OCCURRENCES,
     Appointment,
@@ -641,6 +642,17 @@ class AppointmentCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
+def refuse_if_closed(tenant, professional, start, end, field='start'):
+    """
+    The clock's rule for a hand-made booking: inside the professional's working
+    week and clear of time off (availability.opening_check), or a 400 whose
+    `code` is `outside_working_hours` or `time_off`.
+    """
+    code = opening_check(tenant, professional, start, end)(start, end)
+    if code:
+        raise serializers.ValidationError({field: REFUSALS[code]}, code=code)
+
+
 class AppointmentTemplateMixin:
     """
     The rules that describe a booking, wherever it comes from: one made by hand
@@ -792,6 +804,13 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         end = start + service.duration
         attrs['end'] = end
 
+        # Only when the slot itself changes: editing the notes of a turn booked
+        # before the hours were set must not start failing.
+        if self.instance is None or (professional, service, start) != (
+            self.instance.professional, self.instance.service, self.instance.start
+        ):
+            refuse_if_closed(tenant, professional, start, end)
+
         overlapping = (
             Appointment.objects.for_tenant(tenant)
             .filter(professional=professional, start__lt=end, end__gt=start)
@@ -928,6 +947,10 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                           'Book a shorter run and renew it.'}
             )
 
+        # The first occurrence is the one somebody picked, so it is refused
+        # outright; a later one landing on a holiday is skipped like a clash.
+        refuse_if_closed(tenant, attrs['professional'], attrs['start'], attrs['start'] + attrs['service'].duration)
+
         self._check_capacity(attrs)
         return attrs
 
@@ -960,9 +983,16 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         zone = ZoneInfo(tenant.timezone)
         local_first = booking['start'].astimezone(zone)
         booked, joined, skipped = [], [], []
+        closed = opening_check(
+            tenant, booking['professional'], booking['start'],
+            datetime.combine(series.until, local_first.time()).replace(tzinfo=zone) + timedelta(days=1),
+        )
 
         for day in series.occurrence_dates(local_first.date()):
             start = datetime.combine(day, local_first.time()).replace(tzinfo=zone)
+            if closed(start, start + booking['service'].duration):
+                skipped.append(day)
+                continue
             appointment = self._book(series, booking, start)
             if appointment is None:
                 appointment = self._join(series, booking, start)

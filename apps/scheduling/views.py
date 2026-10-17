@@ -26,6 +26,7 @@ from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
 from apps.scheduling.announce import ACCEPTED, REJECTED, announce
+from apps.scheduling.availability import opening_check
 from apps.scheduling.models import (
     Appointment,
     AppointmentClient,
@@ -64,6 +65,7 @@ from apps.scheduling.serializers import (
     SubscriptionEndSerializer,
     SubscriptionSerializer,
     ServiceSerializer,
+    refuse_if_closed,
     TimeOffSerializer,
     VisitSerializer,
     WeekSerializer,
@@ -1191,7 +1193,25 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         new_time = body.validated_data['time']
         moved, skipped = [], []
 
-        for one in self._following(appointment):
+        # The occurrence acted on is refused outright when the new hour is
+        # closed; a later one on a holiday stays where it was, like a clash.
+        new_start = datetime.combine(appointment.start.astimezone(zone).date(), new_time).replace(tzinfo=zone)
+        refuse_if_closed(
+            request.tenant, professional or appointment.professional,
+            new_start, new_start + appointment.service.duration, field='time',
+        )
+        following = list(self._following(appointment))
+        checks = {}
+
+        def closed(one):
+            # Per professional: occurrences of one run can have been handed out.
+            if one.professional_id not in checks:
+                checks[one.professional_id] = opening_check(
+                    request.tenant, one.professional, new_start, following[-1].end + timedelta(days=1),
+                )
+            return checks[one.professional_id](one.start, one.end)
+
+        for one in following:
             was_at = one.start
             local_day = was_at.astimezone(zone).date()
             # Left where it was, like a clash: a turn with attendance marked
@@ -1207,6 +1227,9 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             one.end = one.start + one.service.duration
             if professional is not None:
                 one.professional = professional
+            if closed(one):
+                skipped.append(local_day)
+                continue
             # Handing the series to someone else without changing the hour moves
             # nobody's day, so it leaves the badge off.
             if one.start != was_at:
