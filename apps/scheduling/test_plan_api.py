@@ -106,6 +106,7 @@ def test_only_owner_or_admin_writes_the_catalogue_but_anyone_reads_it(
     res = http.post(PLANS, {'name': 'Libre', 'price': 1}, format='json')
     assert (res.status_code, res.data['code']) == (403, 'admin_required')
     assert http.patch(plan_url(pilates), {'price': 1}, format='json').status_code == 403
+    assert http.delete(plan_url(pilates)).status_code == 403
     listed = http.get(PLANS)
     assert listed.status_code == 200
     assert [p['name'] for p in listed.data] == ['Pilates 8']

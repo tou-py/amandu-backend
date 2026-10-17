@@ -72,7 +72,7 @@ from apps.scheduling.serializers import (
     WorkScheduleSerializer,
 )
 from apps.scheduling.workload import daily_load
-from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin
+from apps.tenancy.permissions import HasActiveMembership, HasCobros, IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
 
@@ -592,11 +592,12 @@ class SubscriptionViewSet(
 class ReceivablesView(APIView):
     """
     Por cobrar: everyone who owes, oldest debt first, and whose current period
-    falls due within three days. Readable by any member, because the front
-    desk is who chases.
+    falls due within three days. The front desk chases, so the coordinator
+    reads it; staff do not, because it is the whole business's money. A client
+    file still shows that one client's debt to anyone.
     """
 
-    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros)
+    permission_classes = (IsAuthenticated, HasActiveMembership, HasCobros, IsTenantCoordinator)
 
     @extend_schema(responses=ReceivablesSerializer)
     def get(self, request):

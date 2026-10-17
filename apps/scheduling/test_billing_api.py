@@ -81,6 +81,12 @@ def staff(django_user_model, studio):
 
 
 @pytest.fixture
+def desk(django_user_model, studio):
+    """The coordinator at the front desk, who chases what is owed."""
+    return member(django_user_model, studio, Membership.Role.COORDINATOR, 'desk@example.com')[0]
+
+
+@pytest.fixture
 def teacher(django_user_model, studio):
     return member(
         django_user_model, studio, Membership.Role.STAFF, 't@example.com', attends=True
@@ -463,8 +469,8 @@ def test_deleting_a_client_keeps_the_money_they_paid(owner, studio, pilates, ada
 # -- Receivables ---------------------------------------------------------------
 
 
-def test_receivables_answer_in_their_final_shape(staff, studio):
-    res = api(staff, studio).get(RECEIVABLES)
+def test_receivables_answer_in_their_final_shape(desk, studio):
+    res = api(desk, studio).get(RECEIVABLES)
 
     assert res.status_code == 200
     assert res.data == {'total': 0, 'rows': [], 'due_soon': []}
@@ -831,7 +837,7 @@ def test_a_turn_attended_while_owing_is_settled_by_paying_the_month(
 
 
 def test_receivables_list_who_owes_oldest_debt_first(
-    staff, studio, teacher, pilates, ada, bob, live_since_last_week
+    desk, studio, teacher, pilates, ada, bob, live_since_last_week
 ):
     today = local_today(studio)
     two_months_ago = add_months(today, -2)
@@ -841,7 +847,7 @@ def test_receivables_list_who_owes_oldest_debt_first(
     subscribe(bob, pilates, two_months_ago)
     Client.objects.create(tenant=studio, name='Carla')  # owes nothing
 
-    res = api(staff, studio).get(RECEIVABLES)
+    res = api(desk, studio).get(RECEIVABLES)
 
     bob_row, ada_row = res.data['rows']
     assert bob_row['client_name'] == 'Bob'
@@ -862,12 +868,12 @@ def test_receivables_list_who_owes_oldest_debt_first(
 
 @pytest.mark.parametrize('due_in, listed', [(0, True), (3, True), (4, False)])
 def test_due_soon_is_the_current_period_due_within_three_days(
-    staff, studio, pilates, ada, due_in, listed
+    desk, studio, pilates, ada, due_in, listed
 ):
     """Not overdue yet, so in neither the rows nor the total."""
     subscribe(ada, pilates, local_today(studio) + timedelta(days=due_in - 9))
 
-    res = api(staff, studio).get(RECEIVABLES)
+    res = api(desk, studio).get(RECEIVABLES)
 
     assert res.data['rows'] == []
     assert res.data['total'] == 0
@@ -882,11 +888,11 @@ def test_a_paid_current_period_is_not_due_soon(owner, studio, pilates, ada):
     assert http.get(RECEIVABLES).data['due_soon'] == []
 
 
-def test_turns_before_go_live_are_never_receivable(staff, studio, teacher, ada, settings):
+def test_turns_before_go_live_are_never_receivable(desk, studio, teacher, ada, settings):
     settings.BILLING_GO_LIVE = local_today(studio)
     turn(studio, teacher, [ada], start=at(studio, local_today(studio) - timedelta(days=1)))
 
-    assert api(staff, studio).get(RECEIVABLES).data['rows'] == []
+    assert api(desk, studio).get(RECEIVABLES).data['rows'] == []
 
 
 def test_receivables_are_isolated_per_tenant(django_user_model, studio, gym, pilates, ada):
@@ -1054,3 +1060,9 @@ def test_a_no_show_past_the_quota_owes_nothing(owner, studio, teacher, ada):
 
     assert billing_of(http, absent)['Ada']['state'] == 'no_show'
     assert http.get(client_url(ada)).data['billing_summary']['unpaid_turns'] == []
+
+
+def test_staff_do_not_read_the_business_receivables(staff, studio):
+    res = api(staff, studio).get(RECEIVABLES)
+
+    assert (res.status_code, res.data['code']) == (403, 'coordinator_required')
