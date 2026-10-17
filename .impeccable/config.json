@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "clipped-overflow-container",
+        "value": "*",
+        "files": [
+          "apps/scheduling/templates/scheduling/booking.html"
+        ],
+        "createdAt": "2026-10-07T20:29:07.186Z",
+        "reason": "Claude triage: the only absolute children are the skip link (inside the viewport) and the transparent radio overlay inside .slot; the overflow:hidden on .options/.ticket only rounds the corners and has no positioned layer that needs to escape"
+      },
+      {
+        "rule": "tight-leading",
+        "value": "*",
+        "files": [
+          "apps/scheduling/templates/scheduling/booking.html"
+        ],
+        "createdAt": "2026-10-07T20:29:28.491Z",
+        "reason": "Claude triage: the tight values are display type only (h1 1.1, the big 'when' lines and day-cell numbers 1.15), matching the panel's heading scale in theme.ts (h1 1.15); body text is 1.55"
+      }
+    ]
+  }
+}
