@@ -365,6 +365,18 @@ class Command(BaseCommand):
         Notification.Verb.APPOINTMENT_REQUESTED: 'Nuevo pedido de turno',
         Notification.Verb.APPOINTMENT_CONFIRMED: 'Turno confirmado',
         Notification.Verb.APPOINTMENT_REJECTED: 'Pedido rechazado',
+        Notification.Verb.APPOINTMENT_BOOKED: 'Turno nuevo',
+        Notification.Verb.APPOINTMENT_RESCHEDULED: 'Turno movido',
+        Notification.Verb.APPOINTMENT_UPDATED: 'Turno modificado',
+        Notification.Verb.APPOINTMENT_REASSIGNED: 'Turno reasignado',
+    }
+    # What the actor did, for the body. Rejected is the fallback, as before.
+    ACTOR_VERBS = {
+        Notification.Verb.APPOINTMENT_CONFIRMED: 'confirmó',
+        Notification.Verb.APPOINTMENT_BOOKED: 'te agendó',
+        Notification.Verb.APPOINTMENT_RESCHEDULED: 'movió',
+        Notification.Verb.APPOINTMENT_UPDATED: 'modificó',
+        Notification.Verb.APPOINTMENT_REASSIGNED: 'reasignó',
     }
 
     def request_payload(self, notification):
@@ -384,7 +396,7 @@ class Command(BaseCommand):
                 body += f' · {clients}'
             body += '.'
         if notification.actor:
-            verb = 'confirmó' if notification.verb == Notification.Verb.APPOINTMENT_CONFIRMED else 'rechazó'
+            verb = self.ACTOR_VERBS.get(notification.verb, 'rechazó')
             body = f'{notification.actor.display_name()} {verb}: {body}'
         return {
             'title': self.REQUEST_TITLES[notification.verb],

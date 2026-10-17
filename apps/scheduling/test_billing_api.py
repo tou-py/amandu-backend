@@ -141,10 +141,9 @@ def test_an_attendee_of_an_unpriced_turn_has_no_price(owner, studio, teacher, ad
 def test_charging_a_turn_files_a_payment_and_shows_the_attendee_paid(
     staff, studio, teacher, ada, bob
 ):
-    """Any member charges, even for a colleague's turn; the others in the
-    group class are untouched."""
+    """Staff charge their own turn; the others in the group class are untouched."""
     appointment = turn(studio, teacher, [ada, bob])
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     res = http.post(charge_url(appointment), {'client': str(ada.pk), 'payment_method': 'transfer'}, format='json')
 
@@ -174,10 +173,20 @@ def test_the_counter_can_edit_the_amount_and_the_day(owner, studio, teacher, ada
     assert res.data['payment_method'] == 'cash'
 
 
+def test_staff_do_not_charge_a_colleagues_turn(staff, studio, teacher, ada):
+    """Staff write only their own appointments, and a charge is one of those writes."""
+    appointment = turn(studio, teacher, [ada])
+
+    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+
+    assert res.status_code == 403
+    assert not CashEntry.objects.exists()
+
+
 def test_staff_charge_the_price_but_do_not_edit_it(staff, studio, teacher, ada, bob):
     appointment = turn(studio, teacher, [ada, bob])
     unpriced = turn(studio, teacher, [ada], price=None, start=YESTERDAY - timedelta(hours=2))
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 70000}, format='json')
     # The amount the form prefilled, sent back unchanged, is not an edit.
@@ -262,7 +271,8 @@ def test_an_owner_voids_a_payment_and_the_attendee_owes_again(owner, studio, tea
 
 @pytest.mark.parametrize('role', [Membership.Role.COORDINATOR, Membership.Role.STAFF])
 def test_front_desk_charges_but_cannot_void(django_user_model, studio, teacher, ada, role):
-    caller = member(django_user_model, studio, role, 'x@example.com')[0]
+    # Staff charge their own turns only (test_staff_do_not_charge_a_colleagues_turn).
+    caller = teacher.user if role == Membership.Role.STAFF else member(django_user_model, studio, role, 'x@example.com')[0]
     appointment = turn(studio, teacher, [ada])
     http = api(caller, studio)
     paid = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
@@ -548,7 +558,7 @@ def test_a_covered_turn_is_not_charged_while_the_month_is_owed(staff, studio, te
     subscribe(ada, pilates, add_months(local_today(studio), -1))
     appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
 
-    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
+    res = api(teacher.user, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
     assert not CashEntry.objects.exists()
@@ -558,7 +568,7 @@ def test_a_turn_charged_while_the_month_is_owed_defaults_to_its_price(staff, stu
     start = add_months(local_today(studio), -1)
     subscribe(ada, pilates, start)
     appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
-    http = api(staff, studio)
+    http = api(teacher.user, studio)
 
     edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
     priced = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
@@ -978,8 +988,9 @@ def named(user, first, last):
     return user
 
 
-def test_a_turn_charge_names_the_turn_and_who_charged_it(staff, studio, teacher, ada):
+def test_a_turn_charge_names_the_turn_and_who_charged_it(django_user_model, studio, teacher, ada):
     named(teacher.user, 'Julián', 'Ferreyra')
+    staff = member(django_user_model, studio, Membership.Role.COORDINATOR, 'desk@example.com')[0]
     named(staff, 'Lucía', 'Gómez')
     # Monday 5 October, 13:00 on the business's wall clock.
     appointment = turn(studio, teacher, [ada], start=at(studio, date(2026, 10, 5), 13))

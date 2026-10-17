@@ -297,7 +297,21 @@ def test_cancel_following_tells_the_professional_once(
 
     http.post(action_url(first, 'cancel-following'), {}, format='json')
 
-    assert Notification.objects.count() == 1
+    assert Notification.objects.filter(verb=Notification.Verb.APPOINTMENT_CANCELLED).count() == 1
+    # Booking the run was news too, and also told once.
+    assert Notification.objects.filter(verb=Notification.Verb.APPOINTMENT_BOOKED).count() == 1
+
+
+def test_reschedule_following_tells_the_professional_once(
+    receptionist, studio, teacher, reformer, ada
+):
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    first = Appointment.objects.order_by('start')[0]
+
+    http.post(action_url(first, 'reschedule-following'), {'time': '09:00'}, format='json')
+
+    assert Notification.objects.filter(verb=Notification.Verb.APPOINTMENT_RESCHEDULED).count() == 1
 
 
 def test_cancel_following_needs_a_series(receptionist, studio, teacher, reformer):
