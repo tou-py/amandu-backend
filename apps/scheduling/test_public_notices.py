@@ -402,3 +402,15 @@ def test_a_request_is_pushed_as_a_request_not_a_cancellation(request_for_ana, co
     payload = Command().notification_payload(confirm_note)
     assert payload['title'] == 'Turno confirmado'
     assert payload['body'].startswith('Carla confirmó: Corte del 10/08 a las 09:00')
+
+
+def test_a_request_whose_hour_has_passed_cannot_be_accepted(request_for_ana, coordinator, salon, now):
+    now(local(9, 1))
+
+    res = act(coordinator, salon, request_for_ana, 'confirm')
+
+    assert (res.status_code, res.data['code']) == (400, 'request_expired')
+    request_for_ana.refresh_from_db()
+    assert request_for_ana.status == Appointment.Status.PENDING
+    # Turning it down still works.
+    assert act(coordinator, salon, request_for_ana, 'cancel').status_code == 200

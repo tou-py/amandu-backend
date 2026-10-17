@@ -1089,6 +1089,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         reason the shop typed.
         """
         appointment = self.get_object()
+        # A request for an hour that has gone by can only be turned down: the
+        # client was never told yes, and saying it now is for a turn that is over.
+        # ponytail: it still holds its (past) slot until cancelled; expire them
+        # in the sweep if back-filling past turns ever trips on one.
+        if appointment.status == Appointment.Status.PENDING and appointment.start <= timezone.now():
+            raise Refused('This request is for a time that has already passed.', 'request_expired')
         with transaction.atomic():
             response = self._transition(appointment, appointment.confirm)
             announce(appointment, ACCEPTED, actor=request.membership)
