@@ -1,0 +1,12 @@
+#!/bin/sh
+# Links .git/hooks/commit-msg to the versioned policy. Not core.hooksPath, which
+# would switch off the other hooks already in .git/hooks (graphify's).
+hooks=$(git rev-parse --git-common-dir)/hooks
+cat >"$hooks/commit-msg" <<'EOF'
+#!/bin/sh
+policy="$(git rev-parse --show-toplevel)/.githooks/commit-msg"
+[ -f "$policy" ] && exec sh "$policy" "$@"
+exit 0
+EOF
+chmod +x "$hooks/commit-msg"
+echo "commit-msg policy installed in $hooks"

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Commit policy for every author, human or agent: Conventional Commits, short,
+# no co-author or "generated with" trailers.
+# Install once per clone: sh .githooks/install
+MAX_SUBJECT=72
+MAX_BODY_LINES=4
+
+msg=$(grep -v '^#' "$1")
+subject=$(printf '%s\n' "$msg" | sed -n 1p)
+
+case $subject in Merge\ * | Revert\ * | fixup!* | squash!* | amend!*) exit 0 ;; esac
+
+fail() {
+  printf 'commit-msg: %s\n  > %s\n' "$1" "$subject" >&2
+  exit 1
+}
+
+printf '%s' "$subject" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9/,-]+\))?!?: [^ ]' ||
+  fail 'use Conventional Commits: type(scope): summary  (feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert)'
+[ "${#subject}" -le "$MAX_SUBJECT" ] || fail "subject is ${#subject} chars, keep it to $MAX_SUBJECT"
+case $subject in *.) fail 'no trailing period in the subject' ;; esac
+printf '%s\n' "$msg" | grep -Eiq '^(co-authored-by:|.*generated with)' && fail 'no Co-Authored-By or "Generated with" lines'
+body=$(printf '%s\n' "$msg" | sed 1,2d | grep -c .)
+[ "$body" -le "$MAX_BODY_LINES" ] || fail "body has $body lines, keep it to $MAX_BODY_LINES"
+exit 0
