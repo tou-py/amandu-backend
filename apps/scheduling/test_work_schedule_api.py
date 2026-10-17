@@ -344,3 +344,19 @@ def test_a_malformed_date_is_a_400_not_a_500(owner, salon):
     response = api(owner, salon).get(TIME_OFF_URL, {'from': '01-06-2026'})
 
     assert response.status_code == 400
+
+
+def test_the_coordinator_reads_the_teams_week_and_time_off_but_does_not_write_it(
+    django_user_model, salon, stylist
+):
+    user = django_user_model.objects.create_user(email='c@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
+    WorkSchedule.objects.create(tenant=salon, professional=stylist, weekday=0, start_time=time(9), end_time=time(18))
+    now = datetime.now(ASUNCION)
+    TimeOff.objects.create(tenant=salon, start=now + timedelta(days=1), end=now + timedelta(days=2))
+    http = api(user, salon)
+
+    assert len(http.get(SCHEDULE_URL).data) == 1
+    assert http.get(TIME_OFF_URL).data['count'] == 1
+    shift = {'professional': stylist.pk, 'weekday': 1, 'start_time': '09:00', 'end_time': '12:00'}
+    assert http.post(SCHEDULE_URL, shift, format='json').status_code == 403
