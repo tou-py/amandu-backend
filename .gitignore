@@ -383,4 +383,16 @@ staticfiles/
 # Planning notes, deliberately untracked
 roadmap-agenda-saas.md
 
+# AI tooling. Shared project config is tracked: CLAUDE.md, AGENTS.md,
+# .claude/settings.json and .claude/{hooks,commands,agents,skills}/, .mcp.json,
+# .impeccable/config.json. Personal settings, caches and generated output are not.
+# (.codegraph/ ignores its own data through .codegraph/.gitignore.)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+.claude-scratch/
+.impeccable/*
+!.impeccable/config.json
 graphify-out/
+.cursor/
+.aider*
