@@ -59,6 +59,7 @@ def test_me_carries_the_membership_id_the_agenda_uses(db, django_user_model, sal
     res = api(user).get(ME_URL)
 
     assert res.data['memberships'][0]['membership_id'] == membership.id
+    assert res.data['memberships'][0]['attends_appointments'] is False
 
 
 def test_me_does_not_require_a_selected_tenant(db, django_user_model, salon, clinic):
