@@ -34,6 +34,18 @@ class Service(TenantOwnedMixin, TimestampMixin):
         blank=True,
         related_name='services',
     )
+    # Who added it to the catalogue, which is what lets staff keep the services
+    # they offer without being able to rewrite a colleague's prices
+    # (ManagesService). Null for everything older than the field, and for a
+    # creator who left: those are managed by owner/admin/coordinator only.
+    created_by = models.ForeignKey(
+        'accounts.Membership',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name='+',
+    )
 
     class Meta:
         db_table = 'tb_service'

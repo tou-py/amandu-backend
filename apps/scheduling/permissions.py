@@ -30,3 +30,22 @@ class OwnsAppointmentOrActsForTheTeam(BasePermission):
             return True
         membership = request.membership
         return obj.professional_id == membership.id or membership.can_schedule_for_others()
+
+
+class ManagesService(BasePermission):
+    """
+    Object-level: may the caller edit or delete this catalogue entry.
+
+    Staff add the services they offer and keep those, and only those: a
+    colleague's service is somebody else's price. Whoever books for the whole
+    team (can_schedule_for_others) manages the whole catalogue, including the
+    rows with no creator, which predate the field. Creating is open to all.
+    """
+
+    message = 'Your role only allows changing services you created.'
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        membership = request.membership
+        return obj.created_by_id == membership.id or membership.can_schedule_for_others()

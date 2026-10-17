@@ -40,7 +40,7 @@ from apps.scheduling.models import (
     TimeOff,
     WorkSchedule,
 )
-from apps.scheduling.permissions import OwnsAppointmentOrActsForTheTeam
+from apps.scheduling.permissions import ManagesService, OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
     AppointmentCancelSerializer,
     AppointmentSeriesSerializer,
@@ -383,8 +383,14 @@ class CategoryViewSet(TenantScopedModelViewSet):
 
 
 class ServiceViewSet(TenantScopedModelViewSet):
+    """The catalogue. Anyone adds to it; staff change only what they added."""
+
+    permission_classes = (*TenantScopedModelViewSet.permission_classes, ManagesService)
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.tenant, created_by=self.request.membership)
 
 
 class PlanViewSet(TenantScopedModelViewSet):

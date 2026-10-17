@@ -294,8 +294,10 @@ class CategorySerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
 class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
     class Meta:
         model = Service
-        fields = ('id', 'name', 'price', 'duration', 'category', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'created_at', 'updated_at')
+        # `created_by` is the membership id, so the UI can tell a staff member
+        # which services are theirs to edit (ManagesService).
+        fields = ('id', 'name', 'price', 'duration', 'category', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
