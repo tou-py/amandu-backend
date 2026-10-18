@@ -517,3 +517,32 @@ def test_changing_to_an_archived_plan_is_rejected(desk, studio, pilates, ada):
     res = api(desk, studio).post(sub_url(sub, 'change-plan'), {'plan': old.pk}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'plan_archived')
+
+
+# -- A plan given by mistake ---------------------------------------------------
+
+
+def test_a_plan_given_by_mistake_is_deleted_while_nothing_was_paid(desk, studio, pilates, ada):
+    sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
+    sub.cash_entries.create(
+        tenant=studio, kind='income', amount=1, occurred_on='2026-01-14', concept='x',
+        client=ada, period='2026-01-14', voided_at='2026-01-15T10:00Z',
+    )
+
+    res = api(desk, studio).delete(reverse('scheduling:subscription-detail', args=[sub.pk]))
+
+    assert res.status_code == 204
+    assert not Subscription.objects.filter(pk=sub.pk).exists()
+
+
+def test_a_paid_plan_cannot_be_deleted(desk, studio, pilates, ada):
+    sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
+    sub.cash_entries.create(
+        tenant=studio, kind='income', amount=1, occurred_on='2026-01-14', concept='x',
+        client=ada, period='2026-01-14',
+    )
+
+    res = api(desk, studio).delete(reverse('scheduling:subscription-detail', args=[sub.pk]))
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'subscription_paid'

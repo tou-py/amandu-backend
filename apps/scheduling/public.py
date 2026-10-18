@@ -243,6 +243,11 @@ def _client_for(shop, data):
     # worst send that number the notices of a request it did not make -- kept
     # small by the rate limit and MAX_PENDING_PER_PHONE -- but can never
     # silence a regular who asked to be told.
+    # Booking again is coming back: a client the shop had set aside reappears in
+    # its list rather than as a request from someone it cannot find.
+    if not client.active:
+        client.active = True
+        client.save(update_fields=['active', 'updated_at'])
     if data.get('notify_whatsapp') and not client.whatsapp_opt_in:
         client.whatsapp_opt_in = True
         client.save(update_fields=['whatsapp_opt_in', 'updated_at'])

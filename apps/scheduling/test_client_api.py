@@ -368,3 +368,29 @@ def test_another_tenants_client_cannot_be_deleted(db, django_user_model, salon, 
 
     assert res.status_code == 404
     assert Client.objects.filter(pk=foreign.pk).exists()
+
+
+def test_a_client_is_deactivated_and_back(receptionist, salon):
+    ada = Client.objects.create(tenant=salon, name='Ada')
+
+    res = api(receptionist, salon).patch(detail_url(ada), {'active': False}, format='json')
+    assert res.status_code == 200
+    assert res.data['active'] is False
+
+    res = api(receptionist, salon).patch(detail_url(ada), {'active': True}, format='json')
+    assert res.data['active'] is True
+
+
+def test_a_client_on_a_running_plan_is_not_deactivated(receptionist, salon):
+    from apps.scheduling.models import Plan, Subscription
+
+    ada = Client.objects.create(tenant=salon, name='Ada')
+    plan = Plan.objects.create(tenant=salon, name='Libre', price=1)
+    Subscription.objects.create(tenant=salon, client=ada, plan=plan, start_date='2026-01-01')
+
+    res = api(receptionist, salon).patch(detail_url(ada), {'active': False}, format='json')
+
+    assert res.status_code == 409
+    assert res.data['code'] == 'client_on_plan'
+    ada.refresh_from_db()
+    assert ada.active
