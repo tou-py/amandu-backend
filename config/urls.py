@@ -14,6 +14,7 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import (
@@ -28,7 +29,9 @@ from apps.commons.state import StateView
 from apps.scheduling.public_pages import booking_page
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # Path from the environment: /admin/ is on every scanner's list, and Django's
+    # admin login has no throttle (DRF's only covers /api/auth/login/).
+    path(settings.ADMIN_URL, admin.site.urls),
     path('healthz/', healthz, name='healthz'),
     # Not under /api/: this one is read by people and indexed by search engines,
     # so it gets a URL a shop can print on a card. Spanish because its readers
@@ -41,10 +44,13 @@ urlpatterns = [
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
     path('api/', include('apps.accounting.urls')),
-    # API docs. AllowAny because DEFAULT_PERMISSION_CLASSES is IsAuthenticated and
-    # the docs must be reachable without a token. Lock these down before exposing
-    # the API publicly if the endpoint list itself is sensitive.
-    path('api/schema/', SpectacularAPIView.as_view(permission_classes=[AllowAny]), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema', permission_classes=[AllowAny]), name='swagger-ui'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema', permission_classes=[AllowAny]), name='redoc'),
 ]
+
+# API docs, development only: in production they hand anyone the full endpoint
+# map. AllowAny because DEFAULT_PERMISSION_CLASSES is IsAuthenticated.
+if settings.DEBUG:
+    urlpatterns += [
+        path('api/schema/', SpectacularAPIView.as_view(permission_classes=[AllowAny]), name='schema'),
+        path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema', permission_classes=[AllowAny]), name='swagger-ui'),
+        path('api/redoc/', SpectacularRedocView.as_view(url_name='schema', permission_classes=[AllowAny]), name='redoc'),
+    ]
