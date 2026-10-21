@@ -1,0 +1,17 @@
+{% extends 'emails/base.html' %}
+
+{% block title %}Te invitaron a {{ tenant_name }}{% endblock %}
+
+{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;line-height:1.25;font-weight:700;letter-spacing:-0.01em;color:#1c1917;">Te invitaron a {{ tenant_name }}</h1>
+<p style="margin:0 0 28px;">Te sumaron al equipo de <strong style="color:#1c1917;">{{ tenant_name }}</strong> en Kyo. Aceptá la invitación y elegí tu contraseña para empezar.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+  <tr>
+    <td style="border-radius:999px;background:#1c1917;">
+      <a href="{{ accept_link }}" style="display:inline-block;padding:13px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:999px;">Aceptar invitación</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:28px 0 0;font-size:13px;color:#78716c;">El enlace vence el {{ expires_at|date:'d/m/Y' }}. Si el botón no funciona, copiá esta dirección en tu navegador:<br>
+<a href="{{ accept_link }}" style="color:#44403c;word-break:break-all;">{{ accept_link }}</a></p>
+{% endblock %}

@@ -75,6 +75,9 @@ def test_inviting_emails_the_accept_link_to_the_invitee(admin_user, salon):
     assert message.to == ['new@example.com']
     token = Invitation.objects.get(email='new@example.com', tenant=salon).token
     assert token in message.body
+    html, mimetype = message.alternatives[0]
+    assert mimetype == 'text/html'
+    assert token in html
 
 
 def test_reinviting_emails_the_refreshed_token(admin_user, salon):
