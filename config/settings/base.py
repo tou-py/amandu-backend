@@ -208,9 +208,12 @@ LOGGING = {
     },
     'root': {'handlers': ['console'], 'level': 'INFO'},
     'loggers': {
-        # Django logs 5xx to django.request; keep it on the console handler and
-        # stop it double-printing through the root logger.
+        # Keep Django on the console handler and stop it double-printing
+        # through the root logger.
         'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        # django.request warns on every 4xx; scanners turn that into a wall of
+        # 404s. amandu.access already logs each one, so keep only 5xx here.
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
     },
 }
 
@@ -237,6 +240,10 @@ CACHES = {
     }
 }
 
+
+# Where the Django admin lives. Set something non-obvious in production; the
+# default is only for development.
+ADMIN_URL = env.str('ADMIN_URL', default='admin/')
 
 # Web Push (VAPID, RFC 8292). The key pair identifies THIS server to the push
 # services, and the public half is handed to the browser when it subscribes.
