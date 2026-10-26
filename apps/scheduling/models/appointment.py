@@ -141,6 +141,10 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # started life. Never cleared -- moving it back to its old hour still means
     # the people involved were told a different time at some point.
     rescheduled_from = models.DateTimeField(null=True, blank=True, editable=False)
+    # When a request off the public page that nobody answered was put in front
+    # of the shop's managers (send_reminders). Once per request, like
+    # reminder_sent_at.
+    escalated_at = models.DateTimeField(null=True, blank=True, editable=False)
     source = models.CharField(
         max_length=20,
         choices=Source.choices,  # type: ignore

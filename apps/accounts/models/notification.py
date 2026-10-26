@@ -38,11 +38,11 @@ class Notification(models.Model):
         # The morning summary of who owes (send_reminders). No actor and no
         # appointment: it is about the whole business. It carries no counts of
         # its own on purpose -- they would be stale by the time the bell is
-        # opened -- so tapping it opens Por cobrar, which is always current.
+        # opened -- so tapping it opens Clientes filtered to who owes, which is always current.
         # Only the push, built at send time, spells the figures out.
         PLAN_DIGEST = 'plan_digest', 'Plan digest'
         # A teammate answered a public request in this professional's name.
-        # Never filed for the professional's own answer (apps/scheduling/announce.py).
+        # Never filed for the professional's own answer (apps/scheduling/notify.py).
         APPOINTMENT_CONFIRMED = 'appointment_confirmed', 'Appointment confirmed'
         APPOINTMENT_REJECTED = 'appointment_rejected', 'Appointment rejected'
         # Paying Kyo is due or late (send_reminders), to the owner only, once a
@@ -58,6 +58,10 @@ class Notification(models.Model):
         APPOINTMENT_UPDATED = 'appointment_updated', 'Appointment updated'
         # To the professional the turn was taken FROM; the new one gets `booked`.
         APPOINTMENT_REASSIGNED = 'appointment_reassigned', 'Appointment reassigned'
+        # A public request nobody answered for a while, put to the shop's owner,
+        # admins and coordinators (send_reminders): the professional's own push
+        # may have gone unseen while the request holds its slot. No actor.
+        APPOINTMENT_REQUEST_WAITING = 'appointment_request_waiting', 'Appointment request waiting'
 
     recipient = models.ForeignKey(
         'accounts.Membership',
