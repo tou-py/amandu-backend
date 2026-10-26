@@ -60,9 +60,9 @@ PEOPLE = [
     ('gabriela@magnolia.test', COORDINATOR, 'Gabriela Duarte', False, None),
     ('diego@magnolia.test', STAFF, 'Diego Ramírez', False,
      ['Corte de caballero', 'Corte y barba', 'Corte de dama', 'Corte de caballero']),
-    ('fatima@magnolia.test', STAFF, 'Fátima Giménez', True,
+    ('tamara@magnolia.test', STAFF, 'Tamara Giménez', True,
      ['Manicura', 'Esmaltado semipermanente', 'Pedicura', 'Manicura']),
-    ('noelia@magnolia.test', STAFF, 'Noelia Ortiz', False,
+    ('noelia@magnolia.test', STAFF, 'Noelia Paredes', False,
      ['Brushing', 'Tratamiento capilar', 'Peinado de fiesta', 'Corte de dama']),
 ]
 LOGINS = {OWNER: PEOPLE[0][0], COORDINATOR: PEOPLE[1][0], STAFF: PEOPLE[2][0]}
@@ -128,7 +128,13 @@ CLIENTS = [
     ('Hugo Giménez', '+595971390562', '', ''),
     ('Óscar Ramírez', '+595983052847', '', ''),
     ('Javier Acosta', '+595992614730', 'javier.acosta@correo.test', ''),
+    ('Rodrigo Villalba', '+595981604273', '', ''),
+    ('Fernando Ayala', '+595984517392', '', ''),
 ]
+# Men's services go to these clients and every other service to the rest, so no
+# screenshot shows a "Corte de caballero" booked for a woman, or the reverse.
+MEN = {'Marcelo Duarte', 'Hugo Giménez', 'Óscar Ramírez', 'Javier Acosta', 'Rodrigo Villalba', 'Fernando Ayala'}
+MEN_SERVICES = {'Corte de caballero', 'Corte y barba'}
 # Only ever seen on the public-booking request: a stranger asking for a slot.
 REQUEST_CLIENT = ('Camila Ruiz Díaz', '+595985471396', 'camila.ruizdiaz@correo.test', '')
 
@@ -216,7 +222,7 @@ class Command(BaseCommand):
         professionals = []
         for email, role, display, sundays, menu in PEOPLE:
             first, _, last = display.partition(' ')
-            user, _ = User.objects.get_or_create(
+            user, _ = User.objects.update_or_create(
                 email=email, defaults={'first_name': first, 'last_name': last}
             )
             # Reset every run so the password is always the documented one.
@@ -335,7 +341,8 @@ class Command(BaseCommand):
 
     def seed_turns(self, tenant, tz, now, today, front_desk, professionals, services, clients, subscribed):
         """Lay out the window, give a few past turns their story, and write it."""
-        regulars = cycle(clients[name] for name, *_ in CLIENTS)
+        men = cycle(clients[name] for name, *_ in CLIENTS if name in MEN)
+        women = cycle(clients[name] for name, *_ in CLIENTS if name not in MEN)
         turns = []
         for offset in range(FIRST_DAY, LAST_DAY + 1):
             day = today + timedelta(days=offset)
@@ -375,7 +382,10 @@ class Command(BaseCommand):
                             created_by=front_desk,
                         ),
                         'day': day,
-                        'clients': [next(regulars) for _ in range(size)],
+                        'clients': [
+                            next(men if service.name in MEN_SERVICES else women)
+                            for _ in range(size)
+                        ],
                         'attendance': (
                             AppointmentClient.Attendance.ATTENDED if past
                             else AppointmentClient.Attendance.PENDING
@@ -442,9 +452,13 @@ class Command(BaseCommand):
             # 'owed' stays completed and attended; charge_turns leaves it unpaid.
 
         # Exactly one request off the public page, the first single-client turn
-        # after today, asked for by someone the salon has never seen.
+        # after today on a women's service, asked for by someone the salon has
+        # never seen.
         request = next(
-            turn for turn in turns if turn['day'] > today and len(turn['clients']) == 1
+            turn for turn in turns
+            if turn['day'] > today
+            and len(turn['clients']) == 1
+            and turn['appointment'].service.name not in MEN_SERVICES
         )
         request['role'] = 'request'
         request['clients'] = [clients[REQUEST_CLIENT[0]]]
