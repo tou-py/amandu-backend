@@ -645,7 +645,7 @@ def test_each_tenant_wakes_up_in_its_own_timezone(salon, team, owing, sent):
     assert {n.recipient.tenant for n in digests()} == {tokyo}
 
 
-def test_the_digest_push_says_who_owes_and_opens_por_cobrar(salon, team, owing, sent):
+def test_the_digest_push_says_who_owes_and_opens_clients_who_owe(salon, team, owing, sent):
     members = team(salon)
     owing(salon)
     PushSubscription.objects.create(
@@ -656,7 +656,7 @@ def test_the_digest_push_says_who_owes_and_opens_por_cobrar(salon, team, owing, 
         call_command('send_reminders')
 
     payload = json.loads(sent.call_args.kwargs['data'])
-    assert payload['url'] == '/por-cobrar'
+    assert payload['url'] == '/clientes?estado=vencido'
     # August, September and October started; Oct 1 + 9 days of grace is not
     # past yet, so two periods are overdue.
     assert payload['body'] == '1 cliente debe Gs. 500.000.'

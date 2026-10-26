@@ -525,37 +525,39 @@ class BillingSummarySerializer(serializers.Serializer):
 
 
 class ReceivableRowSerializer(serializers.Serializer):
-    """One client who owes, as the Por cobrar list shows them."""
+    """One client on a plan or owing something, and where they stand (billing.receivables)."""
 
     client = serializers.UUIDField()
     client_name = serializers.CharField()
     # E.164 or '': what "Recordar por WhatsApp" builds its wa.me link from.
     client_phone = serializers.CharField()
-    # For the "End plan" shortcut on an overdue row. Null when only turns are owed.
+    state = serializers.ChoiceField(choices=('overdue', 'due_soon', 'up_to_date'))
+    # The plan producing the debt or the next period. Null when only turns are owed.
     subscription = serializers.IntegerField(allow_null=True)
     overdue_periods = PeriodSerializer(many=True)
     unpaid_turns = UnpaidTurnSerializer(many=True)
+    # What is owed now; 0 unless overdue.
     amount = serializers.IntegerField()
-    # What the list is ordered by, oldest first.
-    oldest_debt = serializers.DateField()
+    oldest_debt = serializers.DateField(allow_null=True)
+    # When not overdue: the next period to collect and the days until it falls
+    # due (0 is today). Null when the plan has ended and is paid.
+    next_period = PeriodSerializer(allow_null=True)
+    days_left = serializers.IntegerField(allow_null=True)
 
 
-class DueSoonRowSerializer(serializers.Serializer):
-    """A client whose current period is unpaid and falls due within three days."""
+class StandingSerializer(serializers.Serializer):
+    """How many clients are in each state."""
 
-    client = serializers.UUIDField()
-    client_name = serializers.CharField()
-    client_phone = serializers.CharField()
-    subscription = serializers.IntegerField()
-    period = PeriodSerializer()
+    up_to_date = serializers.IntegerField()
+    due_soon = serializers.IntegerField()
+    overdue = serializers.IntegerField()
 
 
 class ReceivablesSerializer(serializers.Serializer):
-    # Everything owed across `rows`. Due-soon periods are not overdue yet and
-    # are not in it.
+    # Everything owed now, across the overdue rows.
     total = serializers.IntegerField()
-    rows = ReceivableRowSerializer(many=True)
-    due_soon = DueSoonRowSerializer(many=True)
+    standing = StandingSerializer()
+    clients = ReceivableRowSerializer(many=True)
 
 
 class AttendeeSerializer(serializers.ModelSerializer):

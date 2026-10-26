@@ -189,7 +189,7 @@ class Command(BaseCommand):
             if not claimed:
                 continue
             owed = billing.receivables(tenant)
-            if not (owed['rows'] or owed['due_soon']):
+            if not (owed['standing']['overdue'] or owed['standing']['due_soon']):
                 # Claimed and silent: a digest saying "nothing" every morning
                 # trains people to ignore the one that matters.
                 continue
@@ -433,7 +433,7 @@ class Command(BaseCommand):
         admin cost two. Cache per tenant if a business grows a crowd of admins.
         """
         owed = billing.receivables(notification.recipient.tenant)
-        debtors = len(owed['rows'])
+        debtors = owed['standing']['overdue']
         parts = []
         if debtors:
             # Guaraníes are written with dots between thousands.
@@ -442,16 +442,17 @@ class Command(BaseCommand):
                 f'1 cliente debe Gs. {amount}.' if debtors == 1
                 else f'{debtors} clientes deben Gs. {amount}.'
             )
-        if owed['due_soon']:
-            soon = len(owed['due_soon'])
+        if owed['standing']['due_soon']:
+            soon = owed['standing']['due_soon']
             parts.append(
                 f'1 mensualidad vence en {billing.DUE_SOON_DAYS} días.' if soon == 1
                 else f'{soon} mensualidades vencen en {billing.DUE_SOON_DAYS} días.'
             )
         return {
-            'title': 'Por cobrar',
+            'title': 'Cobros',
             'body': ' '.join(parts),
-            'url': '/por-cobrar',
+            # Clientes, showing who owes (the old /por-cobrar redirects there).
+            'url': '/clientes?estado=vencido',
             'tag': f'notification-{notification.pk}',
         }
 

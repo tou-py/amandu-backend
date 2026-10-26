@@ -462,48 +462,79 @@ def billing_summary(client):
     }
 
 
+OVERDUE, DUE_SOON, UP_TO_DATE = 'overdue', 'due_soon', 'up_to_date'
+
+
+def _order(row):
+    """Overdue first, oldest debt first; then by the next due date, the ones
+    with nothing next last."""
+    if row['state'] == OVERDUE:
+        return (0, row['oldest_debt'], row['client_name'])
+    due = row['next_period'].due_date if row['next_period'] else date.max
+    return (1, due, row['client_name'])
+
+
 def receivables(tenant):
     """
-    Who owes, for the Por cobrar screen (ReceivablesSerializer): one row per
-    client with overdue periods or unpaid turns, oldest debt first, then the
-    clients whose current period falls due within the next three days.
+    Where every client stands on paying (ReceivablesSerializer): one row per
+    client on a plan or owing something, with one state --
+
+      * overdue: owes a period past its due date, or a turn already given;
+      * due_soon: on a plan, the next period falls due within DUE_SOON_DAYS;
+      * up_to_date: on a plan, nothing owed.
+
+    -- plus how much is owed, or when the next period falls due. Clients on no
+    plan who owe nothing have no row. Overdue first, oldest debt first; then
+    the rest by their next due date. `standing` counts the rows by state.
     """
     today = local_today(tenant)
-    rows, due_soon = [], []
+    rows = []
     # ponytail: every client of the tenant, judged in Python. A fixed number of
     # queries, but linear in clients; filter to those with a subscription or a
     # turn since the cutoff when a tenant grows into the thousands.
     for client in Client.objects.for_tenant(tenant).prefetch_related(*client_prefetches()):
-        owed = owed_periods(client, today)
-        overdue = [p for p in owed if p.overdue]
+        overdue = [p for p in owed_periods(client, today) if p.overdue]
         turns = _unpaid_turns(client, tenant)
+        on_plan = current_subscription(client, today) is not None
+        if not (overdue or turns or on_plan):
+            continue
+        # Not behind, so the first unpaid period of ANY of their plans is the
+        # next to collect -- the running one's, or after a plan change the new
+        # one's. Never filtered: the generator is endless for an open plan, and
+        # looking for a particular subscription's period in it may never end.
+        following = None if (overdue or turns) else next(unpaid_periods(client, today), None)
+        days_left = (following.due_date - today).days if following else None
         if overdue or turns:
-            rows.append({
-                'client': client.pk,
-                'client_name': client.name,
-                'client_phone': str(client.phone),
-                # The subscription still producing the debt, for "End plan".
-                'subscription': overdue[-1].subscription.id if overdue else None,
-                'overdue_periods': overdue,
-                'unpaid_turns': turns,
-                'amount': sum(p.amount for p in overdue) + sum(t['amount'] for t in turns),
-                'oldest_debt': min(
-                    [p.start for p in overdue] + [_day(t['start'], tenant) for t in turns]
-                ),
-            })
-        # Only the latest owed period can be due soon: any older unpaid one is
-        # already past its due date, since grace stops short of the next period.
-        if owed and not owed[-1].overdue and owed[-1].due_date <= today + timedelta(days=DUE_SOON_DAYS):
-            due_soon.append({
-                'client': client.pk,
-                'client_name': client.name,
-                'client_phone': str(client.phone),
-                'subscription': owed[-1].subscription.id,
-                'period': owed[-1],
-            })
-    rows.sort(key=lambda row: (row['oldest_debt'], row['client_name']))
-    due_soon.sort(key=lambda row: (row['period'].due_date, row['client_name']))
-    return {'total': sum(row['amount'] for row in rows), 'rows': rows, 'due_soon': due_soon}
+            state = OVERDUE
+        elif days_left is not None and days_left <= DUE_SOON_DAYS:
+            state = DUE_SOON
+        else:
+            state = UP_TO_DATE
+        rows.append({
+            'client': client.pk,
+            'client_name': client.name,
+            'client_phone': str(client.phone),
+            'state': state,
+            # The plan producing the debt or the next period, for the file.
+            'subscription': (
+                overdue[-1].subscription.id if overdue
+                else following.subscription.id if following else None
+            ),
+            'overdue_periods': overdue,
+            'unpaid_turns': turns,
+            'amount': sum(p.amount for p in overdue) + sum(t['amount'] for t in turns),
+            'oldest_debt': min(
+                [p.start for p in overdue] + [_day(t['start'], tenant) for t in turns], default=None,
+            ),
+            'next_period': following,
+            'days_left': days_left,
+        })
+    rows.sort(key=_order)
+    return {
+        'total': sum(row['amount'] for row in rows),
+        'standing': {state: sum(row['state'] == state for row in rows) for state in (UP_TO_DATE, DUE_SOON, OVERDUE)},
+        'clients': rows,
+    }
 
 
 WEEKDAYS = ('lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom')
