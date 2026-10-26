@@ -197,6 +197,9 @@ class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.Gen
     PATCH only: who may change whom is MemberSerializer's (Membership.may_manage).
     """
 
+    # Only for the schema generator, which has no tenant to scope by; every
+    # request goes through get_queryset.
+    queryset = Membership.objects.none()
     serializer_class = MemberSerializer
     permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantAdmin)
     pagination_class = None
