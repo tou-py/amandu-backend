@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Membership(models.Model):
@@ -94,6 +95,38 @@ class Membership(models.Model):
         for the diary as a whole.
         """
         return self.role in (self.Role.OWNER, self.Role.ADMIN, self.Role.COORDINATOR)
+
+    MANAGERS = (Role.OWNER, Role.ADMIN)
+
+    def may_manage(self, other):
+        """
+        May this member change `other`'s role, agenda or access. Owner and
+        admins manage; an admin manages coordinators and staff, only the owner
+        manages admins. Nobody changes themselves -- an owner demoting
+        themselves would lock the business out of its own settings -- and
+        nobody changes the owner. The front end mirrors this (permissions.ts).
+        """
+        if self.role not in self.MANAGERS or other.pk == self.pk or other.role == self.Role.OWNER:
+            return False
+        return other.role != self.Role.ADMIN or self.role == self.Role.OWNER
+
+    def may_assign(self, role):
+        """May this member give `role` to someone, by invitation or change.
+        Owner is never handed over from here."""
+        if self.role not in self.MANAGERS or role == self.Role.OWNER:
+            return False
+        return role != self.Role.ADMIN or self.role == self.Role.OWNER
+
+    @property
+    def in_agenda(self):
+        """Bookable, which is also what Kyo's price counts (pricing.py)."""
+        return self.status == self.Status.ACTIVE and self.attends_appointments
+
+    def turnos_ahead(self):
+        """Turnos still to come in this member's diary, requests included."""
+        return self.appointments.filter(
+            status__in=('scheduled', 'pending'), start__gt=timezone.now(),
+        ).count()
 
     def display_name(self):
         """Label for the agenda. Falls back to the email, which always exists."""

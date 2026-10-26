@@ -18,7 +18,7 @@ WAHA's own "How to avoid blocking" guide:
     explicit that both restrictions lift on their own and a restart makes it
     worse.
   * Short, personal messages (first name, the turno's own details, a greeting
-    that varies -- apps/scheduling/announce.py), no links in them.
+    that varies -- apps/scheduling/notify.py), no links in them.
   * The strongest one is not here: the public page offers a wa.me link so the
     client writes to the Kyo number first, and what we send becomes a reply
     (settings.WHATSAPP_NUMBER).

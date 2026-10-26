@@ -21,11 +21,11 @@ from rest_framework.views import APIView
 # book are one row, so they cannot disagree.
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
-from apps.accounts.models import Membership, Notification
+from apps.accounts.models import Membership
 from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
-from apps.scheduling.announce import ACCEPTED, REJECTED, announce
+from apps.scheduling import notify
 from apps.scheduling.availability import opening_check
 from apps.scheduling.models import (
     Appointment,
@@ -146,19 +146,6 @@ def _turn_payment(request, client, appointment, amount, body):
         client=client,
         recorded_by=request.user,
     )
-
-
-def _tell(request, appointment, verb, recipient=None):
-    """
-    File a notification for whoever's diary this is -- unless they did it
-    themselves, which is not news. `recipient` names someone else, for the
-    professional a turn was taken away from.
-    """
-    recipient = recipient or appointment.professional
-    if recipient.pk != request.membership.pk:
-        Notification.objects.create(
-            recipient=recipient, actor=request.membership, appointment=appointment, verb=verb,
-        )
 
 
 def _admin_only(request, what, code):
@@ -405,7 +392,7 @@ class AppointmentSeriesViewSet(
     def perform_create(self, serializer):
         series = serializer.save()
         # One row for the whole run, pointing at its first occurrence.
-        _tell(self.request, series.appointments_created[0], Notification.Verb.APPOINTMENT_BOOKED)
+        notify.notify(notify.BOOKED, appointment=series.appointments_created[0], actor=self.request.membership)
 
 
 class CategoryViewSet(TenantScopedModelViewSet):
@@ -991,7 +978,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             lambda s: s.save(tenant=self.request.tenant, created_by=self.request.membership),
             serializer,
         )
-        _tell(self.request, serializer.instance, Notification.Verb.APPOINTMENT_BOOKED)
+        notify.notify(notify.BOOKED, appointment=serializer.instance, actor=self.request.membership)
 
     def perform_update(self, serializer):
         # Once anybody is marked, the turn is the record of what happened:
@@ -1001,22 +988,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         self._refuse_if_marked(appointment)
         was_with, was_at = appointment.professional, appointment.start
         self._save_or_conflict(super().perform_update, serializer)
-        self._tell_change(appointment, was_with, was_at)
-
-    def _tell_change(self, appointment, was_with, was_at):
-        """The notice for an edit by a teammate: who it now belongs to, and what moved."""
-        if appointment.professional_id != was_with.pk:
-            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_BOOKED)
-            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_REASSIGNED, recipient=was_with)
-        elif appointment.start != was_at:
-            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_RESCHEDULED)
-        else:
-            _tell(self.request, appointment, Notification.Verb.APPOINTMENT_UPDATED)
+        notify.edited(appointment, actor=self.request.membership, was_with=was_with, was_at=was_at)
 
     def perform_destroy(self, instance):
         # Filed first: the FK is SET_NULL, so the row survives the slot it names.
         with transaction.atomic():
-            _tell(self.request, instance, Notification.Verb.APPOINTMENT_CANCELLED)
+            notify.notify(notify.CANCELLED, appointment=instance, actor=self.request.membership)
             super().perform_destroy(instance)
 
     def _refuse_if_marked(self, appointment):
@@ -1086,18 +1063,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         turning_down = appointment.status == Appointment.Status.PENDING
         with transaction.atomic():
             response = self._transition(appointment, lambda: appointment.cancel(reason))
-            if turning_down:
-                announce(appointment, REJECTED, actor=request.membership, reason=reason)
-            # Only a teammate cancelling on someone else's behalf is news to the
-            # professional -- cancelling your own slot is not something you
-            # need to be told about.
-            elif request.membership.id != appointment.professional_id:
-                Notification.objects.create(
-                    recipient=appointment.professional,
-                    actor=request.membership,
-                    appointment=appointment,
-                    verb=Notification.Verb.APPOINTMENT_CANCELLED,
-                )
+            notify.notify(
+                notify.REJECTED if turning_down else notify.CANCELLED,
+                appointment=appointment, actor=request.membership, reason=reason,
+            )
         return response
 
     # No body: the URL already names the transition.
@@ -1121,13 +1090,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         appointment = self.get_object()
         # A request for an hour that has gone by can only be turned down: the
         # client was never told yes, and saying it now is for a turn that is over.
-        # ponytail: it still holds its (past) slot until cancelled; expire them
-        # in the sweep if back-filling past turns ever trips on one.
+        # The sweep expires these within a tick (send_reminders._run_requests).
         if appointment.status == Appointment.Status.PENDING and appointment.start <= timezone.now():
             raise Refused('This request is for a time that has already passed.', 'request_expired')
         with transaction.atomic():
             response = self._transition(appointment, appointment.confirm)
-            announce(appointment, ACCEPTED, actor=request.membership)
+            notify.notify(notify.ACCEPTED, appointment=appointment, actor=request.membership)
         return response
 
     def _following(self, appointment):
@@ -1189,13 +1157,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         # ONE notification for the whole run, not one per occurrence: the
         # professional needs to know the arrangement ended, and forty rows
         # saying so is a bell nobody will ever open again.
-        if cancelled and request.membership.id != appointment.professional_id:
-            Notification.objects.create(
-                recipient=appointment.professional,
-                actor=request.membership,
-                appointment=appointment,
-                verb=Notification.Verb.APPOINTMENT_CANCELLED,
-            )
+        if cancelled:
+            notify.notify(notify.CANCELLED, appointment=appointment, actor=request.membership)
 
         return Response(self.get_serializer(cancelled, many=True).data)
 
@@ -1291,7 +1254,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
 
         # One row for the run, like cancel-following.
         if moved:
-            self._tell_change(moved[0], appointment.professional, appointment.start)
+            notify.edited(
+                moved[0], actor=request.membership,
+                was_with=appointment.professional, was_at=appointment.start,
+            )
 
         return Response({
             'appointments': self.get_serializer(moved, many=True).data,

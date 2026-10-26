@@ -7,7 +7,7 @@ The sweep. Four things come due on the same tick and share one run:
   * a reminder of the appointment a professional is about to give;
   * a Notification row nobody has been told about yet -- a teammate cancelling
     a slot that was not theirs (AppointmentViewSet.cancel), a request from the
-    public page and its answer (apps/scheduling/announce.py), or the digest
+    public page and its answer (apps/scheduling/notify.py), or the digest
     above;
   * a few WhatsApp messages from the outbox, paced (apps/scheduling/whatsapp.py).
 
@@ -43,12 +43,14 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 from django.db.models import DateTimeField, ExpressionWrapper, F
 from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
 from apps.accounts.models import Membership, Notification
 from apps.scheduling import billing, whatsapp
+from apps.scheduling import notify
 from apps.scheduling.models import Appointment
 from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
@@ -73,6 +75,11 @@ PUSH_TIMEOUT = 10  # seconds -- passed straight to requests.post via pywebpush
 # window: "the start of the business's day" is the whole requirement.
 DIGEST_HOUR = 5
 
+# How long a public request may wait on its professional before the shop's
+# managers hear about it. It holds its slot the whole time.
+ESCALATE_AFTER = timedelta(hours=2)
+EXPIRED_REASON = 'Vencida sin respuesta'
+
 
 class Command(BaseCommand):
     help = (
@@ -92,6 +99,8 @@ class Command(BaseCommand):
         # push half below picks the rows up on this same tick.
         self._run_digest()
         self._run_billing_notice()
+        # Rows too, like the digest: the bell shows them without push.
+        self._run_requests()
 
         if not cache.add(LOCK_KEY, True, LOCK_TIMEOUT):
             self.stdout.write('Another send_reminders run is still in progress; skipping.')
@@ -189,19 +198,12 @@ class Command(BaseCommand):
             if not claimed:
                 continue
             owed = billing.receivables(tenant)
-            if not (owed['rows'] or owed['due_soon']):
+            if not (owed['standing']['overdue'] or owed['standing']['due_soon']):
                 # Claimed and silent: a digest saying "nothing" every morning
                 # trains people to ignore the one that matters.
                 continue
-            # Money stays with owners and admins (the spec's Daily digest).
-            recipients = tenant.memberships.filter(
-                role__in=(Membership.Role.OWNER, Membership.Role.ADMIN),
-                status=Membership.Status.ACTIVE,
-            )
-            filed += len(Notification.objects.bulk_create(
-                Notification(recipient=membership, verb=Notification.Verb.PLAN_DIGEST)
-                for membership in recipients
-            ))
+            notify.notify(notify.DIGEST, tenant=tenant)
+            filed += 1
         if filed:
             self.stdout.write(f'{filed} plan digest(s) filed.')
 
@@ -231,14 +233,56 @@ class Command(BaseCommand):
             )
             if not claimed:
                 continue
-            filed += len(Notification.objects.bulk_create(
-                Notification(recipient=membership, verb=Notification.Verb.BILLING_DUE)
-                for membership in tenant.memberships.filter(
-                    role=Membership.Role.OWNER, status=Membership.Status.ACTIVE
-                )
-            ))
+            notify.notify(notify.BILLING_DUE, tenant=tenant)
+            filed += 1
         if filed:
             self.stdout.write(f'{filed} billing notice(s) filed.')
+
+    def _run_requests(self):
+        """
+        Public requests nobody answered. One whose hour has passed is turned
+        down for the shop -- it held a slot nobody can use now, and the client
+        is owed an answer. One waiting longer than ESCALATE_AFTER is put to the
+        owner, admins and coordinators, once, in the shop's waking hours.
+
+        Each row is claimed with a conditional UPDATE before anything is filed,
+        so an overlapping tick (this runs outside the lock) files nothing twice.
+        """
+        now = timezone.now()
+        expired = Appointment.objects.filter(
+            status=Appointment.Status.PENDING, start__lte=now,
+        ).select_related('tenant', 'service', 'professional__user')
+        for appointment in expired:
+            with transaction.atomic():
+                claimed = Appointment.objects.filter(
+                    pk=appointment.pk, status=Appointment.Status.PENDING,
+                ).update(
+                    status=Appointment.Status.CANCELLED, cancelled_at=now,
+                    cancellation_reason=EXPIRED_REASON, updated_at=now,
+                )
+                if claimed:
+                    notify.notify(notify.EXPIRED, appointment=appointment)
+
+        waiting = Appointment.objects.filter(
+            status=Appointment.Status.PENDING,
+            escalated_at__isnull=True,
+            created_at__lte=now - ESCALATE_AFTER,
+        ).select_related('tenant')
+        filed = 0
+        for appointment in waiting:
+            local_hour = timezone.localtime(now, ZoneInfo(appointment.tenant.timezone)).hour
+            if local_hour not in whatsapp.WAKING_HOURS:
+                continue
+            with transaction.atomic():
+                claimed = Appointment.objects.filter(
+                    pk=appointment.pk, escalated_at__isnull=True,
+                ).update(escalated_at=now)
+                if not claimed:
+                    continue
+                notify.notify(notify.WAITING, appointment=appointment)
+                filed += 1
+        if filed:
+            self.stdout.write(f'{filed} waiting request(s) escalated.')
 
     def _run(self):
         now = timezone.now()
@@ -369,6 +413,7 @@ class Command(BaseCommand):
         Notification.Verb.APPOINTMENT_RESCHEDULED: 'Turno movido',
         Notification.Verb.APPOINTMENT_UPDATED: 'Turno modificado',
         Notification.Verb.APPOINTMENT_REASSIGNED: 'Turno reasignado',
+        Notification.Verb.APPOINTMENT_REQUEST_WAITING: 'Solicitud sin responder',
     }
     # What the actor did, for the body. Rejected is the fallback, as before.
     ACTOR_VERBS = {
@@ -433,7 +478,7 @@ class Command(BaseCommand):
         admin cost two. Cache per tenant if a business grows a crowd of admins.
         """
         owed = billing.receivables(notification.recipient.tenant)
-        debtors = len(owed['rows'])
+        debtors = owed['standing']['overdue']
         parts = []
         if debtors:
             # Guaraníes are written with dots between thousands.
@@ -442,16 +487,17 @@ class Command(BaseCommand):
                 f'1 cliente debe Gs. {amount}.' if debtors == 1
                 else f'{debtors} clientes deben Gs. {amount}.'
             )
-        if owed['due_soon']:
-            soon = len(owed['due_soon'])
+        if owed['standing']['due_soon']:
+            soon = owed['standing']['due_soon']
             parts.append(
                 f'1 mensualidad vence en {billing.DUE_SOON_DAYS} días.' if soon == 1
                 else f'{soon} mensualidades vencen en {billing.DUE_SOON_DAYS} días.'
             )
         return {
-            'title': 'Por cobrar',
+            'title': 'Cobros',
             'body': ' '.join(parts),
-            'url': '/por-cobrar',
+            # Clientes, showing who owes (the old /por-cobrar redirects there).
+            'url': '/clientes?estado=vencido',
             'tag': f'notification-{notification.pk}',
         }
 

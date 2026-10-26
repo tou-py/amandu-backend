@@ -473,7 +473,13 @@ def test_receivables_answer_in_their_final_shape(desk, studio):
     res = api(desk, studio).get(RECEIVABLES)
 
     assert res.status_code == 200
-    assert res.data == {'total': 0, 'rows': [], 'due_soon': []}
+    assert res.data == {
+        'total': 0, 'standing': {'up_to_date': 0, 'due_soon': 0, 'overdue': 0}, 'clients': [],
+    }
+
+
+def listed(data, state):
+    return [row for row in data['clients'] if row['state'] == state]
 
 
 # -- Plan states ---------------------------------------------------------------
@@ -849,7 +855,8 @@ def test_receivables_list_who_owes_oldest_debt_first(
 
     res = api(desk, studio).get(RECEIVABLES)
 
-    bob_row, ada_row = res.data['rows']
+    bob_row, ada_row = listed(res.data, 'overdue')
+    assert [row['client_name'] for row in res.data['clients']] == ['Bob', 'Ada']
     assert bob_row['client_name'] == 'Bob'
     assert bob_row['client_phone'] == ''
     assert bob_row['oldest_debt'] == two_months_ago.isoformat()
@@ -866,40 +873,98 @@ def test_receivables_list_who_owes_oldest_debt_first(
     assert res.data['total'] == 580000
 
 
-@pytest.mark.parametrize('due_in, listed', [(0, True), (3, True), (4, False)])
-def test_due_soon_is_the_current_period_due_within_three_days(
-    desk, studio, pilates, ada, due_in, listed
-):
-    """Not overdue yet, so in neither the rows nor the total."""
+@pytest.mark.parametrize('due_in, soon', [(0, True), (3, True), (4, False), (20, False)])
+def test_upcoming_says_when_each_plan_falls_due(desk, studio, pilates, ada, due_in, soon):
+    """Not overdue yet, so in neither the rows nor the total -- but always
+    listed, with how many days are left, so the shop knows when to collect."""
     subscribe(ada, pilates, local_today(studio) + timedelta(days=due_in - 9))
 
     res = api(desk, studio).get(RECEIVABLES)
 
-    assert res.data['rows'] == []
     assert res.data['total'] == 0
-    assert [row['client_name'] for row in res.data['due_soon']] == (['Ada'] if listed else [])
+    [row] = res.data['clients']
+    state = 'due_soon' if soon else 'up_to_date'
+    assert (row['client_name'], row['days_left'], row['state']) == ('Ada', due_in, state)
+    assert row['next_period']['amount'] == 250000
+    assert row['amount'] == 0
 
 
-def test_a_paid_current_period_is_not_due_soon(owner, studio, pilates, ada):
-    subscribe(ada, pilates, local_today(studio) - timedelta(days=8))
+def test_a_paid_period_moves_upcoming_to_the_next_one(owner, studio, pilates, ada):
+    start = local_today(studio) - timedelta(days=8)
+    subscribe(ada, pilates, start)
     http = api(owner, studio)
     pay_owed(http, ada)
 
-    assert http.get(RECEIVABLES).data['due_soon'] == []
+    [row] = http.get(RECEIVABLES).data['clients']
+
+    assert row['next_period']['start'] == add_months(start, 1).isoformat()
+    assert row['state'] == 'up_to_date'
+
+
+def test_an_ended_paid_plan_is_up_to_date_with_nothing_next(owner, studio, pilates, ada):
+    start = local_today(studio) - timedelta(days=8)
+    subscribe(ada, pilates, start, end_date=local_today(studio))
+    http = api(owner, studio)
+    pay_owed(http, ada)
+
+    [row] = http.get(RECEIVABLES).data['clients']
+    assert (row['state'], row['next_period'], row['days_left']) == ('up_to_date', None, None)
+
+
+def test_after_a_plan_change_upcoming_is_the_new_plans_first_period(owner, studio, pilates, ada):
+    """The old plan is paid to its end and the new one starts after it: the
+    next payment is the new plan's. Looking only at the old one used to walk
+    the new one's periods forever (ValueError at year 10000)."""
+    today = local_today(studio)
+    old_start = today - timedelta(days=8)
+    subscribe(ada, pilates, old_start, end_date=add_months(old_start, 1) - timedelta(days=1))
+    http = api(owner, studio)
+    pay_owed(http, ada)
+    new_start = add_months(old_start, 1)
+    subscribe(ada, pilates, new_start)
+
+    res = http.get(RECEIVABLES)
+
+    assert res.status_code == 200
+    [row] = res.data['clients']
+    assert row['next_period']['start'] == new_start.isoformat()
+
+
+def test_standing_counts_clients_on_a_plan_or_in_debt(owner, studio, teacher, pilates, ada, bob, live_since_last_week):
+    """Ada owes two months, Bob's month falls due in two days, Cleo paid, and
+    Dani -- on no plan -- owes a turn: overdue too. Eva owes nothing and has no
+    plan: no state at all."""
+    today = local_today(studio)
+    subscribe(ada, pilates, add_months(today, -2))
+    subscribe(bob, pilates, today + timedelta(days=2 - 9))
+    cleo = Client.objects.create(tenant=studio, name='Cleo')
+    subscribe(cleo, pilates, today - timedelta(days=8))
+    http = api(owner, studio)
+    pay_owed(http, cleo)
+    dani = Client.objects.create(tenant=studio, name='Dani')
+    turn(studio, teacher, [dani], start=at(studio, today - timedelta(days=1)))
+    Client.objects.create(tenant=studio, name='Eva')
+
+    data = http.get(RECEIVABLES).data
+
+    assert data['standing'] == {'up_to_date': 1, 'due_soon': 1, 'overdue': 2}
+    assert {row['client_name']: row['state'] for row in data['clients']} == {
+        'Ada': 'overdue', 'Dani': 'overdue', 'Bob': 'due_soon', 'Cleo': 'up_to_date',
+    }
 
 
 def test_turns_before_go_live_are_never_receivable(desk, studio, teacher, ada, settings):
     settings.BILLING_GO_LIVE = local_today(studio)
     turn(studio, teacher, [ada], start=at(studio, local_today(studio) - timedelta(days=1)))
 
-    assert api(desk, studio).get(RECEIVABLES).data['rows'] == []
+    assert api(desk, studio).get(RECEIVABLES).data['clients'] == []
 
 
 def test_receivables_are_isolated_per_tenant(django_user_model, studio, gym, pilates, ada):
     subscribe(ada, pilates, add_months(local_today(studio), -2))
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
 
-    assert api(outsider, gym).get(RECEIVABLES).data['rows'] == []
+    assert api(outsider, gym).get(RECEIVABLES).data['clients'] == []
 
 
 # -- Cobrar todo ---------------------------------------------------------------

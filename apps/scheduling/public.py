@@ -31,7 +31,7 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.accounts.models import Membership
-from apps.scheduling.announce import REQUESTED, announce
+from apps.scheduling import notify
 from apps.scheduling.availability import free_slots
 from apps.scheduling.models import Appointment, Client, Service
 from apps.scheduling.views import Overlaps
@@ -217,7 +217,7 @@ def create_booking(shop, data):
         # Inside the transaction: a request the shop is never told about is
         # worse than no request at all, so it is not allowed to exist without
         # its notices.
-        announce(appointment, REQUESTED)
+        notify.notify(notify.REQUESTED, appointment=appointment)
     return appointment
 
 
