@@ -84,7 +84,7 @@ def test_reinviting_emails_the_refreshed_token(admin_user, salon):
     mail.outbox.clear()
     http = api(admin_user, salon)
     http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
-    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'coordinator'}, format='json')
 
     assert len(mail.outbox) == 2
     token = Invitation.objects.get(email='x@example.com', tenant=salon).token
@@ -117,12 +117,12 @@ def test_reinviting_refreshes_the_same_pending_row(admin_user, salon):
     http = api(admin_user, salon)
     http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'staff'}, format='json')
     first_token = pending_token('x@example.com', salon)
-    second = http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
+    second = http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'coordinator'}, format='json')
 
     assert second.status_code == 201
     assert Invitation.objects.filter(email='x@example.com', tenant=salon).count() == 1
     assert first_token != pending_token('x@example.com', salon)
-    assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'admin'
+    assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'coordinator'
 
 
 def test_reinviting_without_a_role_keeps_the_one_already_set(admin_user, salon):
@@ -133,12 +133,12 @@ def test_reinviting_without_a_role_keeps_the_one_already_set(admin_user, salon):
     role, which is why this went unseen.
     """
     http = api(admin_user, salon)
-    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'admin'}, format='json')
+    http.post(INVITE_LIST, {'email': 'x@example.com', 'role': 'coordinator'}, format='json')
 
     second = http.post(INVITE_LIST, {'email': 'x@example.com'}, format='json')
 
     assert second.status_code == 201
-    assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'admin'
+    assert Invitation.objects.get(email='x@example.com', tenant=salon).role == 'coordinator'
 
 
 def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):

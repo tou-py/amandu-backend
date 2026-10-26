@@ -4,7 +4,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
-from rest_framework import serializers
+from rest_framework import serializers, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from apps.accounts.models import (
@@ -14,9 +15,25 @@ from apps.accounts.models import (
     Notification,
     PushSubscription,
 )
+from apps.commons.errors import Refused
 from apps.scheduling.models import Appointment
 from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
+
+
+def assignable(actor, role):
+    """`role`, if `actor` may give it -- by invitation or by changing a
+    member. Owner is never handed over from here (Membership.may_assign)."""
+    if role == Membership.Role.OWNER:
+        raise serializers.ValidationError('Ownership is not handed over here.')
+    if not actor.may_assign(role):
+        raise PermissionDenied('Only the owner may make someone an admin.', 'member_locked')
+    return role
+
+
+class MonthlyChangeSerializer(serializers.Serializer):
+    monthly_from = serializers.IntegerField()
+    monthly_to = serializers.IntegerField()
 
 
 def active_memberships(user):
@@ -100,19 +117,59 @@ class MemberSerializer(serializers.ModelSerializer):
     and carries no role. This lists who BELONGS, so an owner can see the
     receptionist and the admin who never appear in an agenda.
 
-    Read-only for now. Changing someone's role or whether they attend is a
-    separate action with its own consequences -- an owner demoting themselves
-    would lock the business out of its own settings -- and it is not what a list
-    is for.
+    Writable on `role`, `attends_appointments` and `status`, by whoever may
+    manage this member (Membership.may_manage). Taking someone out of the
+    agenda while turnos of theirs are still to come is refused: those turnos
+    would be left with nobody to attend them.
     """
 
     name = serializers.CharField(source='display_name', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
+    # What the business pays Kyo a month now, and would pay if this member came
+    # into the agenda or left it -- so the screen can say so before the change,
+    # not after. Null when it would not change, or the business pays by
+    # agreement rather than by the price list.
+    agenda_change = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
-        fields = ('id', 'name', 'email', 'role', 'status', 'attends_appointments', 'joined_at')
-        read_only_fields = fields
+        fields = (
+            'id', 'name', 'email', 'role', 'status', 'attends_appointments', 'joined_at',
+            'agenda_change',
+        )
+        read_only_fields = ('id', 'name', 'email', 'joined_at', 'agenda_change')
+
+    @extend_schema_field(MonthlyChangeSerializer(allow_null=True))
+    def get_agenda_change(self, member):
+        tenant = member.tenant
+        if tenant.paid_until is None:
+            return None
+        now = self.context['professionals']
+        after = now - 1 if member.in_agenda else now + 1
+        monthly = [sum(line['amount'] for line in pricing.monthly_lines(tenant, n)) for n in (now, after)]
+        if monthly[0] == monthly[1]:
+            return None
+        return {'monthly_from': monthly[0], 'monthly_to': monthly[1]}
+
+    def validate_role(self, role):
+        return assignable(self.context['request'].membership, role)
+
+    def validate(self, attrs):
+        member = self.instance
+        if not self.context['request'].membership.may_manage(member):
+            raise PermissionDenied('You may not change this member.', 'member_locked')
+        leaving = member.in_agenda and not (
+            attrs.get('status', member.status) == Membership.Status.ACTIVE
+            and attrs.get('attends_appointments', member.attends_appointments)
+        )
+        if leaving:
+            ahead = member.turnos_ahead()
+            if ahead:
+                raise Refused(
+                    f'{ahead} turno(s) of theirs are still to come. Move or cancel them first.',
+                    'member_has_turnos', status.HTTP_409_CONFLICT,
+                )
+        return attrs
 
 
 class MeSerializer(serializers.ModelSerializer):
@@ -298,6 +355,9 @@ class InvitationSerializer(serializers.ModelSerializer):
         model = Invitation
         fields = ('id', 'email', 'role', 'status', 'expires_at', 'created_at')
         read_only_fields = ('id', 'status', 'expires_at', 'created_at')
+
+    def validate_role(self, role):
+        return assignable(self.context['request'].membership, role)
 
     def validate_email(self, value):
         tenant = self.context['request'].tenant

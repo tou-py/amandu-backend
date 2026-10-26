@@ -5,7 +5,6 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from rest_framework.generics import ListAPIView
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -182,32 +181,43 @@ class AcceptInvitationView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class MemberListView(ListAPIView):
+class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     """
-    Everyone with access to the active tenant, whether or not they are bookable.
+    Everyone with access to the active tenant, whether or not they are bookable,
+    and the one place their role, agenda and access are changed.
 
     Not /api/professionals/, which answers "who may be booked" and therefore
     hides the receptionist and any admin who does not attend. An owner looking
     at their team needs to see the people, not the diary.
 
-    Ordered so the list reads as a hierarchy rather than by insertion: owner
-    first, then admins, then coordinators, then staff, alphabetically within
-    each. The ordering is done in Python off the role choices so it cannot drift
-    from the enum the way a hand-written Case/When would.
+    Listed as a hierarchy rather than by insertion: owner first, then admins,
+    then coordinators, then staff, alphabetically within each -- ordered in
+    Python off the role choices so it cannot drift from the enum.
+
+    PATCH only: who may change whom is MemberSerializer's (Membership.may_manage).
     """
 
     serializer_class = MemberSerializer
     permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantAdmin)
     pagination_class = None
+    http_method_names = ('get', 'patch', 'head', 'options')
 
     def get_queryset(self):
+        return Membership.objects.select_related('user', 'tenant').filter(tenant=self.request.tenant)
+
+    def get_serializer_context(self):
+        # How many attend today, for each member's agenda_change.
+        context = super().get_serializer_context()
+        if getattr(self.request, 'tenant', None) is not None:
+            context['professionals'] = Membership.professionals_for(self.request.tenant).count()
+        return context
+
+    def list(self, request, *args, **kwargs):
         rank = {role: index for index, role in enumerate(Membership.Role.values)}
-        members = (
-            Membership.objects
-            .select_related('user')
-            .filter(tenant=self.request.tenant)
+        members = sorted(
+            self.get_queryset(), key=lambda m: (rank.get(m.role, 99), m.display_name().lower()),
         )
-        return sorted(members, key=lambda m: (rank.get(m.role, 99), m.display_name().lower()))
+        return Response(self.get_serializer(members, many=True).data)
 
 
 class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
