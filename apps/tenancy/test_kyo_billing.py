@@ -60,18 +60,18 @@ def total(professionals, cobros=False, facturacion=False):
 
 @pytest.mark.parametrize('professionals, expected', [
     # Nobody attends yet: the base is the agenda, it is still paid.
-    (0, 50_000),
-    (1, 50_000),
-    (2, 75_000),
-    (3, 100_000),
+    (0, 100_000),
+    (1, 100_000),
+    (2, 150_000),
+    (3, 200_000),
 ])
 def test_the_month_is_the_base_plus_each_extra_professional(professionals, expected):
     assert total(professionals) == expected
 
 
 def test_add_ons_are_added_on_top():
-    assert total(3, cobros=True) == 150_000
-    assert total(1, cobros=True, facturacion=True) == 225_000
+    assert total(3, cobros=True) == 280_000
+    assert total(1, cobros=True, facturacion=True) == 305_000
 
 
 @pytest.mark.parametrize('professionals, plan', [(0, 'solo'), (1, 'solo'), (2, 'equipo')])
@@ -144,10 +144,10 @@ def test_the_owner_reads_what_the_month_costs(studio, member, settings):
     assert res.data['professionals'] == ['Ana', 'Bea']
     assert res.data['addons'] == ['cobros']
     assert [line['concept'] for line in res.data['lines']] == ['base', 'extra_professionals', 'cobros']
-    assert res.data['total'] == 125_000
+    assert res.data['total'] == 230_000
     assert res.data['billing'] == 'ok'
     assert res.data['contact_whatsapp'] == '595981000000'
-    assert res.data['prices']['per_extra_professional'] == 25_000
+    assert res.data['prices']['per_extra_professional'] == 50_000
 
 
 @pytest.mark.parametrize('role', [Membership.Role.ADMIN, Membership.Role.STAFF])
