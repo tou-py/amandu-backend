@@ -13,9 +13,9 @@ from datetime import date, timedelta
 
 from django.conf import settings
 
-BASE = 50_000  # Solo: the agenda with one professional attending.
-PER_EXTRA_PROFESSIONAL = 25_000  # Each professional after the first.
-COBROS = 50_000  # Monthly plans, charges and Por cobrar.
+BASE = 100_000  # Solo: the agenda with one professional attending.
+PER_EXTRA_PROFESSIONAL = 50_000  # Each professional after the first.
+COBROS = 80_000  # Monthly plans, charges and Por cobrar.
 FACTURACION = 125_000  # Electronic invoicing, documents included below.
 FACTURACION_INCLUDED = 1_000  # Documents a month inside FACTURACION.
 FACTURACION_EXTRA = 7_000  # Each document past the included ones.
