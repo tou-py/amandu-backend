@@ -5,6 +5,8 @@ own membership (`PATCH /api/auth/members/me/`), and reading it back wherever
 professionals are listed. One fake, the `bucket` fixture; signing runs for real.
 """
 
+import uuid
+
 import pytest
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -84,7 +86,7 @@ def test_the_owner_attaches_a_members_photo_and_it_reads_back_as_a_url(owner, st
 
 def test_an_admin_cannot_set_the_owners_photo(make, salon, owner, bucket):
     admin = make(salon, 'admin@example.com', Membership.Role.ADMIN)
-    key = f'{salon.pk}/photo/forged.webp'
+    key = f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'
     bucket.objects[key] = (1000, WEBP)
 
     res = api(admin).patch(detail(owner), {'photo_key': key}, format='json')
@@ -94,14 +96,14 @@ def test_an_admin_cannot_set_the_owners_photo(make, salon, owner, bucket):
 
 
 @pytest.mark.parametrize('key, stored', [
-    ('{clinic}/photo/stolen.webp', (1000, WEBP)),       # another tenant's space
-    ('{salon}/logo/a-logo.webp', (1000, WEBP)),         # another kind
-    ('{salon}/photo/never-uploaded.webp', None),        # HEAD finds nothing
-    ('{salon}/photo/too-big.webp', (300 * 1024 + 1, WEBP)),
-    ('{salon}/photo/an-svg.webp', (1000, 'image/svg+xml')),
+    ('{clinic}/photo/{name}.webp', (1000, WEBP)),       # another tenant's space
+    ('{salon}/logo/{name}.webp', (1000, WEBP)),         # another kind
+    ('{salon}/photo/{name}.webp', None),        # HEAD finds nothing
+    ('{salon}/photo/{name}.webp', (300 * 1024 + 1, WEBP)),
+    ('{salon}/photo/{name}.webp', (1000, 'image/svg+xml')),
 ])
 def test_a_key_that_fails_the_attach_check_is_a_400_on_the_field(owner, stylist, salon, clinic, bucket, key, stored):
-    key = key.format(salon=salon.pk, clinic=clinic.pk)
+    key = key.format(salon=salon.pk, clinic=clinic.pk, name=uuid.uuid4().hex)
     if stored:
         bucket.objects[key] = stored
 
@@ -141,7 +143,7 @@ def test_a_photo_that_fails_validation_deletes_nothing(
     owner, stylist, salon, bucket, attached, django_capture_on_commit_callbacks,
 ):
     with django_capture_on_commit_callbacks(execute=True):
-        res = api(owner).patch(detail(stylist), {'photo_key': f'{salon.pk}/photo/missing.webp'}, format='json')
+        res = api(owner).patch(detail(stylist), {'photo_key': f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'}, format='json')
 
     assert res.status_code == 400
     assert bucket.deleted == []
@@ -174,7 +176,7 @@ def test_members_me_changes_only_the_photo_and_only_in_the_active_business(make,
 
 def test_a_staff_member_cannot_set_a_colleagues_photo(make, salon, stylist, bucket):
     colleague = make(salon, 'colleague@example.com', attends=True)
-    key = f'{salon.pk}/photo/mine.webp'
+    key = f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'
     bucket.objects[key] = (1000, WEBP)
 
     assert api(stylist).patch(detail(colleague), {'photo_key': key}, format='json').status_code == 403

@@ -14,6 +14,7 @@ which the year-long immutable cache depends on.
 """
 
 import logging
+import re
 import uuid
 
 from django.conf import settings
@@ -31,6 +32,10 @@ CAPS = {
     'photo': 300 * 1024,
     'service': 1024 * 1024,
 }
+
+
+# The name new_key mints: a uuid4, canonical or bare hex, then `.webp`.
+NAME = r'(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webp'
 
 
 def new_key(tenant, kind):
@@ -83,7 +88,9 @@ class KeyField(serializers.CharField):
     def to_internal_value(self, data):
         key = super().to_internal_value(data)
         tenant = self.context['request'].tenant
-        if not key.startswith(f'{tenant.pk}/{self.kind}/'):
+        # The whole shape, not a prefix: `<mine>/logo/../../<theirs>/...` starts
+        # right and is somebody else's object.
+        if not re.fullmatch(rf'{re.escape(str(tenant.pk))}/{self.kind}/{NAME}', key):
             raise serializers.ValidationError('Not an upload of this business for this image.', code='image_foreign')
         meta = storage.head(key)
         if meta is None:

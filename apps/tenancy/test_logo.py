@@ -4,6 +4,8 @@ PATCH /api/tenant/ and what the bucket is told to delete. Same single fake as
 the service images, the `bucket` fixture; signing runs for real.
 """
 
+import uuid
+
 import pytest
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -59,7 +61,7 @@ def test_a_business_without_a_logo_reads_back_a_null_url(owner):
 
 def test_a_logo_from_another_tenants_space_is_refused(owner, bucket):
     clinic = Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
-    foreign = f'{clinic.pk}/logo/stolen.webp'
+    foreign = f'{clinic.pk}/logo/{uuid.uuid4().hex}.webp'
     bucket.objects[foreign] = (1000, WEBP)
 
     res = owner.patch(TENANT_URL, {'logo_key': foreign}, format='json')
@@ -68,8 +70,35 @@ def test_a_logo_from_another_tenants_space_is_refused(owner, bucket):
     assert 'logo_key' in res.data
 
 
+@pytest.mark.parametrize('shape', [
+    '{mine}/logo/../../{theirs}/logo/{uuid}.webp',  # climbs out of this tenant's space
+    '{mine}/logo//{uuid}.webp',
+    '{mine}/logo/x/{uuid}.webp',
+    '{mine}/logo/{uuid}.webp.png',
+    '{mine}/logo/not-a-uuid.webp',
+    '0{mine}/logo/{uuid}.webp',
+])
+def test_a_key_not_shaped_as_signed_is_refused(owner, salon, bucket, shape):
+    clinic = Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
+    key = shape.format(mine=salon.pk, theirs=clinic.pk, uuid=uuid.uuid4())
+    bucket.objects[key] = (1000, WEBP)
+
+    res = owner.patch(TENANT_URL, {'logo_key': key}, format='json')
+
+    assert res.status_code == 400
+    assert 'logo_key' in res.data
+
+
+@pytest.mark.parametrize('name', [uuid.uuid4().hex, str(uuid.uuid4())])
+def test_a_uuid_key_in_hex_or_canonical_form_attaches(owner, salon, bucket, name):
+    key = f'{salon.pk}/logo/{name}.webp'
+    bucket.objects[key] = (1000, WEBP)
+
+    assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == 200
+
+
 def test_a_key_of_another_kind_is_refused(owner, salon, bucket):
-    photo = f'{salon.pk}/photo/face.webp'
+    photo = f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'
     bucket.objects[photo] = (1000, WEBP)
 
     assert owner.patch(TENANT_URL, {'logo_key': photo}, format='json').status_code == 400
@@ -144,7 +173,7 @@ def test_a_request_that_fails_validation_deletes_nothing(
     owner, salon, bucket, attached, django_capture_on_commit_callbacks,
 ):
     with django_capture_on_commit_callbacks(execute=True):
-        res = owner.patch(TENANT_URL, {'logo_key': f'{salon.pk}/logo/missing.webp'}, format='json')
+        res = owner.patch(TENANT_URL, {'logo_key': f'{salon.pk}/logo/{uuid.uuid4().hex}.webp'}, format='json')
 
     assert res.status_code == 400
     assert bucket.deleted == []

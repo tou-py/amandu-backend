@@ -4,6 +4,7 @@ what the bucket is told to delete. Driven through the HTTP API with one fake,
 the `bucket` fixture (storage.head and storage.delete); signing runs for real.
 """
 
+import uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
@@ -164,7 +165,7 @@ def test_a_service_without_an_image_reads_back_a_null_url(owner, salon, haircut)
 
 
 def test_a_key_from_another_tenants_space_is_refused(owner, salon, clinic, haircut, bucket):
-    foreign = f'{clinic.pk}/service/stolen.webp'
+    foreign = f'{clinic.pk}/service/{uuid.uuid4().hex}.webp'
     bucket.objects[foreign] = (1000, WEBP)
 
     res = api(owner, salon).patch(detail(haircut), {'image_key': foreign}, format='json')
@@ -258,7 +259,7 @@ def test_a_request_that_fails_validation_deletes_nothing(
     owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
 ):
     with django_capture_on_commit_callbacks(execute=True):
-        res = api(owner, salon).patch(detail(haircut), {'image_key': f'{salon.pk}/service/missing.webp'}, format='json')
+        res = api(owner, salon).patch(detail(haircut), {'image_key': f'{salon.pk}/service/{uuid.uuid4().hex}.webp'}, format='json')
 
     assert res.status_code == 400
     assert bucket.deleted == []
