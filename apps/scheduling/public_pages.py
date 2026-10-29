@@ -36,7 +36,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import SimpleRateThrottle
 
 from apps.accounts.models import Membership
-from apps.commons.images import public_url
+from apps.commons.images import public_url, thumb_key
 from apps.scheduling import whatsapp
 from apps.scheduling.models import Service, WorkSchedule
 from apps.scheduling.public import (
@@ -173,7 +173,7 @@ def booking_page(request, slug):
     for option in services:
         option.href = href(service=option.pk) + '#servicio'
         option.price_label = _money(option.price)
-        option.image_url = public_url(option.image_key)
+        option.thumb_url = public_url(option.image_key and thumb_key(option.image_key))
     for n, one in enumerate(professionals):
         # Which of the six tints names this person. Same rule as the staff
         # panel, so a professional keeps one colour on both sides of the product.

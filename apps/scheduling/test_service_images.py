@@ -58,7 +58,7 @@ def haircut(salon):
 
 
 def test_signing_a_service_upload_returns_a_key_in_the_tenants_space_and_a_signed_put(owner, salon, haircut):
-    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000, 'thumb_size': 1000}, format='json')
 
     assert res.status_code == 200
     key = res.data['key']
@@ -73,10 +73,40 @@ def test_signing_a_service_upload_returns_a_key_in_the_tenants_space_and_a_signe
     }
 
 
+def test_a_service_upload_signs_a_thumbnail_next_to_the_image(owner, salon, haircut):
+    res = api(owner, salon).post(
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000, 'thumb_size': 8_000},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    thumb = urlparse(res.data['thumb']['upload_url'])
+    assert thumb.path.endswith(res.data['key'].removesuffix('.webp') + '.thumb.webp')
+    assert 'X-Amz-Signature' in parse_qs(thumb.query)
+    assert res.data['thumb']['headers']['Content-Length'] == '8000'
+
+
+def test_a_service_upload_without_a_thumb_size_is_a_400(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+
+    assert res.status_code == 400
+    assert 'thumb_size' in res.data
+
+
+def test_a_thumb_over_its_cap_is_a_400(owner, salon, haircut):
+    sign = lambda thumb_size: api(owner, salon).post(
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': thumb_size},
+        format='json',
+    )
+
+    assert sign(40 * 1024 + 1).status_code == 400
+    assert sign(40 * 1024).status_code == 200
+
+
 def test_signing_for_another_tenants_service_is_a_404(owner, salon, clinic):
     theirs = Service.objects.create(tenant=clinic, name='Botox', duration=timedelta(minutes=30))
 
-    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': 1000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
 
     assert res.status_code == 404
 
@@ -87,8 +117,8 @@ def test_staff_cannot_sign_for_a_colleagues_service_but_can_for_their_own(django
         tenant=salon, name='Color', duration=timedelta(minutes=30), created_by=stylist.memberships.get(),
     )
 
-    other = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
-    own = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': mine.pk, 'size': 1000}, format='json')
+    other = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
+    own = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': mine.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
 
     assert other.status_code == 403
     assert own.status_code == 200
@@ -111,12 +141,12 @@ def test_only_the_owner_signs_for_the_logo(django_user_model, owner, salon):
     assert api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').status_code == 200
 
 
-@pytest.mark.parametrize('kind, cap', [('logo', 300 * 1024), ('photo', 300 * 1024), ('service', 1024 * 1024)])
+@pytest.mark.parametrize('kind, cap', [('logo', 300 * 1024), ('photo', 300 * 1024), ('service', 300 * 1024)])
 def test_a_size_over_the_kinds_cap_is_a_400(owner, salon, haircut, kind, cap):
     target = {'photo': owner.memberships.get().pk, 'service': haircut.pk}.get(kind, '')
 
-    over = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap + 1}, format='json')
-    at = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap}, format='json')
+    over = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap + 1, 'thumb_size': 1000}, format='json')
+    at = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap, 'thumb_size': 1000}, format='json')
 
     assert over.status_code == 400
     assert at.status_code == 200
@@ -127,25 +157,32 @@ def test_signing_answers_404_then_403_before_the_size_cap(django_user_model, own
     stylist = member(django_user_model, salon, 'stylist@example.com')
     huge = 10 * 1024 * 1024
 
-    foreign = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': huge}, format='json')
-    forbidden = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': huge}, format='json')
+    foreign = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': huge, 'thumb_size': huge}, format='json')
+    forbidden = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': huge, 'thumb_size': huge}, format='json')
 
     assert foreign.status_code == 404
     assert forbidden.status_code == 403
 
 
 def test_the_signed_put_pins_type_length_and_cache(owner, salon, haircut):
-    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
 
     signed = parse_qs(urlparse(res.data['upload_url']).query)['X-Amz-SignedHeaders'][0].split(';')
     assert {'content-type', 'content-length', 'cache-control'} <= set(signed)
 
 
 def uploaded(owner, salon, haircut, bucket, size=50_000, content_type=WEBP):
-    """Sign for real, then put what the browser would have PUT in the fake bucket."""
-    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': size}, format='json')
+    """Sign for real, then put what the browser would have PUT in the fake
+    bucket: the image and its thumbnail."""
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': size, 'thumb_size': 1000}, format='json')
     bucket.objects[res.data['key']] = (size, content_type)
+    bucket.objects[thumb(res.data['key'])] = (1000, content_type)
     return res.data['key']
+
+
+def thumb(key):
+    stem, ext = key.rsplit('.', 1)
+    return f'{stem}.thumb.{ext}'
 
 
 def test_an_uploaded_key_attaches_and_reads_back_as_a_public_url(owner, salon, haircut, bucket):
@@ -155,13 +192,17 @@ def test_an_uploaded_key_attaches_and_reads_back_as_a_public_url(owner, salon, h
 
     assert res.status_code == 200
     assert res.data['image_url'] == f'http://localhost:9000/amandu/{key}'
+    assert res.data['image_thumb_url'] == f'http://localhost:9000/amandu/{thumb(key)}'
     assert 'image_key' not in res.data
     listed = api(owner, salon).get(reverse('scheduling:service-list')).data['results']
     assert listed[0]['image_url'] == f'http://localhost:9000/amandu/{key}'
 
 
 def test_a_service_without_an_image_reads_back_a_null_url(owner, salon, haircut):
-    assert api(owner, salon).get(detail(haircut)).data['image_url'] is None
+    res = api(owner, salon).get(detail(haircut))
+
+    assert res.data['image_url'] is None
+    assert res.data['image_thumb_url'] is None
 
 
 def test_a_key_from_another_tenants_space_is_refused(owner, salon, clinic, haircut, bucket):
@@ -185,7 +226,7 @@ def test_a_key_of_another_kind_is_refused(owner, salon, haircut, bucket):
 
 def test_a_key_nothing_was_uploaded_to_is_refused(owner, salon, haircut, bucket):
     key = api(owner, salon).post(
-        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json',
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json',
     ).data['key']
 
     res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
@@ -193,7 +234,7 @@ def test_a_key_nothing_was_uploaded_to_is_refused(owner, salon, haircut, bucket)
     assert res.status_code == 400
 
 
-@pytest.mark.parametrize('size, content_type', [(1024 * 1024 + 1, WEBP), (1000, 'image/svg+xml')])
+@pytest.mark.parametrize('size, content_type', [(300 * 1024 + 1, WEBP), (1000, 'image/svg+xml')])
 def test_an_upload_over_the_cap_or_not_webp_is_refused(owner, salon, haircut, bucket, size, content_type):
     key = uploaded(owner, salon, haircut, bucket, size=1000)
     bucket.objects[key] = (size, content_type)
@@ -202,6 +243,28 @@ def test_an_upload_over_the_cap_or_not_webp_is_refused(owner, salon, haircut, bu
 
     assert res.status_code == 400
     assert api(owner, salon).get(detail(haircut)).data['image_url'] is None
+
+
+@pytest.mark.parametrize('upload', [None, (40 * 1024 + 1, WEBP), (1000, 'image/jpeg')])
+def test_an_image_whose_thumbnail_is_missing_or_invalid_is_refused(owner, salon, haircut, bucket, upload):
+    key = uploaded(owner, salon, haircut, bucket)
+    if upload is None:
+        del bucket.objects[thumb(key)]
+    else:
+        bucket.objects[thumb(key)] = upload
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+
+
+def test_a_thumbnail_key_cannot_be_attached_as_an_image(owner, salon, haircut, bucket):
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': thumb(key)}, format='json')
+
+    assert res.status_code == 400
 
 
 @pytest.fixture
@@ -245,7 +308,7 @@ def test_replacing_the_image_deletes_the_old_object(
         res = api(owner, salon).patch(detail(haircut), {'image_key': new}, format='json')
 
     assert res.status_code == 200
-    assert bucket.deleted == [attached]
+    assert bucket.deleted == [attached, thumb(attached)]
 
 
 def test_clearing_the_image_deletes_the_object(
@@ -256,7 +319,7 @@ def test_clearing_the_image_deletes_the_object(
 
     assert res.status_code == 200
     assert res.data['image_url'] is None
-    assert bucket.deleted == [attached]
+    assert bucket.deleted == [attached, thumb(attached)]
 
 
 def test_an_edit_that_leaves_the_image_alone_deletes_nothing(
@@ -276,7 +339,7 @@ def test_deleting_the_service_deletes_its_image(
         res = api(owner, salon).delete(detail(haircut))
 
     assert res.status_code == 204
-    assert bucket.deleted == [attached]
+    assert bucket.deleted == [attached, thumb(attached)]
 
 
 def test_a_request_that_fails_validation_deletes_nothing(

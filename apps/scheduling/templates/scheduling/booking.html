@@ -183,9 +183,11 @@
   .hero { padding: 0 0 2rem; }
   /* The shop's own mark above its name, so somebody arriving from Instagram
      sees the place they meant. A rounded square and not a disc: a logo is
-     drawn to its own shape, and a circle would crop wordmarks. */
+     drawn to its own shape, and a circle would crop wordmarks. A fixed 1:1
+     box, contained, so an upload of any shape never shifts the hero. */
   .logo {
     display: block; margin: 1rem 0 0;
+    width: 56px; height: 56px; aspect-ratio: 1;
     border-radius: var(--radius); object-fit: contain;
   }
   .status { background: var(--sunken); color: var(--ink-secondary); }
@@ -241,8 +243,9 @@
     background: var(--sel-bg); color: var(--sel-ink);
     font-size: 11px; font-weight: 700; letter-spacing: .3px;
   }
-  /* A photo sits in the same disc; the tint shows until it loads. */
-  img.avatar { object-fit: cover; }
+  /* A photo sits in the same 1:1 disc, cropped to fill it; the tint shows
+     until it loads. */
+  img.avatar { aspect-ratio: 1; object-fit: cover; }
   .avatar.any { background: var(--sunken); color: var(--ink-secondary); }
   .avatar.any .icon { width: 16px; height: 16px; }
 
@@ -276,10 +279,12 @@
     text-decoration: none;
     transition: background-color 140ms var(--ease-out);
   }
-  /* What the service looks like, at the row's own height so a list with and
-     without images keeps one rhythm. */
+  /* What the service looks like: its thumbnail in a fixed 4:3 box, cropped
+     to fill it, at the row's own height so a list with and without images
+     keeps one rhythm. */
   .option .thumb {
-    flex: none; border-radius: var(--radius); object-fit: cover;
+    flex: none; width: 64px; height: 48px; aspect-ratio: 4 / 3;
+    border-radius: var(--radius); object-fit: cover;
     background: var(--sunken);
   }
   .option .name { flex: 1; min-width: 0; font-weight: 550; overflow-wrap: anywhere; }
@@ -590,7 +595,7 @@
           {% for option in services %}
             <li><a class="option" href="{{ option.href }}" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}">
               <span class="radio" aria-hidden="true"></span>
-              {% if option.image_url %}<img class="thumb" src="{{ option.image_url }}" alt="" width="48" height="48" loading="lazy">{% endif %}
+              {% if option.thumb_url %}<img class="thumb" src="{{ option.thumb_url }}" alt="" width="64" height="48" loading="lazy">{% endif %}
               <span class="name">{{ option.name }}</span>
               <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b>{% endif %}{{ option.duration_minutes }} min</span>
             </a></li>

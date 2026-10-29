@@ -14,7 +14,7 @@ from apps.tenancy.permissions import HasActiveMembership, IsTenantOwner
 
 # Per kind: the target in the active tenant (a 404 when it is not there), and
 # whether the caller may edit it, by the very rule that guards that edit. The
-# size cap is images.CAPS, which KeyField reads too.
+# size caps are images.CAPS and images.THUMB_CAPS, which KeyField reads too.
 KINDS = {
     'logo': (
         lambda request, pk: request.tenant,
@@ -37,17 +37,28 @@ class UploadRequestSerializer(serializers.Serializer):
     # Ignored for a logo: its target is the active tenant.
     target_id = serializers.CharField(required=False, allow_blank=True)
     size = serializers.IntegerField(min_value=1)
+    # The thumbnail's size, for a kind in images.THUMB_CAPS; ignored otherwise.
+    thumb_size = serializers.IntegerField(min_value=1, required=False)
 
     def validate(self, attrs):
         if attrs['kind'] != 'logo' and not attrs.get('target_id'):
             raise serializers.ValidationError({'target_id': 'This field is required.'}, code='required')
+        if attrs['kind'] in images.THUMB_CAPS and 'thumb_size' not in attrs:
+            raise serializers.ValidationError({'thumb_size': 'This field is required.'}, code='required')
         return attrs
+
+
+class SignedPutSerializer(serializers.Serializer):
+    upload_url = serializers.URLField()
+    headers = serializers.DictField(child=serializers.CharField())
 
 
 class UploadSerializer(serializers.Serializer):
     key = serializers.CharField()
     upload_url = serializers.URLField()
     headers = serializers.DictField(child=serializers.CharField())
+    # Only for a kind with a thumbnail: the PUT for images.thumb_key(key).
+    thumb = SignedPutSerializer(required=False)
 
 
 class UploadView(APIView):
@@ -60,7 +71,10 @@ class UploadView(APIView):
     edit: IsTenantOwner for the logo (TenantView), Membership.may_change_photo
     for a photo, ManagesService for a service (KINDS). Checked in the order
     every other endpoint answers: a target in another tenant is a 404 before
-    anything else, then the 403, and only then is the size looked at.
+    anything else, then the 403, and only then are the sizes looked at.
+
+    A service is signed twice in one call: the image and its thumbnail
+    (images.thumb_key), each PUT pinned to its own size.
 
     ponytail: a URL signed and never attached leaves an orphan object, never
     swept. Add a sweep (list the prefix, diff against the key columns) only if
@@ -79,7 +93,16 @@ class UploadView(APIView):
             raise PermissionDenied('Your role does not allow changing this image.')
         if size > images.CAPS[kind]:
             raise serializers.ValidationError({'size': 'Over the size limit for this image.'}, code='image_too_large')
+        thumb_size = data.validated_data.get('thumb_size')
+        if kind in images.THUMB_CAPS and thumb_size > images.THUMB_CAPS[kind]:
+            raise serializers.ValidationError(
+                {'thumb_size': 'Over the size limit for this thumbnail.'}, code='image_too_large',
+            )
         content_type = data.validated_data['content_type']
         key = images.new_key(request.tenant, kind, content_type)
         url, headers = storage.presign_put(key, size, content_type)
-        return Response({'key': key, 'upload_url': url, 'headers': headers})
+        signed = {'key': key, 'upload_url': url, 'headers': headers}
+        if kind in images.THUMB_CAPS:
+            url, headers = storage.presign_put(images.thumb_key(key), thumb_size, content_type)
+            signed['thumb'] = {'upload_url': url, 'headers': headers}
+        return Response(signed)

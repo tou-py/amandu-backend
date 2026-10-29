@@ -373,6 +373,6 @@ def test_a_service_with_an_image_shows_it_in_its_row(client, cdn, salon, stylist
     body = html(client, salon)
 
     assert (
-        f'<img class="thumb" src="https://img.example.com/{salon.pk}/service/c.webp" '
-        'alt="" width="48" height="48" loading="lazy">'
+        f'<img class="thumb" src="https://img.example.com/{salon.pk}/service/c.thumb.webp" '
+        'alt="" width="64" height="48" loading="lazy">'
     ) in body

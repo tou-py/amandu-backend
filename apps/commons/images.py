@@ -4,12 +4,14 @@ bytes. Logo, member photo and service image all go through the same three
 pieces here, so the rules cannot drift between them:
 
 - `KeyField(kind)`: the write-only `*_key` on a serializer. The attach check.
-- `UrlField(source=...)`: the read-only `*_url` next to it.
+- `UrlField(source=...)`: the read-only `*_url` next to it (`ThumbUrlField`
+  for the thumbnail of a kind in THUMB_CAPS).
 - `ImageKeysMixin`: on the serializer, deletes the object a save replaced or
   cleared, after the transaction commits.
 
 Keys are `<tenant_id>/<kind>/<uuid4>.<webp|jpg>`, the extension per TYPES.
-The tenant prefix is what isolates businesses from each other; the uuid makes
+A service's thumbnail sits next to its image under `thumb_key`, with no column
+of its own. The tenant prefix is what isolates businesses from each other; the uuid makes
 keys unguessable and never reused, which the year-long immutable cache
 depends on.
 """
@@ -27,12 +29,15 @@ from apps.commons import storage
 logger = logging.getLogger(__name__)
 
 # Bytes after the browser compressed it. A logo and a 512px face are small; a
-# service image is shown large on the public page.
+# service image is a photo, so the browser also sends a small version of it.
 CAPS = {
     'logo': 300 * 1024,
     'photo': 300 * 1024,
-    'service': 1024 * 1024,
+    'service': 300 * 1024,
 }
+# Kinds that also carry a thumbnail, and its cap: what the public booking page
+# shows in a service's row, so a list of services stays light on a phone.
+THUMB_CAPS = {'service': 40 * 1024}
 
 
 # What an upload may be, and the extension its key gets. JPEG because Safari
@@ -44,6 +49,23 @@ NAME = r'(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def new_key(tenant, kind, content_type):
     return f'{tenant.pk}/{kind}/{uuid.uuid4()}.{TYPES[content_type]}'
+
+
+def thumb_key(key):
+    """
+    Where an image's thumbnail lives: `<tenant>/service/<uuid>.thumb.<ext>`
+    next to `<tenant>/service/<uuid>.<ext>`. Derived, never stored, so the two
+    cannot drift apart and no column is needed. NAME does not match it, so a
+    thumbnail can never be attached as an image of its own.
+    """
+    stem, ext = key.rsplit('.', 1)
+    return f'{stem}.thumb.{ext}'
+
+
+def keys(key):
+    """The objects an attached `key` stands for: itself and, for a kind with
+    a thumbnail, that too."""
+    return [key, thumb_key(key)] if key.split('/')[1] in THUMB_CAPS else [key]
 
 
 def public_url(key):
@@ -63,10 +85,11 @@ def discard(key):
         return
 
     def run():
-        try:
-            storage.delete(key)
-        except Exception:
-            logger.exception('Could not delete image %s', key)
+        for one in keys(key):
+            try:
+                storage.delete(one)
+            except Exception:
+                logger.exception('Could not delete image %s', one)
 
     transaction.on_commit(run)
 
@@ -76,7 +99,8 @@ class KeyField(serializers.CharField):
     The write-only key an owner is attached to after the browser uploaded it.
     Accepts only an object that is in THIS tenant's space, of THIS field's
     kind, actually in the bucket, of the type its extension names, and within
-    the cap: the server never sees the bytes, so this HEAD is the whole check. `null` removes the image.
+    the cap, and so must its thumbnail for a kind that has one: the server never
+    sees the bytes, so these HEADs are the whole check. `null` removes the image.
 
     Reads the active tenant from the serializer context's request, which every
     tenant-plane view provides (HasActiveMembership sets request.tenant).
@@ -106,14 +130,20 @@ class KeyField(serializers.CharField):
         owners = self.parent.Meta.model.objects.filter(**{self.source: key})
         if owners.exclude(pk=self.parent.instance.pk).exists():
             raise serializers.ValidationError('This image is already attached elsewhere.', code='image_taken')
-        meta = storage.head(key)
-        if meta is None:
-            raise serializers.ValidationError('Nothing was uploaded under this key.', code='image_missing')
-        # The type the bucket stored must be the one the key's extension names.
-        if TYPES.get(meta['content_type']) != key.rsplit('.', 1)[1] or meta['size'] > CAPS[self.kind]:
-            raise serializers.ValidationError(
-                'The upload is not a WebP or JPEG of its key, within the size limit.', code='image_invalid',
-            )
+        # The image and, for a kind that has one, its thumbnail: both must be
+        # there and valid, or the public page would show a broken row.
+        caps = {key: CAPS[self.kind]}
+        if self.kind in THUMB_CAPS:
+            caps[thumb_key(key)] = THUMB_CAPS[self.kind]
+        for one, cap in caps.items():
+            meta = storage.head(one)
+            if meta is None:
+                raise serializers.ValidationError('Nothing was uploaded under this key.', code='image_missing')
+            # The type the bucket stored must be the one the key's extension names.
+            if TYPES.get(meta['content_type']) != key.rsplit('.', 1)[1] or meta['size'] > cap:
+                raise serializers.ValidationError(
+                    'The upload is not a WebP or JPEG of its key, within the size limit.', code='image_invalid',
+                )
         return key
 
 
@@ -122,6 +152,13 @@ class UrlField(serializers.ReadOnlyField):
 
     def to_representation(self, value):
         return public_url(value)
+
+
+class ThumbUrlField(UrlField):
+    """The read-only `*_thumb_url` for the key column of a kind in THUMB_CAPS."""
+
+    def to_representation(self, value):
+        return public_url(value and thumb_key(value))
 
 
 class ImageKeysMixin:

@@ -297,13 +297,15 @@ class ServiceSerializer(images.ImageKeysMixin, TenantUniqueNameMixin, serializer
     # Attached after the service exists: the upload is signed for its id.
     image_key = images.KeyField('service')
     image_url = images.UrlField(source='image_key')
+    # The small version, for a list; it has no column (images.thumb_key).
+    image_thumb_url = images.ThumbUrlField(source='image_key')
 
     class Meta:
         model = Service
         # `created_by` is the membership id, so the UI can tell a staff member
         # which services are theirs to edit (ManagesService).
         fields = (
-            'id', 'name', 'price', 'duration', 'category', 'image_key', 'image_url',
+            'id', 'name', 'price', 'duration', 'category', 'image_key', 'image_url', 'image_thumb_url',
             'created_by', 'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
