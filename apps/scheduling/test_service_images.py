@@ -212,6 +212,20 @@ def attached(owner, salon, haircut, bucket, django_capture_on_commit_callbacks):
     return key
 
 
+def test_creating_a_service_with_an_image_key_is_a_400(owner, salon, haircut, bucket):
+    # The upload is signed for an existing service; a new one gets its image after.
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).post(
+        reverse('scheduling:service-list'),
+        {'name': 'Color', 'duration': '00:30:00', 'image_key': key}, format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+    assert not Service.objects.filter(name='Color').exists()
+
+
 def test_a_key_attached_to_one_service_is_refused_for_another(owner, salon, haircut, bucket, attached):
     color = Service.objects.create(tenant=salon, name='Color', duration=timedelta(minutes=30))
 

@@ -87,6 +87,10 @@ class KeyField(serializers.CharField):
 
     def to_internal_value(self, data):
         key = super().to_internal_value(data)
+        if self.parent.instance is None:
+            # An upload is signed for an owner that exists (a service's id), so
+            # an image is attached after creating, never with it.
+            raise serializers.ValidationError('Attach the image once this exists.', code='image_on_create')
         tenant = self.context['request'].tenant
         # The whole shape, not a prefix: `<mine>/logo/../../<theirs>/...` starts
         # right and is somebody else's object.
@@ -96,9 +100,7 @@ class KeyField(serializers.CharField):
         # which another owner showing it would then lose. The unique column
         # backs this up; this check turns it into a 400 on the field.
         owners = self.parent.Meta.model.objects.filter(**{self.source: key})
-        if self.parent.instance is not None:
-            owners = owners.exclude(pk=self.parent.instance.pk)
-        if owners.exists():
+        if owners.exclude(pk=self.parent.instance.pk).exists():
             raise serializers.ValidationError('This image is already attached elsewhere.', code='image_taken')
         meta = storage.head(key)
         if meta is None:
