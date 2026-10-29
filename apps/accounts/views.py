@@ -16,6 +16,7 @@ from apps.accounts.serializers import (
     ChangePasswordSerializer,
     InvitationSerializer,
     MeSerializer,
+    MemberPhotoSerializer,
     MemberSerializer,
     NotificationSerializer,
     PushSubscriptionSerializer,
@@ -221,6 +222,22 @@ class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.Gen
             self.get_queryset(), key=lambda m: (rank.get(m.role, 99), m.display_name().lower()),
         )
         return Response(self.get_serializer(members, many=True).data)
+
+    @extend_schema(request=MemberPhotoSerializer, responses=MemberPhotoSerializer)
+    @action(
+        detail=False, methods=['patch'], url_path='me',
+        serializer_class=MemberPhotoSerializer, permission_classes=(IsAuthenticated, HasActiveMembership),
+    )
+    def me(self, request):
+        """
+        The caller's own photo in the active business. Any member, not only
+        admins: a staff member must be able to put their own face up, and the
+        detail route cannot let them, since nobody manages themselves.
+        """
+        serializer = self.get_serializer(request.membership, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets.GenericViewSet):

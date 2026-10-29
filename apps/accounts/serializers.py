@@ -15,6 +15,7 @@ from apps.accounts.models import (
     Notification,
     PushSubscription,
 )
+from apps.commons import images
 from apps.commons.errors import Refused
 from apps.scheduling.models import Appointment
 from apps.tenancy import pricing
@@ -108,7 +109,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
     )
 
 
-class MemberSerializer(serializers.ModelSerializer):
+class MemberSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     """
     One person on the team, as the team screen needs them.
 
@@ -117,8 +118,9 @@ class MemberSerializer(serializers.ModelSerializer):
     and carries no role. This lists who BELONGS, so an owner can see the
     receptionist and the admin who never appear in an agenda.
 
-    Writable on `role`, `attends_appointments` and `status`, by whoever may
-    manage this member (Membership.may_manage). Taking someone out of the
+    Writable on `role`, `attends_appointments`, `status` and `photo_key`, by
+    whoever may manage this member (Membership.may_manage); one's own photo goes
+    through MemberPhotoSerializer at members/me/. Taking someone out of the
     agenda while turnos of theirs are still to come is refused: those turnos
     would be left with nobody to attend them.
     """
@@ -130,12 +132,14 @@ class MemberSerializer(serializers.ModelSerializer):
     # not after. Null when it would not change, or the business pays by
     # agreement rather than by the price list.
     agenda_change = serializers.SerializerMethodField()
+    photo_key = images.KeyField('photo')
+    photo_url = images.UrlField(source='photo_key')
 
     class Meta:
         model = Membership
         fields = (
             'id', 'name', 'email', 'role', 'status', 'attends_appointments', 'joined_at',
-            'agenda_change',
+            'agenda_change', 'photo_key', 'photo_url',
         )
         read_only_fields = ('id', 'name', 'email', 'joined_at', 'agenda_change')
 
@@ -170,6 +174,22 @@ class MemberSerializer(serializers.ModelSerializer):
                     'member_has_turnos', status.HTTP_409_CONFLICT,
                 )
         return attrs
+
+
+class MemberPhotoSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
+    """
+    The caller's own photo in the active business, and nothing else of their
+    membership: role, agenda and access are someone else's to change
+    (Membership.may_manage refuses everyone themselves), but a face is not.
+    """
+
+    photo_key = images.KeyField('photo')
+    photo_url = images.UrlField(source='photo_key')
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'photo_key', 'photo_url')
+        read_only_fields = ('id',)
 
 
 class MeSerializer(serializers.ModelSerializer):

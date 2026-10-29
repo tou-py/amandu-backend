@@ -422,10 +422,12 @@ class ProfessionalSerializer(serializers.ModelSerializer):
     """
 
     name = serializers.CharField(source='display_name', read_only=True)
+    # The face next to the name; null means the initials disc.
+    photo_url = images.UrlField(source='photo_key')
 
     class Meta:
         model = Membership
-        fields = ('id', 'name')
+        fields = ('id', 'name', 'photo_url')
 
 
 class PeriodSerializer(serializers.Serializer):
