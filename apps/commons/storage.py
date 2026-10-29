@@ -33,7 +33,7 @@ def _client(endpoint):
         aws_access_key_id=settings.S3_ACCESS_KEY_ID,
         aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
         region_name=settings.S3_REGION,
-        # Path style: MinIO on localhost has no per-bucket subdomain, and R2
+        # Path style: SeaweedFS on localhost has no per-bucket subdomain, and R2
         # accepts both.
         config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
     )

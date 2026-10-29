@@ -24,7 +24,7 @@ for _key, _value in (
     ('CORS_ALLOWED_ORIGINS', 'http://test'),
     ('REDIS_URL', 'redis://test:6379/0'),
     # Never contacted: head/delete are faked per test and presigning is offline.
-    ('S3_ENDPOINT', 'http://minio.test:9000'),
+    ('S3_ENDPOINT', 'http://seaweedfs.test:9000'),
     ('S3_PUBLIC_ENDPOINT', 'http://localhost:9000'),
     ('S3_PUBLIC_URL', 'http://localhost:9000/amandu'),
     ('S3_BUCKET', 'amandu'),

@@ -1,4 +1,4 @@
-"""Local development: runserver, MinIO, the Postgres and Redis from docker-compose."""
+"""Local development: runserver, SeaweedFS, the Postgres and Redis from docker-compose."""
 
 from datetime import date
 
