@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership
+from apps.commons import images
 from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.scheduling import billing
@@ -409,6 +410,12 @@ class ServiceViewSet(TenantScopedModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.tenant, created_by=self.request.membership)
+
+    def perform_destroy(self, instance):
+        # After the delete went through: a service still booked raises Referenced
+        # first and keeps its image.
+        super().perform_destroy(instance)
+        images.discard(instance.image_key)
 
 
 class PlanViewSet(TenantScopedModelViewSet):

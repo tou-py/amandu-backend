@@ -11,6 +11,7 @@ from rest_framework import serializers
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership
+from apps.commons import images
 from apps.scheduling import billing
 from apps.scheduling.availability import REFUSALS, opening_check
 from apps.scheduling.models import (
@@ -292,12 +293,19 @@ class CategorySerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
         read_only_fields = ('id', 'created_at', 'updated_at')
 
 
-class ServiceSerializer(TenantUniqueNameMixin, serializers.ModelSerializer):
+class ServiceSerializer(images.ImageKeysMixin, TenantUniqueNameMixin, serializers.ModelSerializer):
+    # Attached after the service exists: the upload is signed for its id.
+    image_key = images.KeyField('service')
+    image_url = images.UrlField(source='image_key')
+
     class Meta:
         model = Service
         # `created_by` is the membership id, so the UI can tell a staff member
         # which services are theirs to edit (ManagesService).
-        fields = ('id', 'name', 'price', 'duration', 'category', 'created_by', 'created_at', 'updated_at')
+        fields = (
+            'id', 'name', 'price', 'duration', 'category', 'image_key', 'image_url',
+            'created_by', 'created_at', 'updated_at',
+        )
         read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
 
     def __init__(self, *args, **kwargs):

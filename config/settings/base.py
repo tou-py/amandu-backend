@@ -273,6 +273,29 @@ WAHA_SESSION = env.str('WAHA_SESSION', default='default')
 WHATSAPP_NUMBER = env.str('WHATSAPP_NUMBER', default='')
 
 
+# Images: an S3-compatible bucket (Cloudflare R2 in production, MinIO in dev),
+# reached only through apps/commons/storage.py. The browser uploads straight to
+# it with a signed PUT and nothing ever streams through Django, which is why no
+# STORAGES backend is involved.
+#
+# Two endpoints because a SigV4 signature covers the host: the API reaches the
+# bucket for HEAD/DELETE at S3_ENDPOINT (http://minio:9000 inside compose), but
+# signs upload URLs for the host the BROWSER uses, S3_PUBLIC_ENDPOINT
+# (http://localhost:9000). Signing is local computation, so the container never
+# has to reach the public one. In production both are the R2 account endpoint;
+# getting them wrong in dev shows up as SignatureDoesNotMatch on the PUT.
+S3_ENDPOINT = env.str('S3_ENDPOINT')
+S3_PUBLIC_ENDPOINT = env.str('S3_PUBLIC_ENDPOINT')
+# Where images are READ from, key appended: the bucket's custom domain in
+# production, http://localhost:9000/<bucket> in dev. Reads need no signature.
+S3_PUBLIC_URL = env.str('S3_PUBLIC_URL')
+S3_BUCKET = env.str('S3_BUCKET')
+S3_ACCESS_KEY_ID = env.str('S3_ACCESS_KEY_ID')
+S3_SECRET_ACCESS_KEY = env.str('S3_SECRET_ACCESS_KEY')
+# R2 wants "auto"; MinIO wants its own region, us-east-1 unless configured.
+S3_REGION = env.str('S3_REGION', default='auto')
+
+
 # Django REST Framework
 # Fail closed by default: every endpoint requires authentication unless it opts
 # out explicitly (the login/refresh views set their own empty permissions).
