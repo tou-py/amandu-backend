@@ -121,6 +121,25 @@ def test_a_size_over_the_kinds_cap_is_a_400(owner, salon, haircut, kind, cap):
     assert at.status_code == 200
 
 
+def test_signing_answers_404_then_403_before_the_size_cap(django_user_model, owner, salon, clinic, haircut):
+    theirs = Service.objects.create(tenant=clinic, name='Botox', duration=timedelta(minutes=30))
+    stylist = member(django_user_model, salon, 'stylist@example.com')
+    huge = 10 * 1024 * 1024
+
+    foreign = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': theirs.pk, 'size': huge}, format='json')
+    forbidden = api(stylist, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': huge}, format='json')
+
+    assert foreign.status_code == 404
+    assert forbidden.status_code == 403
+
+
+def test_the_signed_put_pins_type_length_and_cache(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+
+    signed = parse_qs(urlparse(res.data['upload_url']).query)['X-Amz-SignedHeaders'][0].split(';')
+    assert {'content-type', 'content-length', 'cache-control'} <= set(signed)
+
+
 def uploaded(owner, salon, haircut, bucket, size=50_000, content_type=WEBP):
     """Sign for real, then put what the browser would have PUT in the fake bucket."""
     res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': size}, format='json')

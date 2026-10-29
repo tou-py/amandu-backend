@@ -115,6 +115,11 @@ class Membership(models.Model):
             return False
         return other.role != self.Role.ADMIN or self.role == self.Role.OWNER
 
+    def may_change_photo(self, other):
+        """May this member set `other`'s photo: their own (members/me) or that
+        of anyone they may manage (the members detail route)."""
+        return other.pk == self.pk or self.may_manage(other)
+
     def may_assign(self, role):
         """May this member give `role` to someone, by invitation or change.
         Owner is never handed over from here."""
