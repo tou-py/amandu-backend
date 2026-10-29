@@ -57,6 +57,11 @@ class Membership(models.Model):
     # being given a login.
     attends_appointments = models.BooleanField(default=False)
     joined_at = models.DateTimeField(auto_now_add=True)
+    # Their face in THIS business: on the membership, not the user, so a person
+    # in two businesses can show a different photo in each and the photo stays
+    # inside the tenant's isolation. The object key, never a URL
+    # (apps/commons/images.py). A deactivated member keeps it; that is harmless.
+    photo_key = models.CharField(max_length=200, null=True, blank=True)
 
     class Meta:
         db_table = 'tb_membership'
