@@ -99,6 +99,9 @@ class Tenant(TimestampMixin):
     # gives as the contact, and setting it is what turns those messages on:
     # a message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
     phone = PhoneNumberField(blank=True)
+    # The object key of its logo in the image bucket, never a URL, so moving the
+    # public domain needs no data migration (apps/commons/images.py).
+    logo_key = models.CharField(max_length=200, null=True, blank=True)
 
     class PlanPeriodStart(models.TextChoices):
         # "Everyone pays October by the 10th": a new subscription starts on the
