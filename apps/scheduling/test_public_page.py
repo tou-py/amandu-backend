@@ -314,3 +314,65 @@ def test_the_form_errors_are_spanish(client, salon, stylist, haircut, open_monda
 
     assert 'role="alert"' in body
     assert 'This field' not in body
+
+
+# --- images -----------------------------------------------------------------
+# Asserted against a literal CDN address, not one rebuilt with the helper: the
+# point is what the browser is told to fetch.
+
+@pytest.fixture
+def cdn(settings):
+    settings.S3_PUBLIC_URL = 'https://img.example.com/'
+
+
+def test_the_logo_heads_the_page(client, cdn, salon, stylist, haircut, open_monday,
+                                 monday_morning):
+    salon.logo_key = f'{salon.pk}/logo/a.webp'
+    salon.save()
+
+    body = html(client, salon)
+
+    assert (
+        f'<img class="logo" src="https://img.example.com/{salon.pk}/logo/a.webp" '
+        'alt="Logo de Salón Iguazú" width="56" height="56">'
+    ) in body
+
+
+def test_a_professional_with_a_photo_shows_their_face(client, cdn, salon, stylist,
+                                                     haircut, open_monday, monday_morning):
+    """The photo takes the initials disc's place at the disc's size. Empty alt:
+    the name is printed right beside it, as the disc was aria-hidden."""
+    stylist.photo_key = f'{salon.pk}/photo/b.webp'
+    stylist.save()
+
+    body = html(client, salon)
+
+    assert (
+        f'<img class="avatar" src="https://img.example.com/{salon.pk}/photo/b.webp" '
+        'alt="" width="28" height="28">'
+    ) in body
+    assert '>AN</span>' not in body
+
+
+def test_a_professional_without_a_photo_keeps_the_initials(client, cdn, salon, stylist,
+                                                          haircut, open_monday,
+                                                          monday_morning):
+    body = html(client, salon)
+
+    assert '<span class="avatar" aria-hidden="true">AN</span>' in body
+    assert '<img class="avatar"' not in body
+
+
+def test_a_service_with_an_image_shows_it_in_its_row(client, cdn, salon, stylist, haircut,
+                                                     open_monday, monday_morning):
+    """Below the fold on a phone, so it loads lazily; empty alt because the
+    service's name is the link text right next to it."""
+    haircut.image_key = f'{salon.pk}/service/c.webp'
+    haircut.save()
+
+    body = html(client, salon)
+
+    assert (
+        f'<img class="thumb" src="https://img.example.com/{salon.pk}/service/c.webp" '
+        'alt="" width="48" height="48" loading="lazy">'
+    ) in body

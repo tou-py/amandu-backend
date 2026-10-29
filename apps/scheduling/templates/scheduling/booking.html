@@ -181,6 +181,13 @@
   /* --- the hero: who, whether they are open, and the soonest hour ------ */
 
   .hero { padding: 0 0 2rem; }
+  /* The shop's own mark above its name, so somebody arriving from Instagram
+     sees the place they meant. A rounded square and not a disc: a logo is
+     drawn to its own shape, and a circle would crop wordmarks. */
+  .logo {
+    display: block; margin: 1rem 0 0;
+    border-radius: var(--radius); object-fit: contain;
+  }
   .status { background: var(--sunken); color: var(--ink-secondary); }
   .status.now { background: var(--accent); color: var(--accent-ink); }
   .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -234,6 +241,8 @@
     background: var(--sel-bg); color: var(--sel-ink);
     font-size: 11px; font-weight: 700; letter-spacing: .3px;
   }
+  /* A photo sits in the same disc; the tint shows until it loads. */
+  img.avatar { object-fit: cover; }
   .avatar.any { background: var(--sunken); color: var(--ink-secondary); }
   .avatar.any .icon { width: 16px; height: 16px; }
 
@@ -266,6 +275,12 @@
     min-height: 56px; padding: .75rem 1rem;
     text-decoration: none;
     transition: background-color 140ms var(--ease-out);
+  }
+  /* What the service looks like, at the row's own height so a list with and
+     without images keeps one rhythm. */
+  .option .thumb {
+    flex: none; border-radius: var(--radius); object-fit: cover;
+    background: var(--sunken);
   }
   .option .name { flex: 1; min-width: 0; font-weight: 550; overflow-wrap: anywhere; }
   .option .meta { color: var(--ink-subtle); font-size: .9rem; text-align: right; white-space: nowrap; }
@@ -496,7 +511,7 @@
         <span class="amandu-lozenge pending">Esperando confirmación</span>
         <strong class="when amandu-display amandu-time">{{ booked_at|date:"l j" }} de {{ booked_at|date:"F" }}, {{ booked_at|time:"H:i" }}</strong>
         {% if professional %}
-          <span class="who-line h{{ professional.hue }}"><span class="avatar" aria-hidden="true">{{ professional.initials }}</span>con {{ professional.display_name }}</span>
+          <span class="who-line h{{ professional.hue }}">{% if professional.photo_url %}<img class="avatar" src="{{ professional.photo_url }}" alt="" width="28" height="28">{% else %}<span class="avatar" aria-hidden="true">{{ professional.initials }}</span>{% endif %}con {{ professional.display_name }}</span>
         {% endif %}
       </div>
       <dl>
@@ -524,6 +539,7 @@
 {% elif unconfigured %}
   <main class="wrap">
     <header class="hero">
+      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" width="56" height="56">{% endif %}
       <h1 class="amandu-display">{{ shop.name }}</h1>
       <div class="notice">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
@@ -543,6 +559,7 @@
         <span class="amandu-lozenge status">Cerrado ahora · reservá igual</span>
       {% endif %}
 
+      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" width="56" height="56">{% endif %}
       <h1 class="amandu-display">{{ shop.name }}</h1>
       <p class="promise">Elegí el servicio y el horario que te sirven, y pedilo. Te confirman desde el negocio.</p>
       {% if shop.phone %}
@@ -557,7 +574,7 @@
           <span class="amandu-eyebrow">Lo más cercano</span>
           <strong class="when amandu-display amandu-time">{% if first_is_today %}Hoy{% else %}{{ first_slot|date:"l j" }} de {{ first_slot|date:"F" }}{% endif %} a las {{ first_slot|time:"H:i" }}</strong>
           {% if professional %}
-            <span class="who-line"><span class="avatar" aria-hidden="true">{{ professional.initials }}</span>con {{ professional.display_name }}</span>
+            <span class="who-line">{% if professional.photo_url %}<img class="avatar" src="{{ professional.photo_url }}" alt="" width="28" height="28">{% else %}<span class="avatar" aria-hidden="true">{{ professional.initials }}</span>{% endif %}con {{ professional.display_name }}</span>
           {% else %}
             <span class="who-line"><span class="avatar any" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>con quien esté libre</span>
           {% endif %}
@@ -573,6 +590,7 @@
           {% for option in services %}
             <li><a class="option" href="{{ option.href }}" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}">
               <span class="radio" aria-hidden="true"></span>
+              {% if option.image_url %}<img class="thumb" src="{{ option.image_url }}" alt="" width="48" height="48" loading="lazy">{% endif %}
               <span class="name">{{ option.name }}</span>
               <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b>{% endif %}{{ option.duration_minutes }} min</span>
             </a></li>
@@ -590,7 +608,7 @@
             </a></li>
             {% for option in professionals %}
               <li><a class="chip h{{ option.hue }}" href="{{ option.href }}" aria-current="{% if option.pk == professional.pk %}true{% else %}false{% endif %}">
-                <span class="avatar" aria-hidden="true">{{ option.initials }}</span>
+                {% if option.photo_url %}<img class="avatar" src="{{ option.photo_url }}" alt="" width="28" height="28" loading="lazy">{% else %}<span class="avatar" aria-hidden="true">{{ option.initials }}</span>{% endif %}
                 {{ option.display_name }}
               </a></li>
             {% endfor %}
