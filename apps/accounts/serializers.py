@@ -67,6 +67,7 @@ def active_memberships(user):
             'tenant_country': str(tenant.country),
             'role': m.role,
             'attends_appointments': m.attends_appointments,
+            'photo_url': images.public_url(m.photo_key),
             'tenant_status': tenant.status,
             'billing': state,
             'paid_until': tenant.paid_until,
@@ -96,6 +97,8 @@ class ActiveMembershipSerializer(serializers.Serializer):
     # Whether this person can be booked, so the UI can gate "my agenda" without
     # fetching the professionals list.
     attends_appointments = serializers.BooleanField()
+    # Their own face in this business, bookable or not; null for initials.
+    photo_url = serializers.URLField(allow_null=True)
     tenant_status = serializers.ChoiceField(choices=('active', 'suspended'))
     billing = serializers.ChoiceField(
         choices=(pricing.OK, pricing.DUE, pricing.READ_ONLY, pricing.SUSPENDED),

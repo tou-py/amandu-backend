@@ -171,6 +171,17 @@ def test_a_staff_member_sets_their_own_photo_through_members_me(owner, stylist, 
     assert listed[owner.pk]['photo_url'] is None
 
 
+def test_auth_me_carries_the_callers_photo_per_business(make, stylist, clinic, bucket):
+    elsewhere = make(clinic, 'stylist@example.com')
+    key = uploaded(stylist, stylist, bucket)
+    api(stylist).patch(ME, {'photo_key': key}, format='json')
+
+    rows = api(stylist).get(reverse('accounts:me')).data['memberships']
+
+    photos = {row['membership_id']: row['photo_url'] for row in rows}
+    assert photos == {stylist.pk: url(key), elsewhere.pk: None}
+
+
 def test_members_me_changes_only_the_photo_and_only_in_the_active_business(make, owner, stylist, clinic, bucket):
     elsewhere = make(clinic, 'stylist@example.com', attends=True)
     key = uploaded(stylist, stylist, bucket)
