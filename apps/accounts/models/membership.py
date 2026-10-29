@@ -61,7 +61,7 @@ class Membership(models.Model):
     # in two businesses can show a different photo in each and the photo stays
     # inside the tenant's isolation. The object key, never a URL
     # (apps/commons/images.py). A deactivated member keeps it; that is harmless.
-    photo_key = models.CharField(max_length=200, null=True, blank=True)
+    photo_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
 
     class Meta:
         db_table = 'tb_membership'

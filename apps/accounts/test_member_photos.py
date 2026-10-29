@@ -121,6 +121,16 @@ def attached(owner, stylist, bucket, django_capture_on_commit_callbacks):
     return key
 
 
+def test_a_photo_attached_to_one_member_is_refused_for_another(make, salon, owner, bucket, attached):
+    other = make(salon, 'other@example.com')
+
+    on_detail = api(owner).patch(detail(other), {'photo_key': attached}, format='json')
+    on_me = api(other).patch(ME, {'photo_key': attached}, format='json')
+
+    assert on_detail.status_code == 400 and 'photo_key' in on_detail.data
+    assert on_me.status_code == 400 and 'photo_key' in on_me.data
+
+
 def test_replacing_the_photo_deletes_the_old_object(owner, stylist, bucket, attached, django_capture_on_commit_callbacks):
     new = uploaded(owner, stylist, bucket)
 

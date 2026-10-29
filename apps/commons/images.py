@@ -92,6 +92,14 @@ class KeyField(serializers.CharField):
         # right and is somebody else's object.
         if not re.fullmatch(rf'{re.escape(str(tenant.pk))}/{self.kind}/{NAME}', key):
             raise serializers.ValidationError('Not an upload of this business for this image.', code='image_foreign')
+        # One owner per key: replacing one owner's image deletes the object,
+        # which another owner showing it would then lose. The unique column
+        # backs this up; this check turns it into a 400 on the field.
+        owners = self.parent.Meta.model.objects.filter(**{self.source: key})
+        if self.parent.instance is not None:
+            owners = owners.exclude(pk=self.parent.instance.pk)
+        if owners.exists():
+            raise serializers.ValidationError('This image is already attached elsewhere.', code='image_taken')
         meta = storage.head(key)
         if meta is None:
             raise serializers.ValidationError('Nothing was uploaded under this key.', code='image_missing')

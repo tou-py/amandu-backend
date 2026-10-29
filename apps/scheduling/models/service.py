@@ -48,7 +48,7 @@ class Service(TenantOwnedMixin, TimestampMixin):
     )
     # The object key of its picture in the image bucket, never a URL, so moving
     # the public domain needs no data migration (apps/commons/images.py).
-    image_key = models.CharField(max_length=200, null=True, blank=True)
+    image_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
 
     class Meta:
         db_table = 'tb_service'

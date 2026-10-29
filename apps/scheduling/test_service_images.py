@@ -212,6 +212,16 @@ def attached(owner, salon, haircut, bucket, django_capture_on_commit_callbacks):
     return key
 
 
+def test_a_key_attached_to_one_service_is_refused_for_another(owner, salon, haircut, bucket, attached):
+    color = Service.objects.create(tenant=salon, name='Color', duration=timedelta(minutes=30))
+
+    res = api(owner, salon).patch(detail(color), {'image_key': attached}, format='json')
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+    assert api(owner, salon).get(detail(color)).data['image_url'] is None
+
+
 def test_replacing_the_image_deletes_the_old_object(
     owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
 ):
