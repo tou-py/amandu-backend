@@ -273,13 +273,13 @@ WAHA_SESSION = env.str('WAHA_SESSION', default='default')
 WHATSAPP_NUMBER = env.str('WHATSAPP_NUMBER', default='')
 
 
-# Images: an S3-compatible bucket (Cloudflare R2 in production, MinIO in dev),
+# Images: an S3-compatible bucket (Cloudflare R2 in production, SeaweedFS in dev),
 # reached only through apps/commons/storage.py. The browser uploads straight to
 # it with a signed PUT and nothing ever streams through Django, which is why no
 # STORAGES backend is involved.
 #
 # Two endpoints because a SigV4 signature covers the host: the API reaches the
-# bucket for HEAD/DELETE at S3_ENDPOINT (http://minio:9000 inside compose), but
+# bucket for HEAD/DELETE at S3_ENDPOINT (http://seaweedfs:9000 inside compose), but
 # signs upload URLs for the host the BROWSER uses, S3_PUBLIC_ENDPOINT
 # (http://localhost:9000). Signing is local computation, so the container never
 # has to reach the public one. In production both are the R2 account endpoint;
@@ -292,7 +292,7 @@ S3_PUBLIC_URL = env.str('S3_PUBLIC_URL')
 S3_BUCKET = env.str('S3_BUCKET')
 S3_ACCESS_KEY_ID = env.str('S3_ACCESS_KEY_ID')
 S3_SECRET_ACCESS_KEY = env.str('S3_SECRET_ACCESS_KEY')
-# R2 wants "auto"; MinIO wants its own region, us-east-1 unless configured.
+# R2 wants "auto"; SeaweedFS takes whatever region the signature names.
 S3_REGION = env.str('S3_REGION', default='auto')
 
 
