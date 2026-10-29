@@ -33,6 +33,7 @@ KINDS = {
 
 class UploadRequestSerializer(serializers.Serializer):
     kind = serializers.ChoiceField(choices=sorted(KINDS))
+    content_type = serializers.ChoiceField(choices=sorted(images.TYPES))
     # Ignored for a logo: its target is the active tenant.
     target_id = serializers.CharField(required=False, allow_blank=True)
     size = serializers.IntegerField(min_value=1)
@@ -78,6 +79,7 @@ class UploadView(APIView):
             raise PermissionDenied('Your role does not allow changing this image.')
         if size > images.CAPS[kind]:
             raise serializers.ValidationError({'size': 'Over the size limit for this image.'}, code='image_too_large')
-        key = images.new_key(request.tenant, kind)
-        url, headers = storage.presign_put(key, size)
+        content_type = data.validated_data['content_type']
+        key = images.new_key(request.tenant, kind, content_type)
+        url, headers = storage.presign_put(key, size, content_type)
         return Response({'key': key, 'upload_url': url, 'headers': headers})

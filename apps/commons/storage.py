@@ -19,7 +19,6 @@ from django.conf import settings
 # The year-long `immutable` cache is only safe because keys are never reused:
 # replacing an image always mints a new key. Never write to an existing key.
 CACHE_CONTROL = 'public, max-age=31536000, immutable'
-CONTENT_TYPE = 'image/webp'
 # Long enough to compress-then-upload on a slow phone, short enough that a
 # leaked URL is dead by the time anyone finds it.
 EXPIRES = 300  # seconds
@@ -39,15 +38,16 @@ def _client(endpoint):
     )
 
 
-def presign_put(key, size):
+def presign_put(key, size, content_type):
     """
-    A URL the browser PUTs exactly one WebP of exactly `size` bytes to, and the
-    headers it must send. R2 has no presigned POST policies (no
-    content-length-range), so the type, the exact length and the cache header
-    are pinned in the signature instead: any other value fails the PUT.
+    A URL the browser PUTs exactly one image of `content_type` and exactly
+    `size` bytes to, and the headers it must send. R2 has no presigned POST
+    policies (no content-length-range), so the type, the exact length and the
+    cache header are pinned in the signature instead: any other value fails
+    the PUT.
     """
     headers = {
-        'Content-Type': CONTENT_TYPE,
+        'Content-Type': content_type,
         'Content-Length': str(size),
         'Cache-Control': CACHE_CONTROL,
     }
@@ -56,7 +56,7 @@ def presign_put(key, size):
         Params={
             'Bucket': settings.S3_BUCKET,
             'Key': key,
-            'ContentType': CONTENT_TYPE,
+            'ContentType': content_type,
             'ContentLength': size,
             'CacheControl': CACHE_CONTROL,
         },

@@ -65,7 +65,7 @@ def stylist(make, salon):
 
 def uploaded(signer, target, bucket, size=50_000, content_type=WEBP):
     """Sign for real as `signer`, then put what the browser would have PUT."""
-    res = api(signer).post(UPLOADS, {'kind': 'photo', 'target_id': target.pk, 'size': size}, format='json')
+    res = api(signer).post(UPLOADS, {'content_type': WEBP, 'kind': 'photo', 'target_id': target.pk, 'size': size}, format='json')
     assert res.status_code == 200
     bucket.objects[res.data['key']] = (size, content_type)
     return res.data['key']

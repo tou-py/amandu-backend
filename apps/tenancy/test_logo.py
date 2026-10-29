@@ -4,7 +4,9 @@ PATCH /api/tenant/ and what the bucket is told to delete. Same single fake as
 the service images, the `bucket` fixture; signing runs for real.
 """
 
+import re
 import uuid
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.urls import reverse
@@ -16,6 +18,7 @@ from apps.tenancy.models import Tenant
 UPLOADS = '/api/uploads/'
 TENANT_URL = reverse('tenancy:tenant')
 WEBP = 'image/webp'
+JPEG = 'image/jpeg'
 
 
 def api(user, tenant):
@@ -39,7 +42,7 @@ def owner(django_user_model, salon):
 
 def uploaded(owner, bucket, size=50_000, content_type=WEBP):
     """Sign for real, then put what the browser would have PUT in the fake bucket."""
-    key = owner.post(UPLOADS, {'kind': 'logo', 'size': size}, format='json').data['key']
+    key = owner.post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': size}, format='json').data['key']
     bucket.objects[key] = (size, content_type)
     return key
 
@@ -97,6 +100,40 @@ def test_a_uuid_key_in_hex_or_canonical_form_attaches(owner, salon, bucket, name
     assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == 200
 
 
+def test_a_jpeg_signs_under_a_jpg_key_with_its_type_pinned(owner, salon):
+    res = owner.post(UPLOADS, {'content_type': JPEG, 'kind': 'logo', 'size': 1000}, format='json')
+
+    assert res.status_code == 200
+    assert re.fullmatch(rf'{salon.pk}/logo/[0-9a-f-]{{36}}\.jpg', res.data['key'])
+    assert res.data['headers']['Content-Type'] == JPEG
+    assert 'content-type' in parse_qs(urlparse(res.data['upload_url']).query)['X-Amz-SignedHeaders'][0].split(';')
+
+
+@pytest.mark.parametrize('content_type', ['image/svg+xml', 'image/png', '', None])
+def test_signing_any_other_type_is_a_400(owner, content_type):
+    body = {'kind': 'logo', 'size': 1000}
+    if content_type is not None:
+        body['content_type'] = content_type
+
+    res = owner.post(UPLOADS, body, format='json')
+
+    assert res.status_code == 400
+    assert 'content_type' in res.data
+
+
+@pytest.mark.parametrize('extension, stored, status', [
+    ('jpg', JPEG, 200),
+    ('webp', WEBP, 200),
+    ('jpg', WEBP, 400),
+    ('webp', JPEG, 400),
+])
+def test_the_stored_type_must_match_the_key_extension(owner, salon, bucket, extension, stored, status):
+    key = f'{salon.pk}/logo/{uuid.uuid4()}.{extension}'
+    bucket.objects[key] = (1000, stored)
+
+    assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == status
+
+
 def test_a_key_of_another_kind_is_refused(owner, salon, bucket):
     photo = f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'
     bucket.objects[photo] = (1000, WEBP)
@@ -105,7 +142,7 @@ def test_a_key_of_another_kind_is_refused(owner, salon, bucket):
 
 
 def test_a_key_nothing_was_uploaded_to_is_refused(owner, bucket):
-    key = owner.post(UPLOADS, {'kind': 'logo', 'size': 1000}, format='json').data['key']
+    key = owner.post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').data['key']
 
     assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == 400
 

@@ -58,7 +58,7 @@ def haircut(salon):
 
 
 def test_signing_a_service_upload_returns_a_key_in_the_tenants_space_and_a_signed_put(owner, salon, haircut):
-    res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': 50_000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000}, format='json')
 
     assert res.status_code == 200
     key = res.data['key']
@@ -76,7 +76,7 @@ def test_signing_a_service_upload_returns_a_key_in_the_tenants_space_and_a_signe
 def test_signing_for_another_tenants_service_is_a_404(owner, salon, clinic):
     theirs = Service.objects.create(tenant=clinic, name='Botox', duration=timedelta(minutes=30))
 
-    res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': theirs.pk, 'size': 1000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': 1000}, format='json')
 
     assert res.status_code == 404
 
@@ -87,8 +87,8 @@ def test_staff_cannot_sign_for_a_colleagues_service_but_can_for_their_own(django
         tenant=salon, name='Color', duration=timedelta(minutes=30), created_by=stylist.memberships.get(),
     )
 
-    other = api(stylist, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
-    own = api(stylist, salon).post(UPLOADS, {'kind': 'service', 'target_id': mine.pk, 'size': 1000}, format='json')
+    other = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+    own = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': mine.pk, 'size': 1000}, format='json')
 
     assert other.status_code == 403
     assert own.status_code == 200
@@ -98,7 +98,7 @@ def test_an_admin_cannot_sign_for_the_owners_photo(django_user_model, owner, sal
     admin = member(django_user_model, salon, 'admin@example.com', Membership.Role.ADMIN)
 
     res = api(admin, salon).post(
-        UPLOADS, {'kind': 'photo', 'target_id': owner.memberships.get().pk, 'size': 1000}, format='json',
+        UPLOADS, {'content_type': WEBP, 'kind': 'photo', 'target_id': owner.memberships.get().pk, 'size': 1000}, format='json',
     )
 
     assert res.status_code == 403
@@ -107,16 +107,16 @@ def test_an_admin_cannot_sign_for_the_owners_photo(django_user_model, owner, sal
 def test_only_the_owner_signs_for_the_logo(django_user_model, owner, salon):
     admin = member(django_user_model, salon, 'admin@example.com', Membership.Role.ADMIN)
 
-    assert api(admin, salon).post(UPLOADS, {'kind': 'logo', 'size': 1000}, format='json').status_code == 403
-    assert api(owner, salon).post(UPLOADS, {'kind': 'logo', 'size': 1000}, format='json').status_code == 200
+    assert api(admin, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').status_code == 403
+    assert api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').status_code == 200
 
 
 @pytest.mark.parametrize('kind, cap', [('logo', 300 * 1024), ('photo', 300 * 1024), ('service', 1024 * 1024)])
 def test_a_size_over_the_kinds_cap_is_a_400(owner, salon, haircut, kind, cap):
     target = {'photo': owner.memberships.get().pk, 'service': haircut.pk}.get(kind, '')
 
-    over = api(owner, salon).post(UPLOADS, {'kind': kind, 'target_id': target, 'size': cap + 1}, format='json')
-    at = api(owner, salon).post(UPLOADS, {'kind': kind, 'target_id': target, 'size': cap}, format='json')
+    over = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap + 1}, format='json')
+    at = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap}, format='json')
 
     assert over.status_code == 400
     assert at.status_code == 200
@@ -127,15 +127,15 @@ def test_signing_answers_404_then_403_before_the_size_cap(django_user_model, own
     stylist = member(django_user_model, salon, 'stylist@example.com')
     huge = 10 * 1024 * 1024
 
-    foreign = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': theirs.pk, 'size': huge}, format='json')
-    forbidden = api(stylist, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': huge}, format='json')
+    foreign = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': huge}, format='json')
+    forbidden = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': huge}, format='json')
 
     assert foreign.status_code == 404
     assert forbidden.status_code == 403
 
 
 def test_the_signed_put_pins_type_length_and_cache(owner, salon, haircut):
-    res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
 
     signed = parse_qs(urlparse(res.data['upload_url']).query)['X-Amz-SignedHeaders'][0].split(';')
     assert {'content-type', 'content-length', 'cache-control'} <= set(signed)
@@ -143,7 +143,7 @@ def test_the_signed_put_pins_type_length_and_cache(owner, salon, haircut):
 
 def uploaded(owner, salon, haircut, bucket, size=50_000, content_type=WEBP):
     """Sign for real, then put what the browser would have PUT in the fake bucket."""
-    res = api(owner, salon).post(UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': size}, format='json')
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': size}, format='json')
     bucket.objects[res.data['key']] = (size, content_type)
     return res.data['key']
 
@@ -175,7 +175,7 @@ def test_a_key_from_another_tenants_space_is_refused(owner, salon, clinic, hairc
 
 
 def test_a_key_of_another_kind_is_refused(owner, salon, haircut, bucket):
-    logo = api(owner, salon).post(UPLOADS, {'kind': 'logo', 'size': 1000}, format='json').data['key']
+    logo = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').data['key']
     bucket.objects[logo] = (1000, WEBP)
 
     res = api(owner, salon).patch(detail(haircut), {'image_key': logo}, format='json')
@@ -185,7 +185,7 @@ def test_a_key_of_another_kind_is_refused(owner, salon, haircut, bucket):
 
 def test_a_key_nothing_was_uploaded_to_is_refused(owner, salon, haircut, bucket):
     key = api(owner, salon).post(
-        UPLOADS, {'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json',
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json',
     ).data['key']
 
     res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
