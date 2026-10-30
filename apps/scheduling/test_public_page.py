@@ -334,7 +334,7 @@ def test_the_logo_heads_the_page(client, cdn, salon, stylist, haircut, open_mond
 
     assert (
         f'<img class="logo" src="https://img.example.com/{salon.pk}/logo/a.webp" '
-        'alt="Logo de Salón Iguazú" width="56" height="56">'
+        'alt="Logo de Salón Iguazú" height="56">'
     ) in body
 
 

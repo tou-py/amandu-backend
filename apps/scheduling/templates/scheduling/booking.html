@@ -183,12 +183,17 @@
   .hero { padding: 0 0 2rem; }
   /* The shop's own mark above its name, so somebody arriving from Instagram
      sees the place they meant. A rounded square and not a disc: a logo is
-     drawn to its own shape, and a circle would crop wordmarks. A fixed 1:1
-     box, contained, so an upload of any shape never shifts the hero. */
+     drawn to its own shape, and a circle would crop wordmarks. A fixed
+     height with a capped width, contained: a wordmark gets the width, and an
+     upload of any shape never shifts the hero more than 56px down. In dark
+     it sits on a light plate, so a black mark does not vanish. */
   .logo {
-    display: block; margin: 1rem 0 0;
-    width: 56px; height: 56px; aspect-ratio: 1;
+    display: block; margin: 1rem 0 0; box-sizing: border-box;
+    width: auto; height: 56px; max-width: min(224px, 100%);
     border-radius: var(--radius); object-fit: contain;
+  }
+  @media (prefers-color-scheme: dark) {
+    .logo { padding: 6px 10px; background: #fafaf9; }
   }
   .status { background: var(--sunken); color: var(--ink-secondary); }
   .status.now { background: var(--accent); color: var(--accent-ink); }
@@ -544,7 +549,7 @@
 {% elif unconfigured %}
   <main class="wrap">
     <header class="hero">
-      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" width="56" height="56">{% endif %}
+      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" height="56">{% endif %}
       <h1 class="amandu-display">{{ shop.name }}</h1>
       <div class="notice">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
@@ -564,7 +569,7 @@
         <span class="amandu-lozenge status">Cerrado ahora · reservá igual</span>
       {% endif %}
 
-      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" width="56" height="56">{% endif %}
+      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" height="56">{% endif %}
       <h1 class="amandu-display">{{ shop.name }}</h1>
       <p class="promise">Elegí el servicio y el horario que te sirven, y pedilo. Te confirman desde el negocio.</p>
       {% if shop.phone %}
