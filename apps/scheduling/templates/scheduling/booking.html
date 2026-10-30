@@ -186,14 +186,15 @@
      drawn to its own shape, and a circle would crop wordmarks. A fixed
      height with a capped width, contained: a wordmark gets the width, and an
      upload of any shape never shifts the hero more than 56px down. In dark
-     it sits on a light plate, so a black mark does not vanish. */
+     the light canvas shows behind it, so a black mark does not vanish; no
+     padding, so a photo is not framed. */
   .logo {
     display: block; margin: 1rem 0 0; box-sizing: border-box;
     width: auto; height: 56px; max-width: min(224px, 100%);
     border-radius: var(--radius); object-fit: contain;
   }
   @media (prefers-color-scheme: dark) {
-    .logo { padding: 6px 10px; background: #fafaf9; }
+    .logo { background: #fafaf9; }
   }
   .status { background: var(--sunken); color: var(--ink-secondary); }
   .status.now { background: var(--accent); color: var(--accent-ink); }
