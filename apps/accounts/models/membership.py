@@ -57,6 +57,11 @@ class Membership(models.Model):
     # being given a login.
     attends_appointments = models.BooleanField(default=False)
     joined_at = models.DateTimeField(auto_now_add=True)
+    # Their face in THIS business: on the membership, not the user, so a person
+    # in two businesses can show a different photo in each and the photo stays
+    # inside the tenant's isolation. The object key, never a URL
+    # (apps/commons/images.py). A deactivated member keeps it; that is harmless.
+    photo_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
 
     class Meta:
         db_table = 'tb_membership'
@@ -109,6 +114,11 @@ class Membership(models.Model):
         if self.role not in self.MANAGERS or other.pk == self.pk or other.role == self.Role.OWNER:
             return False
         return other.role != self.Role.ADMIN or self.role == self.Role.OWNER
+
+    def may_change_photo(self, other):
+        """May this member set `other`'s photo: their own (members/me) or that
+        of anyone they may manage (the members detail route)."""
+        return other.pk == self.pk or self.may_manage(other)
 
     def may_assign(self, role):
         """May this member give `role` to someone, by invitation or change.

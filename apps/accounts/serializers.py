@@ -15,6 +15,7 @@ from apps.accounts.models import (
     Notification,
     PushSubscription,
 )
+from apps.commons import images
 from apps.commons.errors import Refused
 from apps.scheduling.models import Appointment
 from apps.tenancy import pricing
@@ -64,8 +65,10 @@ def active_memberships(user):
             'tenant_slug': tenant.slug,
             'tenant_name': tenant.name,
             'tenant_country': str(tenant.country),
+            'tenant_logo_url': images.public_url(tenant.logo_key),
             'role': m.role,
             'attends_appointments': m.attends_appointments,
+            'photo_url': images.public_url(m.photo_key),
             'tenant_status': tenant.status,
             'billing': state,
             'paid_until': tenant.paid_until,
@@ -91,10 +94,14 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
     tenant_country = serializers.CharField()
+    # Everyone inside sees it in the top bar, not only the owner who may read /api/tenant/.
+    tenant_logo_url = serializers.URLField(allow_null=True)
     role = serializers.CharField()
     # Whether this person can be booked, so the UI can gate "my agenda" without
     # fetching the professionals list.
     attends_appointments = serializers.BooleanField()
+    # Their own face in this business, bookable or not; null for initials.
+    photo_url = serializers.URLField(allow_null=True)
     tenant_status = serializers.ChoiceField(choices=('active', 'suspended'))
     billing = serializers.ChoiceField(
         choices=(pricing.OK, pricing.DUE, pricing.READ_ONLY, pricing.SUSPENDED),
@@ -108,7 +115,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
     )
 
 
-class MemberSerializer(serializers.ModelSerializer):
+class MemberSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     """
     One person on the team, as the team screen needs them.
 
@@ -117,8 +124,9 @@ class MemberSerializer(serializers.ModelSerializer):
     and carries no role. This lists who BELONGS, so an owner can see the
     receptionist and the admin who never appear in an agenda.
 
-    Writable on `role`, `attends_appointments` and `status`, by whoever may
-    manage this member (Membership.may_manage). Taking someone out of the
+    Writable on `role`, `attends_appointments`, `status` and `photo_key`, by
+    whoever may manage this member (Membership.may_manage); one's own photo goes
+    through MemberPhotoSerializer at members/me/. Taking someone out of the
     agenda while turnos of theirs are still to come is refused: those turnos
     would be left with nobody to attend them.
     """
@@ -130,12 +138,14 @@ class MemberSerializer(serializers.ModelSerializer):
     # not after. Null when it would not change, or the business pays by
     # agreement rather than by the price list.
     agenda_change = serializers.SerializerMethodField()
+    photo_key = images.KeyField('photo')
+    photo_url = images.UrlField(source='photo_key')
 
     class Meta:
         model = Membership
         fields = (
             'id', 'name', 'email', 'role', 'status', 'attends_appointments', 'joined_at',
-            'agenda_change',
+            'agenda_change', 'photo_key', 'photo_url',
         )
         read_only_fields = ('id', 'name', 'email', 'joined_at', 'agenda_change')
 
@@ -170,6 +180,22 @@ class MemberSerializer(serializers.ModelSerializer):
                     'member_has_turnos', status.HTTP_409_CONFLICT,
                 )
         return attrs
+
+
+class MemberPhotoSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
+    """
+    The caller's own photo in the active business, and nothing else of their
+    membership: role, agenda and access are someone else's to change
+    (Membership.may_manage refuses everyone themselves), but a face is not.
+    """
+
+    photo_key = images.KeyField('photo')
+    photo_url = images.UrlField(source='photo_key')
+
+    class Meta:
+        model = Membership
+        fields = ('id', 'photo_key', 'photo_url')
+        read_only_fields = ('id',)
 
 
 class MeSerializer(serializers.ModelSerializer):

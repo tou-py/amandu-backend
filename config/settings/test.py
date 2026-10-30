@@ -23,6 +23,13 @@ for _key, _value in (
     ('ALLOWED_HOSTS', 'test'),
     ('CORS_ALLOWED_ORIGINS', 'http://test'),
     ('REDIS_URL', 'redis://test:6379/0'),
+    # Never contacted: head/delete are faked per test and presigning is offline.
+    ('S3_ENDPOINT', 'http://seaweedfs.test:9000'),
+    ('S3_PUBLIC_ENDPOINT', 'http://localhost:9000'),
+    ('S3_PUBLIC_URL', 'http://localhost:9000/amandu'),
+    ('S3_BUCKET', 'amandu'),
+    ('S3_ACCESS_KEY_ID', 'test'),
+    ('S3_SECRET_ACCESS_KEY', 'test'),
 ):
     os.environ.setdefault(_key, _value)
 
