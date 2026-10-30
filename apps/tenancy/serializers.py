@@ -3,10 +3,11 @@ import re
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
+from apps.commons import images
 from apps.tenancy.models import Tenant
 
 
-class TenantSerializer(serializers.ModelSerializer):
+class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     """
     The business as its owner may edit it.
 
@@ -47,12 +48,15 @@ class TenantSerializer(serializers.ModelSerializer):
     # the phone numbers this field governs.
     country = serializers.CharField(max_length=2, allow_blank=True, required=False)
     phone = PhoneNumberField(required=False, allow_blank=True)
+    logo_key = images.KeyField('logo')
+    logo_url = images.UrlField(source='logo_key')
 
     class Meta:
         model = Tenant
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
-            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'created_at',
+            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url',
+            'created_at',
         )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
 

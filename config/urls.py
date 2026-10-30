@@ -26,6 +26,7 @@ from rest_framework.permissions import AllowAny
 
 from apps.commons.health import healthz
 from apps.commons.state import StateView
+from apps.commons.uploads import UploadView
 from apps.scheduling.public_pages import booking_page
 
 urlpatterns = [
@@ -40,6 +41,8 @@ urlpatterns = [
     # Named here rather than inside an app's router because it answers for two
     # of them at once -- the diary and the feed. See apps/commons/state.py.
     path('api/state/', StateView.as_view(), name='state'),
+    # Same reason: it signs uploads for the tenant, its members and services.
+    path('api/uploads/', UploadView.as_view(), name='uploads'),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
