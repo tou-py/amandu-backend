@@ -215,3 +215,14 @@ def test_a_request_that_fails_validation_deletes_nothing(
     assert res.status_code == 400
     assert bucket.deleted == []
     assert owner.get(TENANT_URL).data['logo_url'].endswith(attached)
+
+
+def test_auth_me_carries_the_logo_to_everyone_in_the_business(owner, salon, django_user_model, bucket):
+    key = uploaded(owner, bucket)
+    owner.patch(TENANT_URL, {'logo_key': key}, format='json')
+    user = django_user_model.objects.create_user(email='staff@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.STAFF)
+
+    rows = api(user, salon).get(reverse('accounts:me')).data['memberships']
+
+    assert [row['tenant_logo_url'] for row in rows] == [f'http://localhost:9000/amandu/{key}']

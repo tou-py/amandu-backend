@@ -65,6 +65,7 @@ def active_memberships(user):
             'tenant_slug': tenant.slug,
             'tenant_name': tenant.name,
             'tenant_country': str(tenant.country),
+            'tenant_logo_url': images.public_url(tenant.logo_key),
             'role': m.role,
             'attends_appointments': m.attends_appointments,
             'photo_url': images.public_url(m.photo_key),
@@ -93,6 +94,8 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_slug = serializers.SlugField()
     tenant_name = serializers.CharField()
     tenant_country = serializers.CharField()
+    # Everyone inside sees it in the top bar, not only the owner who may read /api/tenant/.
+    tenant_logo_url = serializers.URLField(allow_null=True)
     role = serializers.CharField()
     # Whether this person can be booked, so the UI can gate "my agenda" without
     # fetching the professionals list.
