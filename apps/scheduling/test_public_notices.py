@@ -94,7 +94,27 @@ def haircut(db, salon):
 
 
 @pytest.fixture
-def sent(monkeypatch):
+def number(monkeypatch):
+    """What WAHA says of the number's limits; a test edits it to restrict it."""
+    state = {'timelock': {'isActive': False}, 'capping': {'cappingStatus': 'NONE'}}
+
+    class Reply:
+        def __init__(self, url):
+            self.url = url
+
+        def raise_for_status(self):
+            if state.get('down'):
+                raise ConnectionError('WAHA is down')
+
+        def json(self):
+            return state[self.url.rsplit('/', 1)[1]]
+
+    monkeypatch.setattr(whatsapp.requests, 'get', lambda url, headers, timeout: Reply(url))
+    return state
+
+
+@pytest.fixture
+def sent(monkeypatch, number):
     """Stands in for WAHA: records (to, text), or raises if told to."""
     calls = []
 
@@ -196,24 +216,24 @@ def test_a_named_professional_is_still_honoured(client, salon, ana, bea, haircut
 
 # --- a request ----------------------------------------------------------------
 
-def test_a_request_tells_the_client_and_the_professional(client, salon, ana, haircut, now):
+def test_a_request_tells_the_client_by_whatsapp_and_the_professional_by_push(
+        client, salon, ana, haircut, now):
     book(client, salon, haircut, local(9), professional=ana)
 
     [to_client] = to(CLIENT_PHONE)
     assert 'Ada,' in to_client  # first name only
     assert 'Corte' in to_client and 'lunes 10/08 a las 09:00' in to_client
     assert '+595 21 123 4567' in to_client  # the business's own number, to answer
-    [to_ana] = to(ana.user.phone)
-    assert 'Nuevo pedido' in to_ana and 'Ada Lovelace' in to_ana
+    # Ana saved a phone, but the team is never written to from Kyo's number.
+    assert to(ana.user.phone) == []
     note = Notification.objects.get()
     assert (note.recipient, note.verb) == (ana, Notification.Verb.APPOINTMENT_REQUESTED)
 
 
-def test_no_box_ticked_no_message_to_the_client(client, salon, ana, haircut, now):
+def test_no_box_ticked_no_message_at_all(client, salon, ana, haircut, now):
     book(client, salon, haircut, local(9), professional=ana, notify_whatsapp='')
 
-    assert to(CLIENT_PHONE) == []
-    assert len(to(ana.user.phone)) == 1
+    assert not OutboundMessage.objects.exists()
 
 
 def test_an_unticked_box_later_does_not_take_consent_back(client, salon, ana, haircut, now):
@@ -222,14 +242,6 @@ def test_an_unticked_box_later_does_not_take_consent_back(client, salon, ana, ha
 
     assert Client.objects.get().whatsapp_opt_in
     assert len(to(CLIENT_PHONE)) == 2
-
-
-def test_a_professional_without_phone_only_gets_the_push(client, salon, bea, haircut, now):
-    book(client, salon, haircut, local(9), professional=bea)
-
-    assert OutboundMessage.objects.filter(to=CLIENT_PHONE).count() == 1
-    assert OutboundMessage.objects.count() == 1
-    assert Notification.objects.get().recipient == bea
 
 
 def test_a_business_without_its_own_number_sends_no_whatsapp(client, salon, ana, haircut, now):
@@ -288,9 +300,9 @@ def test_a_coordinator_accepting_tells_both(request_for_ana, coordinator, salon,
 
     [to_client] = to(CLIENT_PHONE)
     assert 'confirmó tu turno' in to_client
-    [to_ana] = to(ana.user.phone)
-    assert 'Carla confirmó' in to_ana
-    assert Notification.objects.get().verb == Notification.Verb.APPOINTMENT_CONFIRMED
+    assert to(ana.user.phone) == []
+    note = Notification.objects.get()
+    assert (note.recipient, note.verb) == (ana, Notification.Verb.APPOINTMENT_CONFIRMED)
 
 
 def test_accepting_your_own_request_is_not_news_to_you(request_for_ana, salon, ana):
@@ -365,6 +377,46 @@ def test_nothing_goes_out_at_night(salon, sent, now):
     queue(salon, 1)
 
     assert whatsapp.deliver_due() == (0, False)
+    assert sent == []
+
+
+def test_one_number_gets_at_most_a_few_an_hour(salon, sent, now):
+    now(local(10))
+    for n in range(whatsapp.PER_HOUR):
+        OutboundMessage.objects.create(tenant=salon, to=CLIENT_PHONE, body=f'old{n}',
+                                       sent_at=local(9, 30))
+    OutboundMessage.objects.create(tenant=salon, to=CLIENT_PHONE, body='new')
+    queue(salon, 1)
+
+    assert whatsapp.deliver_due() == (1, False)
+    assert [text for _, text in sent] == ['m0']  # the other number still gets its turn
+
+    now(local(10, 31))  # an hour after the last one
+    whatsapp.deliver_due()
+    assert sent[-1] == (CLIENT_PHONE, 'new')
+
+
+@pytest.mark.parametrize('limits', [
+    {'timelock': {'isActive': True}},
+    {'capping': {'cappingStatus': 'FIRST_WARNING'}},
+    {'capping': {'cappingStatus': 'CAPPED'}},
+])
+def test_a_restricted_number_sends_nothing(salon, sent, number, now, limits):
+    now(local(10))
+    queue(salon, 1)
+    number.update(limits)
+
+    assert whatsapp.deliver_due() == (0, False)
+    assert sent == []
+    assert OutboundMessage.objects.get().attempts == 0  # not a failure: it waits
+
+
+def test_waha_unable_to_say_is_a_failure(salon, sent, number, now):
+    now(local(10))
+    queue(salon, 1)
+    number['down'] = True
+
+    assert whatsapp.deliver_due() == (0, True)
     assert sent == []
 
 

@@ -12,8 +12,10 @@ Two channels:
   * push: a Notification row for a team member. The bell shows it at once; the
     sweep (send_reminders) pushes it to their devices.
   * WhatsApp from Kyo's number (WAHA, whatsapp.py): to the client of a public
-    request who ticked the box, and to a professional who saved a phone. Filed
-    here as an OutboundMessage; only the sweep sends, paced.
+    request who ticked the box. Filed here as an OutboundMessage; only the
+    sweep sends, paced. Never to the team: they have push, and every message
+    to someone who never wrote to that number is the pattern that gets it
+    banned.
 
 One rule for everyone: nobody is told about what they did themselves.
 
@@ -65,9 +67,8 @@ OWNERS = 'owners'  # who pays Kyo
 class Rule:
     # (verb, audience) per push row.
     push: tuple = ()
-    # WhatsApp from Kyo's number: to the opted-in clients, to the professional.
+    # WhatsApp from Kyo's number, to the opted-in clients.
     client_whatsapp: bool = False
-    professional_whatsapp: bool = False
 
 
 RULES = {
@@ -80,18 +81,9 @@ RULES = {
         (Verb.APPOINTMENT_REASSIGNED, PREVIOUS),
     )),
     CANCELLED: Rule(push=((Verb.APPOINTMENT_CANCELLED, PROFESSIONAL),)),
-    REQUESTED: Rule(
-        push=((Verb.APPOINTMENT_REQUESTED, PROFESSIONAL),),
-        client_whatsapp=True, professional_whatsapp=True,
-    ),
-    ACCEPTED: Rule(
-        push=((Verb.APPOINTMENT_CONFIRMED, PROFESSIONAL),),
-        client_whatsapp=True, professional_whatsapp=True,
-    ),
-    REJECTED: Rule(
-        push=((Verb.APPOINTMENT_REJECTED, PROFESSIONAL),),
-        client_whatsapp=True, professional_whatsapp=True,
-    ),
+    REQUESTED: Rule(push=((Verb.APPOINTMENT_REQUESTED, PROFESSIONAL),), client_whatsapp=True),
+    ACCEPTED: Rule(push=((Verb.APPOINTMENT_CONFIRMED, PROFESSIONAL),), client_whatsapp=True),
+    REJECTED: Rule(push=((Verb.APPOINTMENT_REJECTED, PROFESSIONAL),), client_whatsapp=True),
     # The professional never acted; telling them would be noise.
     EXPIRED: Rule(client_whatsapp=True),
     # Their own notice went unseen; the ones who run the diary are next.
@@ -133,8 +125,8 @@ def notify(event, *, appointment=None, tenant=None, actor=None, previous=None, r
         rows += [Notification(recipient=r, actor=actor, appointment=appointment, verb=verb) for r in recipients]
     Notification.objects.bulk_create(rows)
 
-    if (rule.client_whatsapp or rule.professional_whatsapp) and whatsapp.enabled_for(tenant):
-        _file_whatsapp(event, rule, appointment, actor, reason)
+    if rule.client_whatsapp and whatsapp.enabled_for(tenant):
+        _file_whatsapp(event, appointment, reason)
 
 
 def edited(appointment, *, actor, was_with, was_at):
@@ -159,37 +151,24 @@ def _audience(audience, tenant, appointment, previous):
     return list(members)
 
 
-def _file_whatsapp(event, rule, appointment, actor, reason):
+def _file_whatsapp(event, appointment, reason):
     shop = appointment.tenant
-    professional = appointment.professional
-    clients = list(appointment.clients.all())
     facts = {
         'shop': shop.name,
         'shop_phone': shop.phone.as_international,
         'service': appointment.service.name,
         'when': _when(appointment),
-        'pro': professional.display_name(),
-        'clients': ', '.join(client.name for client in clients),
-        'actor': actor.display_name() if actor else '',
+        'pro': appointment.professional.display_name(),
         'reason': reason,
     }
-    rows = []
-    if rule.client_whatsapp:
-        rows += [
-            OutboundMessage(
-                tenant=shop, appointment=appointment, to=client.phone,
-                body=_to_client(event, name=client.name.split()[0], **facts),
-            )
-            for client in clients
-            if client.whatsapp_opt_in and client.phone
-        ]
-    own_doing = actor is not None and actor.pk == professional.pk
-    if rule.professional_whatsapp and not own_doing and professional.user.phone:
-        rows.append(OutboundMessage(
-            tenant=shop, appointment=appointment, to=professional.user.phone,
-            body=_to_professional(event, **facts),
-        ))
-    OutboundMessage.objects.bulk_create(rows)
+    OutboundMessage.objects.bulk_create([
+        OutboundMessage(
+            tenant=shop, appointment=appointment, to=client.phone,
+            body=_to_client(event, name=client.name.split()[0], **facts),
+        )
+        for client in appointment.clients.all()
+        if client.whatsapp_opt_in and client.phone
+    ])
 
 
 # Not the locale's names: the server's locale is not something to depend on for
@@ -207,7 +186,7 @@ def _when(appointment):
 GREETINGS = ('Hola', 'Buenas', 'Qué tal')
 
 
-def _to_client(event, *, name, shop, shop_phone, service, when, pro, reason, **_):
+def _to_client(event, *, name, shop, shop_phone, service, when, pro, reason):
     hello = random.choice(GREETINGS)
     if event == REQUESTED:
         return (f'{hello} {name}, recibimos tu pedido de turno en {shop}: {service}, {when}, '
@@ -221,12 +200,3 @@ def _to_client(event, *, name, shop, shop_phone, service, when, pro, reason, **_
     because = f' Motivo: {reason}.' if reason else ''
     return (f'{hello} {name}, {shop} no puede tomar tu turno de {service} del {when}.{because} '
             f'Podés pedir otro horario o escribir al {shop_phone}.')
-
-
-def _to_professional(event, *, shop, service, when, clients, actor, **_):
-    if event == REQUESTED:
-        return (f'Nuevo pedido de turno en {shop}: {service}, {when}, de {clients}. '
-                f'Confirmalo o rechazalo en Kyo.')
-    if event == ACCEPTED:
-        return f'{actor} confirmó tu turno en {shop}: {service}, {when}, con {clients}.'
-    return f'{actor} rechazó el pedido de {clients} en {shop}: {service}, {when}.'

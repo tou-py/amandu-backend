@@ -12,8 +12,13 @@ WAHA's own "How to avoid blocking" guide:
     gets numbers banned.
   * A random GAP between recipients, and "typing" before each message.
   * Never at night in the business's own timezone (WAKING_HOURS).
+  * At most PER_HOUR messages to one number in an hour, the guide's figure.
+  * Before the first send of a run, WAHA is asked whether WhatsApp is holding
+    back messages to new contacts (463 timelock, 475 capping at any warning
+    stage); while it is, nothing goes out. Almost every message here is to a
+    new contact, so a run in that state only digs the hole deeper.
   * The first failure ends the run instead of hammering a session that may be
-    shadow-restricted (WAHA's 463/475) or unpaired. MAX_ATTEMPTS caps retries.
+    shadow-restricted or unpaired. MAX_ATTEMPTS caps retries.
     Nothing here ever restarts, logs out or re-pairs the session: the guide is
     explicit that both restrictions lift on their own and a restart makes it
     worse.
@@ -35,8 +40,10 @@ ponytail: no inbound side -- a client answering "BAJA" is not read. Add a WAHA
 webhook that clears Client.whatsapp_opt_in when replies start to matter.
 """
 
+import logging
 import random
 import time
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -45,8 +52,11 @@ from django.utils import timezone
 
 from apps.scheduling.models import OutboundMessage
 
+logger = logging.getLogger(__name__)
+
 MAX_ATTEMPTS = 5
 PER_TICK = 3
+PER_HOUR = 4  # messages to one number in any hour
 GAP = (30, 60)  # seconds between two recipients
 TYPING = (2, 8)  # seconds of "typing..." before a message, by its length
 WAKING_HOURS = range(8, 21)  # local hours a message may go out in
@@ -93,6 +103,27 @@ def _post(endpoint, payload):
     response.raise_for_status()
 
 
+def restricted():
+    """
+    Whether WhatsApp is holding back messages to new contacts: a 463 timelock,
+    or a 475 cap at any stage (FIRST_WARNING already means slow down). Raises
+    if WAHA cannot say.
+    """
+    timelock = _get('timelock')
+    capping = _get('capping')
+    return bool(timelock.get('isActive')) or capping.get('cappingStatus', 'NONE') != 'NONE'
+
+
+def _get(what):
+    response = requests.get(
+        f'{settings.WAHA_URL.rstrip("/")}/api/sessions/{settings.WAHA_SESSION}/{what}',
+        headers={'X-Api-Key': settings.WAHA_API_KEY},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _pause(seconds):
     time.sleep(seconds)
 
@@ -115,8 +146,22 @@ def deliver_due():
             break
         if timezone.localtime(timezone=ZoneInfo(message.tenant.timezone)).hour not in WAKING_HOURS:
             continue
+        if OutboundMessage.objects.filter(
+            to=message.to, sent_at__gte=timezone.now() - timedelta(hours=1),
+        ).count() >= PER_HOUR:
+            continue
         if sent:
             _pause(random.uniform(*GAP))
+        else:
+            # Asked only once there is something to send: an empty outbox
+            # costs WAHA nothing.
+            try:
+                if restricted():
+                    logger.warning('WhatsApp is limiting new contacts; the outbox waits.')
+                    return 0, False
+            except Exception:
+                logger.exception('WAHA could not say whether the number is restricted.')
+                return 0, True
         message.attempts += 1
         try:
             send(message.to, message.body)
