@@ -49,6 +49,24 @@ class Service(TenantOwnedMixin, TimestampMixin):
     # The object key of its picture in the image bucket, never a URL, so moving
     # the public domain needs no data migration (apps/commons/images.py).
     image_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
+    # Two more pictures for the public page's carousel, after `image_key` as the
+    # cover. Kind `gallery`: no thumbnail, since lists only ever show the cover.
+    # Two columns and not a table: the page shows at most three, in this order.
+    image_2_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
+    image_3_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
+
+    class ImageRatio(models.TextChoices):
+        # The phone camera's own shapes, so most photos are barely cropped.
+        PORTRAIT = '3:4', 'Portrait'
+        SQUARE = '1:1', 'Square'
+        LANDSCAPE = '4:3', 'Landscape'
+
+    # The shape the panel cropped the image to, picked by whoever uploads it.
+    # It describes the picture, so it only changes with a new one
+    # (ServiceSerializer.validate). 4:3 is what every image was before.
+    image_ratio = models.CharField(max_length=3, choices=ImageRatio.choices, default=ImageRatio.LANDSCAPE)
+    # One line under the name on the public page's card ("Incluye lavado").
+    description = models.CharField(max_length=140, blank=True)
 
     class Meta:
         db_table = 'tb_service'

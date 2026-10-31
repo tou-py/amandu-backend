@@ -9,8 +9,8 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="Reservar turno en {{ shop.name }}">
 <meta property="og:description" content="Elegí el servicio, mirá los horarios libres y pedí tu turno.">
-<meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1a1715" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f5f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14110f" media="(prefers-color-scheme: dark)">
 {% comment %}Structured data straight off the shop's own WorkSchedule rows, so what a
    search engine prints as opening hours is what the diary actually enforces.
    A block comment: {# #} is single-line only, and the old two-line one was
@@ -50,10 +50,11 @@
      stranger on cellular should not wait on a webfont to read a price, and
      Kyo's display voice was never the typeface anyway -- it is the tracking.
 
-     Where this departs from the panel, it is for the reader: lozenges and
-     small print are a size up (12px, not 10px), because the panel is glanced
-     at by staff who know it and this page is read once by somebody who
-     does not.
+     The layout is the "escaparate": a compact band with who the shop is,
+     then one decision per screen in big cards with the shop's own pictures,
+     and the soonest free hour in a bar at the foot while services are
+     browsed. The band reads --band/--band-ink, so a shop's own palette can
+     take it over later without touching the markup.
   --------------------------------------------------------------------- */
   :root {
     color-scheme: light dark;
@@ -71,18 +72,21 @@
 
     --accent: #1c1917;
     --accent-ink: #ffffff;
+    --band: #f5f5f4;
+    --band-ink: #1c1917;
     --signal-ink: #be123c;
     --signal-bg: #fff1f2;
 
     --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.06);
     --shadow-md: 0 4px 12px -2px rgba(28, 25, 23, 0.1), 0 2px 4px -2px rgba(28, 25, 23, 0.06);
+    --shadow-dock: 0 10px 30px -10px rgba(28, 25, 23, 0.35);
 
     --kyo-ambar: #fda23b;
     --kyo-naranja: #f5763a;
     --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
     --radius: 12px;
-    --radius-lg: 16px;
+    --radius-lg: 18px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -99,11 +103,14 @@
 
       --accent: #f5f3f1;
       --accent-ink: #1a1715;
+      --band: #14110f;
+      --band-ink: #f5f3f1;
       --signal-ink: #fb7185;
       --signal-bg: #3f1620;
 
       --shadow-sm: none;
       --shadow-md: none;
+      --shadow-dock: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
     }
   }
 
@@ -138,6 +145,7 @@
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   [id] { scroll-margin-top: 1rem; }
+  img { max-width: 100%; }
 
   .skip {
     position: absolute; left: 1rem; top: -4rem;
@@ -165,165 +173,154 @@
     stroke-linecap: round; stroke-linejoin: round;
   }
 
-  /* --- layout ---------------------------------------------------------- */
+  .wrap { max-width: 40rem; margin: 0 auto; padding: 1.25rem 1rem 2rem; }
 
-  .wrap { max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
-  @media (min-width: 960px) {
-    /* Two columns on a desk: who and what stays in view while you pick. */
-    .wrap.split {
-      max-width: 64rem;
-      display: grid; grid-template-columns: 21rem minmax(0, 1fr);
-      gap: 4rem; align-items: start; padding-top: 3.5rem;
-    }
-    .split > .hero { position: sticky; top: 2rem; }
+  /* --- the band: who the shop is, in one row --------------------------- */
+
+  .band { background: var(--band); color: var(--band-ink); }
+  .band .in {
+    max-width: 40rem; margin: 0 auto; padding: 1rem;
+    display: flex; align-items: center; gap: .8rem;
   }
-
-  /* --- the hero: who, whether they are open, and the soonest hour ------ */
-
-  .hero { padding: 0 0 2rem; }
-  /* The shop's own mark above its name, so somebody arriving from Instagram
-     sees the place they meant. A rounded square and not a disc: a logo is
-     drawn to its own shape, and a circle would crop wordmarks. A fixed
-     height with a capped width, contained: a wordmark gets the width, and an
-     upload of any shape never shifts the hero more than 56px down. In dark
-     the light canvas shows behind it, so a black mark does not vanish; no
-     padding, so a photo is not framed. */
-  .logo {
-    display: block; margin: 1rem 0 0; box-sizing: border-box;
-    width: auto; height: 56px; max-width: min(224px, 100%);
-    border-radius: var(--radius); object-fit: contain;
+  .band .id { min-width: 0; display: grid; gap: .1rem; }
+  .band h1 {
+    font-size: 1.4rem; line-height: 1.2; margin: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .band .status { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; font-weight: 600; opacity: .85; }
+  .band .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .band .status.closed { font-weight: 500; }
+
+  /* The shop's mark, drawn by what the panel measured of it on upload: a
+     wordmark wide and bare, a mark in a square tile, a logo with a ground of
+     its own on that ground. A drawing with no ground gets a plate only where
+     it would vanish: a dark one on a dark page, a light one on a light page. */
+  .logo { display: grid; place-items: center; flex: none; overflow: hidden; border-radius: var(--radius); }
+  .logo:not(.wide) { width: 48px; height: 48px; }
+  .logo.wide { height: 36px; max-width: 160px; }
+  .logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .logo.wide img { width: auto; }
+  .logo.plated { border: 1px solid var(--border); padding: 3px; }
+  .logo.ink-light:not(.plated) { background: #1c1917; padding: 4px; }
   @media (prefers-color-scheme: dark) {
-    .logo { background: #fafaf9; }
+    .logo.ink-light:not(.plated) { background: none; padding: 0; }
+    .logo.ink-dark:not(.plated) { background: #fafaf9; padding: 4px; }
   }
-  .status { background: var(--sunken); color: var(--ink-secondary); }
-  .status.now { background: var(--accent); color: var(--accent-ink); }
-  .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-  h1 {
-    font-size: clamp(2.25rem, 10vw, 3.25rem);
-    line-height: 1.1;
-    margin: .85rem 0 .6rem;
-    text-wrap: balance;
-    overflow-wrap: anywhere;
-  }
-  .promise { color: var(--ink-secondary); margin: 0 0 1rem; max-width: 26rem; }
-  .contact {
-    display: inline-flex; align-items: center; gap: .5rem;
-    min-height: 44px; margin: 0 0 1.25rem;
-    color: var(--ink-secondary); font-size: .95rem; text-decoration: none;
-  }
-  .contact:hover { color: var(--ink); text-decoration: underline; }
 
-  /* The one fact somebody arrives for, made the thing they can press. */
-  .next {
-    display: block;
-    background: var(--surface);
+  /* --- the step: where you are, and the way back ------------------------- */
+
+  .steptop { display: flex; align-items: center; gap: .75rem; margin: 0 0 .25rem; }
+  .back {
+    display: grid; place-items: center; flex: none;
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 1px solid var(--border); background: var(--surface); text-decoration: none;
+  }
+  .progress { flex: 1; display: flex; gap: 5px; }
+  .progress i { flex: 1; height: 4px; border-radius: 4px; background: var(--border); }
+  .progress i.on { background: var(--accent); }
+  .steplabel { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin: .75rem 0 .25rem; }
+  /* The one big type on the page: the band stays small on purpose, so the
+     question being asked is what leads. */
+  .steplabel h2 { font-size: 1.75rem; line-height: 1.15; margin: 0; letter-spacing: -.03em; }
+  .steplabel span { font-size: .8rem; font-weight: 600; color: var(--ink-subtle); white-space: nowrap; }
+  .summary { margin: 0 0 1.25rem; color: var(--ink-secondary); font-size: .95rem; }
+  .step-body { margin-top: 1rem; }
+
+  /* --- services: big cards with the shop's own pictures ------------------ */
+
+  .cat { margin: 0 0 1.75rem; }
+  .cat h3 { font-size: 1.05rem; margin: 0 0 .75rem; letter-spacing: -.01em; }
+  .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
+  /* A card is not one link: the carousel inside it has controls of its own,
+     and a control cannot sit inside a link. Each picture and the text are
+     links to the same next step instead, so a tap anywhere still goes on. */
+  .card {
+    display: grid; gap: .55rem; padding: .5rem .5rem .9rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
+    transition: border-color 140ms var(--ease-out);
+  }
+  /* A 1200px picture must not widen its track past the phone: the card's
+     one column is capped, and a slide (a flex item with an aspect ratio)
+     may shrink below the picture's own width. */
+  .cards, .card { grid-template-columns: minmax(0, 1fr); }
+  .cards > li, .card > *, .slide { min-width: 0; }
+  @media (hover: hover) { .card:hover { border-color: var(--border-strong); } }
+  .card .text { display: grid; gap: .2rem; padding: 0 .5rem; text-decoration: none; transition: transform 140ms var(--ease-out); }
+  .card .text:active { transform: scale(.99); }
+  .card strong { font-size: 1.1rem; line-height: 1.3; overflow-wrap: anywhere; }
+  .card .desc { color: var(--ink-secondary); font-size: .95rem; overflow-wrap: anywhere; }
+  .card .meta { color: var(--ink-subtle); font-size: .9rem; }
+  .card .meta b { color: var(--ink); font-weight: 650; }
+
+  /* The cover and up to two more, one whole picture at a time, swiped
+     sideways: CSS scroll-snap, no script. Each slide carries its own "1/3"
+     and, while there is another to its right, an arrow at its edge, so what
+     they say is right with no script tracking the scroll. */
+  .gallery { position: relative; }
+  .carousel {
+    display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
+    border-radius: var(--radius); scrollbar-width: none;
+  }
+  .carousel::-webkit-scrollbar { display: none; }
+  .slide { position: relative; display: block; flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--sunken); }
+
+  /* Where the browser draws carousel buttons itself (Chrome 135+, Android
+     included), the arrows are real buttons, still without a script: they
+     scroll one picture, hide at either end, and leave no history entry.
+     Elsewhere the per-slide arrow below stays as the hint to swipe. */
+  .carousel::scroll-button(*) {
+    position: absolute; top: 50%; translate: 0 -50%;
+    width: 36px; height: 36px; border: 0; border-radius: 50%;
+    background: rgba(0, 0, 0, .55); color: #fff;
+    font: 700 1.4rem/1 system-ui, sans-serif; cursor: pointer;
+  }
+  .carousel::scroll-button(right) { content: "›" / "Foto siguiente"; right: .5rem; }
+  .carousel::scroll-button(left) { content: "‹" / "Foto anterior"; left: .5rem; }
+  .carousel::scroll-button(*):disabled { opacity: 0; pointer-events: none; }
+  /* A property shipped with the buttons: `selector(::scroll-button(...))`
+     is not recognised by the browsers that draw them. */
+  @supports (scroll-marker-group: after) { .carousel .slide .more { display: none; } }
+  .slide img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .slide .count, .slide .more {
+    position: absolute; display: grid; place-items: center;
+    background: rgba(0, 0, 0, .55); color: #fff; font-weight: 700;
+  }
+  .slide .count { right: .5rem; top: .5rem; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .slide .more { right: .5rem; top: 50%; width: 32px; height: 32px; margin-top: -16px; border-radius: 50%; }
+  .slide .more .icon { width: 18px; height: 18px; stroke-width: 2.2; }
+
+  /* --- who: portrait cards --------------------------------------------- */
+
+  .pros { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
+  @media (min-width: 560px) { .pros { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .pro { display: grid; gap: .35rem; text-decoration: none; }
+  .pro .ph {
+    aspect-ratio: 3 / 4; border-radius: var(--radius-lg); overflow: hidden;
+    display: grid; place-items: center;
+    background: var(--sel-bg); color: var(--sel-ink);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
-    padding: 1.1rem 1.2rem;
-    text-decoration: none;
     transition: border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
   }
-  .next .when {
-    display: block;
-    font-size: 1.6rem; line-height: 1.15;
-    margin: .2rem 0 .5rem;
-  }
-  .next .go {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-top: .9rem; padding-top: .8rem;
-    border-top: 1px solid var(--border);
-    font-weight: 650; font-size: .95rem;
-  }
-  .next:active { transform: scale(.985); }
-  @media (hover: hover) { .next:hover { border-color: var(--border-strong); } }
+  .pro .ph img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; }
+  .pro .ph .initials { font-size: 2rem; font-weight: 700; letter-spacing: .5px; }
+  .pro.any .ph { background: var(--sunken); color: var(--ink-secondary); }
+  .pro.any .ph .icon { width: 44px; height: 44px; stroke-width: 1.3; }
+  .pro strong { font-size: 1rem; }
+  .pro small { color: var(--ink-subtle); font-size: .85rem; line-height: 1.3; }
+  .pro:active .ph { transform: scale(.98); }
+  @media (hover: hover) { .pro:hover .ph { border-color: var(--border-strong); } }
 
   .who-line { display: inline-flex; align-items: center; gap: .45rem; color: var(--ink-secondary); font-size: .95rem; }
-
-  /* Initials on the professional's own tint: the panel's avatar, drawn with
-     the pale/deep pair so it reads without a white card behind it. */
   .avatar {
     display: inline-flex; align-items: center; justify-content: center; flex: none;
     width: 28px; height: 28px; border-radius: 50%;
     background: var(--sel-bg); color: var(--sel-ink);
     font-size: 11px; font-weight: 700; letter-spacing: .3px;
   }
-  /* A photo sits in the same 1:1 disc, cropped to fill it; the tint shows
-     until it loads. */
-  img.avatar { aspect-ratio: 1; object-fit: cover; }
-  .avatar.any { background: var(--sunken); color: var(--ink-secondary); }
-  .avatar.any .icon { width: 16px; height: 16px; }
+  img.avatar { aspect-ratio: 1; object-fit: cover; object-position: 50% 30%; }
 
-  /* --- steps ----------------------------------------------------------- */
-
-  .step { margin: 0 0 2.25rem; }
-  .step-head { display: flex; align-items: center; gap: .6rem; margin: 0 0 .9rem; }
-  .step-head h2 { font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; margin: 0; }
-  .step-head .n {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; border-radius: 50%;
-    background: var(--sunken); color: var(--ink-secondary);
-    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
-  }
-  .hint { margin: .6rem 0 0; color: var(--ink-subtle); font-size: .9rem; }
-
-  /* Services: a list, because a name, a length and a price are read as a
-     row, and the price is half of why somebody picks. */
-  .options {
-    list-style: none; margin: 0; padding: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
-    overflow: hidden;
-  }
-  .options li + li { border-top: 1px solid var(--border); }
-  .option {
-    display: flex; align-items: center; gap: .9rem;
-    min-height: 56px; padding: .75rem 1rem;
-    text-decoration: none;
-    transition: background-color 140ms var(--ease-out);
-  }
-  /* What the service looks like: its thumbnail in a fixed 4:3 box, cropped
-     to fill it, at the row's own height so a list with and without images
-     keeps one rhythm. */
-  .option .thumb {
-    flex: none; width: 64px; height: 48px; aspect-ratio: 4 / 3;
-    border-radius: var(--radius); object-fit: cover;
-    background: var(--sunken);
-  }
-  .option .name { flex: 1; min-width: 0; font-weight: 550; overflow-wrap: anywhere; }
-  .option .meta { color: var(--ink-subtle); font-size: .9rem; text-align: right; white-space: nowrap; }
-  .option .meta b { display: block; color: var(--ink); font-weight: 600; }
-  .radio {
-    flex: none; width: 20px; height: 20px; border-radius: 50%;
-    border: 1.5px solid var(--border-strong);
-    display: inline-flex; align-items: center; justify-content: center;
-  }
-  .option[aria-current="true"] .radio { border-color: var(--accent); background: var(--accent); }
-  .option[aria-current="true"] .radio::after {
-    content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink);
-  }
-  @media (hover: hover) { .option:hover { background: var(--hover); } }
-
-  /* Professionals: chips, each with the person's own tint. */
-  .chips { display: flex; flex-wrap: wrap; gap: .5rem; padding: 0; margin: 0; list-style: none; }
-  .chip {
-    display: inline-flex; align-items: center; gap: .5rem;
-    min-height: 44px; padding: .4rem .95rem .4rem .45rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    box-shadow: var(--shadow-sm);
-    text-decoration: none; font-size: .95rem; font-weight: 550;
-    transition: border-color 140ms var(--ease-out), background-color 140ms var(--ease-out), transform 140ms var(--ease-out);
-  }
-  .chip:active { transform: scale(.97); }
-  .chip[aria-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-  @media (hover: hover) { .chip:hover { border-color: var(--border-strong); } }
-
-  /* --- the signature: two weeks of the shop's book --------------------- */
+  /* --- when: two weeks of the shop's book ------------------------------- */
 
   .month { margin: 0 0 .5rem; color: var(--ink-secondary); font-size: .9rem; font-weight: 600; }
   .month::first-letter { text-transform: uppercase; }
@@ -359,17 +356,17 @@
   .times {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(5.25rem, 1fr)); gap: .5rem;
   }
-  .slot { position: relative; display: block; cursor: pointer; }
+  .slot { position: relative; display: block; cursor: pointer; text-decoration: none; }
   .slot input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-  .slot span {
+  .slot span, a.slot {
     display: flex; align-items: center; justify-content: center;
     min-height: 48px; border-radius: var(--radius);
     background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm);
     font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em;
     transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
   }
-  .slot:active span { transform: scale(.96); }
-  @media (hover: hover) { .slot:hover span { border-color: var(--border-strong); } }
+  .slot:active span, a.slot:active { transform: scale(.96); }
+  @media (hover: hover) { .slot:hover span, a.slot:hover { border-color: var(--border-strong); } }
   /* The appointment block from the staff panel: the person's pale tint with
      its own deeper ink, the selection and the name of whose hour it is. */
   .slot input:checked + span { background: var(--sel-bg); color: var(--sel-ink); border-color: var(--sel-bg); }
@@ -377,7 +374,7 @@
 
   /* --- form ------------------------------------------------------------ */
 
-  .card {
+  .card-box {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -442,19 +439,46 @@
   }
   .notice p { margin: 0; }
 
-  /* --- the confirmation ------------------------------------------------ */
+  /* --- the ticket: what is being asked for ------------------------------ */
 
-  .done { text-align: center; padding-top: 1rem; }
-  .done h1 { font-size: clamp(2rem, 8vw, 2.6rem); }
-  .done .lede { color: var(--ink-secondary); margin: 0 auto 1.75rem; max-width: 24rem; }
-  .ticket { text-align: left; padding: 0; overflow: hidden; }
-  .ticket .top { padding: 1.25rem 1.2rem 1.1rem; }
-  .ticket .when { display: block; font-size: 1.6rem; line-height: 1.15; margin: .25rem 0 .75rem; }
+  .ticket { text-align: left; padding: 0; overflow: hidden; margin: 0 0 1.25rem; }
+  .ticket .top { padding: 1.1rem 1.2rem 1rem; }
+  .ticket .when { display: block; font-size: 1.5rem; line-height: 1.15; margin: .25rem 0 .6rem; }
   .ticket .when::first-letter { text-transform: uppercase; }
   .ticket dl { margin: 0; padding: .9rem 1.2rem; border-top: 1px dashed var(--border-strong); display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; font-size: .95rem; }
   .ticket dt { color: var(--ink-subtle); }
   .ticket dd { margin: 0; text-align: right; font-weight: 550; }
   .pending { background: var(--accent); color: var(--accent-ink); }
+
+  /* --- the soonest hour, at the foot while services are browsed ---------- */
+
+  .dock {
+    position: sticky; bottom: 0; z-index: 2;
+    padding: 0 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+  .dock a {
+    max-width: 38rem; margin: 0 auto;
+    display: flex; align-items: center; gap: .75rem;
+    padding: .6rem .6rem .6rem .8rem;
+    background: var(--surface); color: var(--ink); text-decoration: none;
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-dock);
+  }
+  .dock .ic { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--radius); background: var(--sunken); }
+  .dock .w { flex: 1; min-width: 0; line-height: 1.25; }
+  .dock small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-subtle); }
+  .dock strong { font-size: 1rem; }
+  .dock .sv { display: block; font-size: .85rem; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock .go {
+    flex: none; padding: .6rem .9rem; border-radius: var(--radius);
+    background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: .95rem;
+  }
+
+  /* --- the confirmation ------------------------------------------------ */
+
+  .done { text-align: center; padding-top: 1rem; }
+  .done h1 { font-size: clamp(2rem, 8vw, 2.6rem); line-height: 1.1; margin: .5rem 0 .6rem; }
+  .done .lede { color: var(--ink-secondary); margin: 0 auto 1.75rem; max-width: 24rem; }
   .actions { display: grid; gap: .6rem; margin: 1.5rem 0 0; }
   .button-link {
     display: flex; align-items: center; justify-content: center; gap: .5rem;
@@ -478,9 +502,8 @@
   /* --- footer ---------------------------------------------------------- */
 
   .foot {
-    grid-column: 1 / -1;
     display: flex; align-items: center; justify-content: center; gap: .5rem;
-    margin: 3rem 0 0; font-size: .85rem; color: var(--ink-subtle);
+    margin: 2.5rem 0 0; font-size: .85rem; color: var(--ink-subtle);
   }
   .foot svg { height: 18px; width: auto; color: var(--ink); }
   .kyo-sol-a { fill: var(--kyo-ambar); }
@@ -494,7 +517,22 @@
 </head>
 <body class="h{{ hue|default:0 }}">
 {% timezone shop_timezone %}
-{% if not booked_at and not unconfigured %}<a class="skip" href="#cuando">Ir a los horarios</a>{% endif %}
+
+<header class="band">
+  <div class="in">
+    {% if logo %}<span class="logo{% if logo.wide %} wide{% endif %} ink-{{ logo.ink }}{% if logo.background %} plated{% endif %}"{% if logo.background %} style="background: {{ logo.background }}"{% endif %}><img src="{{ logo.url }}" alt="Logo de {{ shop.name }}"></span>{% endif %}
+    <div class="id">
+      {% if booked_at %}<p class="amandu-display" style="margin:0;font-size:1.25rem">{{ shop.name }}</p>{% else %}<h1 class="amandu-display">{{ shop.name }}</h1>{% endif %}
+      {% if not unconfigured %}
+        {% if open_until %}
+          <span class="status"><span class="dot" aria-hidden="true"></span>Abierto hasta las {{ open_until|time:"H:i" }}</span>
+        {% else %}
+          <span class="status closed">Cerrado ahora · reservá igual</span>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</header>
 
 {% if booked_at %}
   <main class="wrap done">
@@ -517,7 +555,7 @@
     <h1 class="amandu-display">¡Pedido enviado!</h1>
     <p class="lede">Lo mandamos a {{ shop.name }}. Te confirman ellos — hasta entonces el horario te queda guardado.</p>
 
-    <div class="card ticket">
+    <div class="card-box ticket">
       <div class="top">
         <span class="amandu-lozenge pending">Esperando confirmación</span>
         <strong class="when amandu-display amandu-time">{{ booked_at|date:"l j" }} de {{ booked_at|date:"F" }}, {{ booked_at|time:"H:i" }}</strong>
@@ -549,184 +587,201 @@
 
 {% elif unconfigured %}
   <main class="wrap">
-    <header class="hero">
-      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" height="56">{% endif %}
-      <h1 class="amandu-display">{{ shop.name }}</h1>
-      <div class="notice">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
-        <p>Este negocio todavía no cargó sus servicios ni sus horarios, así que por ahora no se puede reservar en línea.</p>
-      </div>
-      {% if shop.phone %}
-        <p><a class="contact" href="tel:{{ shop.phone.as_e164 }}">Llamar al {{ shop.phone.as_international }}</a></p>
-      {% endif %}
-    </header>
+    <div class="notice">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <p>Este negocio todavía no cargó sus servicios ni sus horarios, así que por ahora no se puede reservar en línea.</p>
+    </div>
+    {% if shop.phone %}
+      <p><a class="button-link quiet" href="tel:{{ shop.phone.as_e164 }}">Llamar al {{ shop.phone.as_international }}</a></p>
+    {% endif %}
 
 {% else %}
-  <main class="wrap split">
-    <header class="hero">
-      {% if open_until %}
-        <span class="amandu-lozenge status now"><span class="dot" aria-hidden="true"></span>Abierto hasta las {{ open_until|time:"H:i" }}</span>
-      {% else %}
-        <span class="amandu-lozenge status">Cerrado ahora · reservá igual</span>
-      {% endif %}
+  <main class="wrap" id="paso">
+    {% if back_href %}
+      <nav class="steptop" aria-label="Pasos">
+        <a class="back" href="{{ back_href }}" aria-label="Volver al paso anterior"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg></a>
+        <div class="progress" aria-hidden="true">{% for on in progress %}<i{% if on %} class="on"{% endif %}></i>{% endfor %}</div>
+      </nav>
+    {% endif %}
+    <div class="steplabel"><h2>{{ step_title }}</h2><span>Paso {{ step_number }} de {{ step_count }}</span></div>
+    {% if step != "servicio" %}
+      <p class="summary">{{ service.name }}{% if step != "profesional" %} · {% if professional %}con {{ professional.display_name }}{% else %}con quien esté libre{% endif %}{% endif %}{% if picked %} · <span class="amandu-time">{{ picked|date:"l j" }}, {{ picked|time:"H:i" }}</span>{% endif %}</p>
+    {% endif %}
 
-      {% if logo_url %}<img class="logo" src="{{ logo_url }}" alt="Logo de {{ shop.name }}" height="56">{% endif %}
-      <h1 class="amandu-display">{{ shop.name }}</h1>
-      <p class="promise">Elegí el servicio y el horario que te sirven, y pedilo. Te confirman desde el negocio.</p>
-      {% if shop.phone %}
-        <a class="contact" href="tel:{{ shop.phone.as_e164 }}">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h3.5l1.5 4-2 1.5a11 11 0 0 0 6.5 6.5l1.5-2 4 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>
-          {{ shop.phone.as_international }}
-        </a>
-      {% endif %}
-
-      {% if first_slot %}
-        <a class="next" href="{{ first_href }}">
-          <span class="amandu-eyebrow">Lo más cercano</span>
-          <strong class="when amandu-display amandu-time">{% if first_is_today %}Hoy{% else %}{{ first_slot|date:"l j" }} de {{ first_slot|date:"F" }}{% endif %} a las {{ first_slot|time:"H:i" }}</strong>
-          {% if professional %}
-            <span class="who-line">{% if professional.photo_url %}<img class="avatar" src="{{ professional.photo_url }}" alt="" width="28" height="28">{% else %}<span class="avatar" aria-hidden="true">{{ professional.initials }}</span>{% endif %}con {{ professional.display_name }}</span>
-          {% else %}
-            <span class="who-line"><span class="avatar any" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>con quien esté libre</span>
-          {% endif %}
-          <span class="go">Reservar este horario <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
-        </a>
-      {% endif %}
-    </header>
-
-    <div class="steps">
-      <section class="step" id="servicio" aria-labelledby="h-servicio">
-        <div class="step-head"><span class="n" aria-hidden="true">1</span><h2 id="h-servicio">Servicio</h2></div>
-        <ul class="options">
-          {% for option in services %}
-            <li><a class="option" href="{{ option.href }}" aria-current="{% if option.pk == service.pk %}true{% else %}false{% endif %}">
-              <span class="radio" aria-hidden="true"></span>
-              {% if option.thumb_url %}<img class="thumb" src="{{ option.thumb_url }}" alt="" width="64" height="48" loading="lazy">{% endif %}
-              <span class="name">{{ option.name }}</span>
-              <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b>{% endif %}{{ option.duration_minutes }} min</span>
-            </a></li>
-          {% endfor %}
-        </ul>
-      </section>
-
-      {% if professionals|length > 1 %}
-        <section class="step" id="profesional" aria-labelledby="h-profesional">
-          <div class="step-head"><span class="n" aria-hidden="true">2</span><h2 id="h-profesional">Con quién</h2></div>
-          <ul class="chips">
-            <li><a class="chip" href="{{ anyone_href }}" aria-current="{% if professional %}false{% else %}true{% endif %}">
-              <span class="avatar any" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>
-              Cualquiera
-            </a></li>
-            {% for option in professionals %}
-              <li><a class="chip h{{ option.hue }}" href="{{ option.href }}" aria-current="{% if option.pk == professional.pk %}true{% else %}false{% endif %}">
-                {% if option.photo_url %}<img class="avatar" src="{{ option.photo_url }}" alt="" width="28" height="28" loading="lazy">{% else %}<span class="avatar" aria-hidden="true">{{ option.initials }}</span>{% endif %}
-                {{ option.display_name }}
-              </a></li>
+    <div class="step-body">
+    {% if step == "servicio" %}
+      {% for name, items in categories %}
+        <section class="cat"{% if name %} aria-label="{{ name }}"{% endif %}>
+          {% if name %}<h3>{{ name }}</h3>{% endif %}
+          <ul class="cards">
+            {% for option in items %}
+              <li class="card">
+                {% if option.slides %}
+                  {% comment %}The pictures repeat the card's link, out of the tab
+                     order and hidden from screen readers: the text link below
+                     names the service, once.{% endcomment %}
+                  <div class="gallery">
+                    <div class="carousel"{% if option.slides|length > 1 %} aria-label="Fotos de {{ option.name }}"{% endif %}>
+                      {% for src in option.slides %}
+                        <a class="slide" href="{{ option.href }}" tabindex="-1" aria-hidden="true" style="aspect-ratio: {{ option.ratio }}"><img src="{{ src }}" alt="" loading="lazy">{% if option.slides|length > 1 %}<span class="count">{{ forloop.counter }}/{{ option.slides|length }}</span>{% if not forloop.last %}<span class="more"><svg class="icon" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg></span>{% endif %}{% endif %}</a>
+                      {% endfor %}
+                    </div>
+                  </div>
+                {% endif %}
+                <a class="text" href="{{ option.href }}">
+                  <strong>{{ option.name }}</strong>
+                  {% if option.description %}<span class="desc">{{ option.description }}</span>{% endif %}
+                  <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b> · {% endif %}{{ option.duration_minutes }} min</span>
+                </a>
+              </li>
             {% endfor %}
           </ul>
-          {% if not professional %}<p class="hint">Ves los horarios de todo el equipo, y te atiende quien esté libre a esa hora.</p>{% endif %}
         </section>
+      {% endfor %}
+
+    {% elif step == "profesional" %}
+      <ul class="pros">
+        <li><a class="pro any" href="{{ anyone_href }}">
+          <span class="ph" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>
+          <strong>Cualquiera</strong>
+          <small>Te atiende quien esté libre a esa hora</small>
+        </a></li>
+        {% for option in professionals %}
+          <li><a class="pro h{{ option.hue }}" href="{{ option.href }}">
+            <span class="ph">{% if option.photo_url %}<img src="{{ option.photo_url }}" alt="" loading="lazy">{% else %}<span class="initials" aria-hidden="true">{{ option.initials }}</span>{% endif %}</span>
+            <strong>{{ option.display_name }}</strong>
+          </a></li>
+        {% endfor %}
+      </ul>
+
+    {% elif step == "cuando" %}
+      {% if day %}
+        <p class="month">{{ days.0.date|date:"F" }}{% with last=days|last %}{% if last.date.month != days.0.date.month %} – {{ last.date|date:"F" }}{% endif %}{% endwith %}</p>
+        <ol class="days">
+          {% for one in days %}
+            <li>
+              {% if one.slots %}
+                <a class="d" href="{{ one.href }}"{% if one.date == day.date %} aria-current="date"{% endif %} aria-label="{{ one.date|date:'l j' }} de {{ one.date|date:'F' }}, {{ one.slots|length }} horario{{ one.slots|length|pluralize }}">
+                  <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
+                </a>
+              {% else %}
+                <span class="d" aria-label="{{ one.date|date:'l j' }}: sin horarios">
+                  <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
+                </span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ol>
+
+        <section id="cuando" aria-labelledby="h-day">
+          <h3 class="day-title" id="h-day">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</h3>
+          <p class="day-sub">{{ day.slots|length }} horario{{ day.slots|length|pluralize }} libre{{ day.slots|length|pluralize }} · {{ service.name }}, {{ service.duration_minutes }} min</p>
+          {% for name, slots in periods %}
+            <div class="period">
+              <p class="amandu-eyebrow">{{ name }}</p>
+              <div class="times">
+                {% for slot in slots %}<a class="slot" href="{{ slot.href }}"><time datetime="{{ slot.at.isoformat }}">{{ slot.at|time:"H:i" }}</time></a>{% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+        </section>
+      {% else %}
+        <div class="notice">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+          <p>No quedan horarios libres en las próximas dos semanas para este servicio{% if professional %} con {{ professional.display_name }}{% endif %}. Probá con otro servicio{% if professional %} o con otra persona{% endif %}{% if shop.phone %}, o llamá al {{ shop.phone.as_international }}{% endif %}.</p>
+        </div>
       {% endif %}
 
-      <form method="post" action="#datos" novalidate>
+    {% else %}
+      {% if error_list %}
+        <div class="alert" role="alert" tabindex="-1" autofocus aria-labelledby="h-alert">
+          <h2 id="h-alert">Revisá {% if error_list|length > 1 %}estos datos{% else %}este dato{% endif %}</h2>
+          <ul>{% for anchor, message in error_list %}<li><a href="#{{ anchor }}">{{ message }}</a></li>{% endfor %}</ul>
+        </div>
+      {% endif %}
+
+      <form method="post" novalidate>
         <input type="hidden" name="service" value="{{ service.pk }}">
         <input type="hidden" name="professional" value="{{ professional.pk|default:'' }}">
         <input type="hidden" name="day" value="{{ day.date.isoformat }}">
 
-        <section class="step" id="cuando" aria-labelledby="h-cuando">
-          <div class="step-head"><span class="n" aria-hidden="true">{% if professionals|length > 1 %}3{% else %}2{% endif %}</span><h2 id="h-cuando">Día y hora</h2></div>
-
-          {% if day %}
-            <p class="month">{{ days.0.date|date:"F" }}{% with last=days|last %}{% if last.date.month != days.0.date.month %} – {{ last.date|date:"F" }}{% endif %}{% endwith %}</p>
-            <ol class="days">
-              {% for one in days %}
-                <li>
-                  {% if one.slots %}
-                    <a class="d" href="{{ one.href }}"{% if one.date == day.date %} aria-current="date"{% endif %} aria-label="{{ one.date|date:'l j' }} de {{ one.date|date:'F' }}, {{ one.slots|length }} horario{{ one.slots|length|pluralize }}">
-                      <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
-                    </a>
-                  {% else %}
-                    <span class="d" aria-label="{{ one.date|date:'l j' }}: sin horarios">
-                      <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
-                    </span>
-                  {% endif %}
-                </li>
-              {% endfor %}
-            </ol>
-
-            <fieldset aria-describedby="{% if errors.start %}e-start{% endif %}">
-              <legend class="day-title">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</legend>
-              <p class="day-sub">{{ day.slots|length }} horario{{ day.slots|length|pluralize }} libre{{ day.slots|length|pluralize }} · {{ service.name }}, {{ service.duration_minutes }} min</p>
-              {% if errors.start %}<p class="error" id="e-start">{{ errors.start.0 }}</p>{% endif %}
-              {% for name, slots in periods %}
-                <div class="period">
-                  <p class="amandu-eyebrow">{{ name }}</p>
-                  <div class="times">
-                    {% for slot in slots %}
-                      <label class="slot">
-                        <input type="radio" name="start" value="{{ slot.isoformat }}" required{% if slot.isoformat == picked_start %} checked{% endif %}>
-                        <span>{{ slot|time:"H:i" }}</span>
-                      </label>
-                    {% endfor %}
-                  </div>
+        {% if errors.start and day %}
+          {% comment %}The hour picked was taken, or is not one on offer: the day's
+             hours again, as choices in the form, so what was typed below stays.{% endcomment %}
+          <fieldset id="cuando" class="card-box" style="margin:0 0 1.25rem" aria-describedby="e-start">
+            <legend class="day-title">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</legend>
+            <p class="error" id="e-start">{{ errors.start.0 }}</p>
+            {% for name, slots in periods %}
+              <div class="period">
+                <p class="amandu-eyebrow">{{ name }}</p>
+                <div class="times">
+                  {% for slot in slots %}
+                    <label class="slot">
+                      <input type="radio" name="start" value="{{ slot.at.isoformat }}" required>
+                      <span>{{ slot.at|time:"H:i" }}</span>
+                    </label>
+                  {% endfor %}
                 </div>
-              {% endfor %}
-            </fieldset>
-          {% else %}
-            <div class="notice">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
-              <p>No quedan horarios libres en las próximas dos semanas para este servicio{% if professional %} con {{ professional.display_name }}{% endif %}. Probá con otro servicio{% if professional %} o con otra persona{% endif %}{% if shop.phone %}, o llamá al {{ shop.phone.as_international }}{% endif %}.</p>
+              </div>
+            {% endfor %}
+          </fieldset>
+        {% else %}
+          <input type="hidden" name="start" value="{{ picked_start }}">
+          {% if picked %}
+            <div class="card-box ticket">
+              <div class="top">
+                <span class="amandu-eyebrow">Tu turno</span>
+                <strong class="when amandu-display amandu-time">{{ picked|date:"l j" }} de {{ picked|date:"F" }}, {{ picked|time:"H:i" }}</strong>
+                {% if professional %}
+                  <span class="who-line h{{ professional.hue }}">{% if professional.photo_url %}<img class="avatar" src="{{ professional.photo_url }}" alt="" width="28" height="28">{% else %}<span class="avatar" aria-hidden="true">{{ professional.initials }}</span>{% endif %}con {{ professional.display_name }}</span>
+                {% else %}
+                  <span class="who-line">con quien esté libre</span>
+                {% endif %}
+              </div>
+              <dl>
+                <dt>Servicio</dt><dd>{{ service.name }}</dd>
+                <dt>Duración</dt><dd>{{ service.duration_minutes }} min</dd>
+                {% if service_price %}<dt>Precio</dt><dd class="amandu-time">{{ service_price }}</dd>{% endif %}
+              </dl>
             </div>
           {% endif %}
-        </section>
-
-        {% if day %}
-          <section class="step" id="datos" aria-labelledby="h-datos">
-            <div class="step-head"><span class="n" aria-hidden="true">{% if professionals|length > 1 %}4{% else %}3{% endif %}</span><h2 id="h-datos">Tus datos</h2></div>
-
-            {% if error_list %}
-              <div class="alert" role="alert" tabindex="-1" autofocus aria-labelledby="h-alert">
-                <h2 id="h-alert">Revisá {% if error_list|length > 1 %}estos datos{% else %}este dato{% endif %}</h2>
-                <ul>{% for anchor, message in error_list %}<li><a href="#{{ anchor }}">{{ message }}</a></li>{% endfor %}</ul>
-              </div>
-            {% endif %}
-
-            <div class="card">
-              <div class="field">
-                <label for="f-name">Nombre y apellido</label>
-                <input id="f-name" type="text" name="name" maxlength="120" required autocomplete="name"
-                       value="{{ submitted.name|default:'' }}"{% if errors.name %} aria-invalid="true" aria-describedby="e-name"{% endif %}>
-                {% if errors.name %}<p class="error" id="e-name">{{ errors.name.0 }}</p>{% endif %}
-              </div>
-
-              <div class="field">
-                <label for="f-phone">Teléfono</label>
-                <input id="f-phone" type="tel" name="phone" maxlength="32" required inputmode="tel" autocomplete="tel"
-                       value="{{ submitted.phone|default:'' }}" aria-describedby="h-phone{% if errors.phone %} e-phone{% endif %}"{% if errors.phone %} aria-invalid="true"{% endif %}>
-                <p class="help" id="h-phone">{{ shop.name }} te responde por WhatsApp a este número.</p>
-                {% if errors.phone %}<p class="error" id="e-phone">{{ errors.phone.0 }}</p>{% endif %}
-              </div>
-
-              <div class="field">
-                <label for="f-email">Email <small>(opcional)</small></label>
-                <input id="f-email" type="email" name="email" autocomplete="email"
-                       value="{{ submitted.email|default:'' }}"{% if errors.email %} aria-invalid="true" aria-describedby="e-email"{% endif %}>
-                {% if errors.email %}<p class="error" id="e-email">{{ errors.email.0 }}</p>{% endif %}
-              </div>
-
-              {% if whatsapp_enabled %}
-                <label class="consent">
-                  <input type="checkbox" name="notify_whatsapp" value="true"{% if submitted.notify_whatsapp %} checked{% endif %}>
-                  <span><strong>Avisarme por WhatsApp</strong><span>Te confirmamos por WhatsApp que recibimos el pedido, y te avisamos si nadie llega a responderlo a tiempo.</span></span>
-                </label>
-              {% endif %}
-
-              <button type="submit">Pedir turno</button>
-              <p class="fine">No pagás nada ahora. El turno queda firme cuando {{ shop.name }} lo confirma.</p>
-            </div>
-          </section>
         {% endif %}
+
+        <section class="card-box" id="datos" aria-label="Tus datos">
+          <div class="field">
+            <label for="f-name">Nombre y apellido</label>
+            <input id="f-name" type="text" name="name" maxlength="120" required autocomplete="name"
+                   value="{{ submitted.name|default:'' }}"{% if errors.name %} aria-invalid="true" aria-describedby="e-name"{% endif %}>
+            {% if errors.name %}<p class="error" id="e-name">{{ errors.name.0 }}</p>{% endif %}
+          </div>
+
+          <div class="field">
+            <label for="f-phone">Teléfono</label>
+            <input id="f-phone" type="tel" name="phone" maxlength="32" required inputmode="tel" autocomplete="tel"
+                   value="{{ submitted.phone|default:'' }}" aria-describedby="h-phone{% if errors.phone %} e-phone{% endif %}"{% if errors.phone %} aria-invalid="true"{% endif %}>
+            <p class="help" id="h-phone">{{ shop.name }} te responde por WhatsApp a este número.</p>
+            {% if errors.phone %}<p class="error" id="e-phone">{{ errors.phone.0 }}</p>{% endif %}
+          </div>
+
+          <div class="field">
+            <label for="f-email">Email <small>(opcional)</small></label>
+            <input id="f-email" type="email" name="email" autocomplete="email"
+                   value="{{ submitted.email|default:'' }}"{% if errors.email %} aria-invalid="true" aria-describedby="e-email"{% endif %}>
+            {% if errors.email %}<p class="error" id="e-email">{{ errors.email.0 }}</p>{% endif %}
+          </div>
+
+          {% if whatsapp_enabled %}
+            <label class="consent">
+              <input type="checkbox" name="notify_whatsapp" value="true"{% if submitted.notify_whatsapp %} checked{% endif %}>
+              <span><strong>Avisarme por WhatsApp</strong><span>Te confirmamos por WhatsApp que recibimos el pedido, y te avisamos si nadie llega a responderlo a tiempo.</span></span>
+            </label>
+          {% endif %}
+
+          <button type="submit">Pedir turno</button>
+          <p class="fine">No pagás nada ahora. El turno queda firme cuando {{ shop.name }} lo confirma.</p>
+        </section>
       </form>
+    {% endif %}
     </div>
 {% endif %}
 
@@ -744,6 +799,23 @@
       </svg>
     </footer>
   </main>
+
+{% if soonest %}
+  {% comment %}The soonest free hour in the whole shop, held at the foot while the
+     services are browsed. Sticky, not fixed: it sits at the end of the page
+     and only floats while there is page below it.{% endcomment %}
+  <aside class="dock" aria-label="Próximo turno libre">
+    <a href="{{ soonest.href }}">
+      <span class="ic" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
+      <span class="w">
+        <small>Próximo turno libre</small>
+        <strong class="amandu-time">{% if soonest.is_today %}Hoy{% else %}{{ soonest.at|date:"l j" }}{% endif %}, {{ soonest.at|time:"H:i" }}</strong>
+        <span class="sv">{{ soonest.service.name }} · {{ soonest.service.duration_minutes }} min</span>
+      </span>
+      <span class="go">Reservar</span>
+    </a>
+  </aside>
+{% endif %}
 {% endtimezone %}
 </body>
 </html>

@@ -108,6 +108,11 @@ class Tenant(TimestampMixin):
     # The object key of its logo in the image bucket, never a URL, so moving the
     # public domain needs no data migration (apps/commons/images.py).
     logo_key = models.CharField(max_length=200, null=True, blank=True, unique=True)
+    # What the panel measured of the logo when it uploaded it -- the API never
+    # sees the bytes -- so the public page can draw it to its shape and on a
+    # plate it shows against (LogoMetaSerializer). Null when there is no logo,
+    # or one uploaded before this existed.
+    logo_meta = models.JSONField(null=True, blank=True)
 
     class PlanPeriodStart(models.TextChoices):
         # "Everyone pays October by the 10th": a new subscription starts on the

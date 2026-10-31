@@ -29,6 +29,8 @@ KINDS = {
         lambda request, view, service: ManagesService().has_object_permission(request, view, service),
     ),
 }
+# A service's carousel pictures belong to the service, by the same rule.
+KINDS['gallery'] = KINDS['service']
 
 
 class UploadRequestSerializer(serializers.Serializer):

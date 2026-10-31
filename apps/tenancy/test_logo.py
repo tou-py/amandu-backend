@@ -226,3 +226,46 @@ def test_auth_me_carries_the_logo_to_everyone_in_the_business(owner, salon, djan
     rows = api(user, salon).get(reverse('accounts:me')).data['memberships']
 
     assert [row['tenant_logo_url'] for row in rows] == [f'http://localhost:9000/amandu/{key}']
+
+
+META = {'aspect': 3.2, 'transparent': False, 'background': '#FFFFFF', 'ink': 'dark'}
+
+
+def test_a_logo_attaches_with_what_the_panel_measured_of_it(owner, bucket):
+    key = uploaded(owner, bucket)
+
+    res = owner.patch(TENANT_URL, {'logo_key': key, 'logo_meta': META}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['logo_meta'] == {**META, 'background': '#ffffff'}
+
+
+def test_replacing_or_clearing_the_logo_forgets_the_old_measurements(owner, bucket):
+    owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': META}, format='json')
+
+    replaced = owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket)}, format='json')
+    owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': META}, format='json')
+    cleared = owner.patch(TENANT_URL, {'logo_key': None}, format='json')
+
+    assert replaced.data['logo_meta'] is None
+    assert cleared.data['logo_meta'] is None
+
+
+def test_the_measurements_only_change_with_the_logo(owner, bucket):
+    res = owner.patch(TENANT_URL, {'logo_meta': META}, format='json')
+
+    assert res.status_code == 400
+    assert 'logo_meta' in res.data
+
+
+@pytest.mark.parametrize('bad', [
+    {**META, 'background': 'white'},
+    {**META, 'ink': 'grey'},
+    {**META, 'aspect': 0},
+    {k: v for k, v in META.items() if k != 'ink'},
+])
+def test_malformed_measurements_are_refused(owner, bucket, bad):
+    res = owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': bad}, format='json')
+
+    assert res.status_code == 400
+    assert 'logo_meta' in res.data

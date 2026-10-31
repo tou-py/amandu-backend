@@ -415,7 +415,8 @@ class ServiceViewSet(TenantScopedModelViewSet):
         # After the delete went through: a service still booked raises Referenced
         # first and keeps its image.
         super().perform_destroy(instance)
-        images.discard(instance.image_key)
+        for key in (instance.image_key, instance.image_2_key, instance.image_3_key):
+            images.discard(key)
 
 
 class PlanViewSet(TenantScopedModelViewSet):

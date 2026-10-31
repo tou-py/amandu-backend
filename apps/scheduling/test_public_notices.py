@@ -169,11 +169,12 @@ def test_cualquiera_is_the_default_and_offers_everyones_slots(client, salon, ana
         tenant=salon, professional=ana, service=haircut, start=local(9), end=local(9, 30),
     )
 
-    body = client.get(page(salon)).content.decode()
+    who = client.get(page(salon), {'paso': 'profesional'}).content.decode()
+    hours = client.get(page(salon), {'paso': 'cuando'}).content.decode()
 
-    assert 'Cualquiera' in body
+    assert 'Cualquiera' in who
     # Ana is busy at 09:00 but Bea is not: the slot is still on offer.
-    assert local(9).isoformat() in body
+    assert local(9).isoformat() in hours
 
 
 def test_cualquiera_gives_the_turno_to_whoever_is_free(client, salon, ana, bea, haircut, now):
@@ -280,7 +281,9 @@ def test_the_confirmation_offers_to_write_first(client, salon, ana, haircut, now
 def test_the_form_says_the_answer_comes_by_whatsapp_to_that_phone(client, salon, ana, haircut, now):
     """The answer reaches every client with a phone, box or no box: the
     business writes from its own WhatsApp. The box is only Kyo's receipt."""
-    body = client.get(page(salon)).content.decode()
+    body = client.get(page(salon), {
+        'paso': 'datos', 'day': MONDAY.isoformat(), 'start': local(9).isoformat(),
+    }).content.decode()
 
     assert 'te responde por WhatsApp a este número' in body
     assert 'confirme o rechace' not in body

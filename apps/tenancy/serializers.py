@@ -1,10 +1,35 @@
 import re
 
+from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 
 from apps.commons import images
 from apps.tenancy.models import Tenant
+
+
+class LogoMetaSerializer(serializers.Serializer):
+    """What the panel measured of a logo on upload. Cosmetic only: a lie here
+    draws the logo on the wrong plate, nothing more, so it is shape-checked
+    and taken at its word."""
+
+    aspect = serializers.FloatField(min_value=0.05, max_value=20, help_text='Width over height.')
+    transparent = serializers.BooleanField()
+    background = serializers.RegexField(
+        r'^#[0-9a-fA-F]{6}$', allow_null=True, help_text='Its own background, null when transparent.',
+    )
+    ink = serializers.ChoiceField(choices=('dark', 'light'), help_text='Whether the drawing itself is dark or light.')
+
+    def validate_background(self, value):
+        return value and value.lower()
+
+
+@extend_schema_field(LogoMetaSerializer(allow_null=True))
+class LogoMetaField(serializers.JSONField):
+    def to_internal_value(self, data):
+        meta = LogoMetaSerializer(data=data)
+        meta.is_valid(raise_exception=True)
+        return dict(meta.validated_data)
 
 
 class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
@@ -53,12 +78,13 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     phone = PhoneNumberField(required=False, allow_blank=True)
     logo_key = images.KeyField('logo')
     logo_url = images.UrlField(source='logo_key')
+    logo_meta = LogoMetaField(required=False, allow_null=True)
 
     class Meta:
         model = Tenant
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
-            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url',
+            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url', 'logo_meta',
             'request_accepted_message', 'request_rejected_message', 'created_at',
         )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
@@ -77,6 +103,20 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
         if not value.strip():
             raise serializers.ValidationError('The business needs a name.')
         return value.strip()
+
+    def validate(self, attrs):
+        # The measurements describe one picture: they arrive with it, and a new
+        # logo sent without them (or no logo) leaves none behind.
+        if 'logo_key' not in attrs:
+            if 'logo_meta' in attrs:
+                raise serializers.ValidationError(
+                    {'logo_meta': 'Send it with the logo it measures.'}, code='logo_meta_alone',
+                )
+        elif attrs['logo_key'] is None or (
+            'logo_meta' not in attrs and attrs['logo_key'] != getattr(self.instance, 'logo_key', None)
+        ):
+            attrs['logo_meta'] = None
+        return attrs
 
     def validate_country(self, value):
         code = value.strip().upper()
