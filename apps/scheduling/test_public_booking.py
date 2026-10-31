@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
+from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
 from apps.scheduling.models import Appointment, Client, Service, TimeOff, WorkSchedule
@@ -138,6 +139,22 @@ def test_the_shop_is_told_a_request_arrived(client, salon, stylist, haircut,
     assert note.verb == Notification.Verb.APPOINTMENT_REQUESTED
     # The one verb with no actor: nobody inside the tenant did this.
     assert note.actor is None
+
+
+def test_the_bell_says_who_asked_for_what_and_whether_it_still_waits(
+    client, salon, stylist, haircut, open_monday, _monday_morning,
+):
+    """Enough for the bell to read as a sentence and offer to accept it there."""
+    book(client, salon, stylist, haircut, local(9))
+    feed = APIClient()
+    feed.force_authenticate(user=stylist.user)
+    feed.credentials(HTTP_X_TENANT_ID=str(salon.pk))
+
+    [row] = feed.get(reverse('accounts:notification-list')).json()['results']
+
+    assert row['appointment']['status'] == 'pending'
+    assert row['appointment']['service_name'] == haircut.name
+    assert row['appointment']['clients'] == [Appointment.objects.get().clients.get().name]
 
 
 def test_a_refused_request_notifies_nobody(client, salon, stylist, haircut, open_monday,

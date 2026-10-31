@@ -100,6 +100,11 @@ RULES = {
     BILLING_DUE: Rule(push=((Verb.BILLING_DUE, OWNERS),)),
 }
 
+# Undated notices that open a screen showing the current state: yesterday's is
+# the same row as today's, only stale. Each one replaces the last, so the bell
+# never fills up with twenty identical "Resumen de cobros".
+REPLACES = (Verb.PLAN_DIGEST, Verb.BILLING_DUE)
+
 ROLES = {
     MANAGERS: (Membership.Role.OWNER, Membership.Role.ADMIN, Membership.Role.COORDINATOR),
     MONEY: (Membership.Role.OWNER, Membership.Role.ADMIN),
@@ -119,10 +124,13 @@ def notify(event, *, appointment=None, tenant=None, actor=None, previous=None, r
 
     rows = []
     for verb, audience in rule.push:
-        for recipient in _audience(audience, tenant, appointment, previous):
-            if actor is not None and recipient.pk == actor.pk:
-                continue
-            rows.append(Notification(recipient=recipient, actor=actor, appointment=appointment, verb=verb))
+        recipients = [
+            recipient for recipient in _audience(audience, tenant, appointment, previous)
+            if actor is None or recipient.pk != actor.pk
+        ]
+        if verb in REPLACES:
+            Notification.objects.filter(recipient__in=recipients, verb=verb).delete()
+        rows += [Notification(recipient=r, actor=actor, appointment=appointment, verb=verb) for r in recipients]
     Notification.objects.bulk_create(rows)
 
     if (rule.client_whatsapp or rule.professional_whatsapp) and whatsapp.enabled_for(tenant):

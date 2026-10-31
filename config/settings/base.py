@@ -356,6 +356,11 @@ SPECTACULAR_SETTINGS = {
     # The Swagger/Redoc pages already render the schema; don't also inline it there.
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
+    # Appointment.status is read by more than one serializer; without a name
+    # the enum gets a hash suffix and the frontend's types churn.
+    'ENUM_NAME_OVERRIDES': {
+        'AppointmentStatusEnum': 'apps.scheduling.models.Appointment.Status',
+    },
 }
 
 # JWT

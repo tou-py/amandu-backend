@@ -452,11 +452,16 @@ class NotificationActorSerializer(serializers.ModelSerializer):
 
 
 class NotificationAppointmentSerializer(serializers.ModelSerializer):
-    """Just enough to point at the slot -- the agenda already holds the rest."""
+    """Enough to say the slot in a sentence and to answer a request from the bell:
+    who, what, when, and whether it is still waiting. The agenda holds the rest."""
+
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    clients = serializers.SlugRelatedField(many=True, read_only=True, slug_field='name')
 
     class Meta:
         model = Appointment
-        fields = ('id', 'start')
+        fields = ('id', 'start', 'status', 'service_name', 'clients')
+        read_only_fields = fields
 
 
 class NotificationSerializer(serializers.ModelSerializer):
