@@ -99,6 +99,12 @@ class Tenant(TimestampMixin):
     # gives as the contact, and setting it is what turns those messages on:
     # a message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
     phone = PhoneNumberField(blank=True)
+    # How the business words its answer to a public request, sent from the
+    # answerer's own WhatsApp (the turno sheet's "Avisar al cliente" step).
+    # Blank is "Kyo's default", which lives in the frontend only, so there is
+    # one place that renders it. {placeholders} are filled there too.
+    request_accepted_message = models.TextField(blank=True, max_length=600)
+    request_rejected_message = models.TextField(blank=True, max_length=600)
     # The object key of its logo in the image bucket, never a URL, so moving the
     # public domain needs no data migration (apps/commons/images.py).
     logo_key = models.CharField(max_length=200, null=True, blank=True, unique=True)

@@ -792,12 +792,14 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         fields = (
             'id', 'professional', 'professional_name', 'clients', 'attendees',
             'service', 'service_name', 'service_price', 'start', 'end', 'status', 'capacity',
-            'series', 'cancelled_at', 'cancellation_reason', 'notes',
+            'series', 'cancelled_at', 'cancellation_reason', 'answer_notice', 'notes',
             'rescheduled_from', 'source', 'created_by', 'created_by_name',
             'created_at', 'updated_at',
         )
         read_only_fields = (
             'id', 'end', 'status', 'series', 'cancelled_at', 'cancellation_reason',
+            # Set by confirm/cancel, cleared by answer_told: never by an edit.
+            'answer_notice',
             # Recorded by validate() when the start actually moves. A payload
             # that could set it could claim a booking was moved when it never was.
             'rescheduled_from',

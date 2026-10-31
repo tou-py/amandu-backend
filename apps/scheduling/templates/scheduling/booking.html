@@ -703,7 +703,7 @@
                 <label for="f-phone">Teléfono</label>
                 <input id="f-phone" type="tel" name="phone" maxlength="32" required inputmode="tel" autocomplete="tel"
                        value="{{ submitted.phone|default:'' }}" aria-describedby="h-phone{% if errors.phone %} e-phone{% endif %}"{% if errors.phone %} aria-invalid="true"{% endif %}>
-                <p class="help" id="h-phone">Con este número te reconocen en {{ shop.name }}.</p>
+                <p class="help" id="h-phone">{{ shop.name }} te responde por WhatsApp a este número.</p>
                 {% if errors.phone %}<p class="error" id="e-phone">{{ errors.phone.0 }}</p>{% endif %}
               </div>
 
@@ -717,7 +717,7 @@
               {% if whatsapp_enabled %}
                 <label class="consent">
                   <input type="checkbox" name="notify_whatsapp" value="true"{% if submitted.notify_whatsapp %} checked{% endif %}>
-                  <span><strong>Avisarme por WhatsApp</strong><span>Te escribimos a este teléfono cuando {{ shop.name }} confirme o rechace el pedido.</span></span>
+                  <span><strong>Avisarme por WhatsApp</strong><span>Te confirmamos por WhatsApp que recibimos el pedido, y te avisamos si nadie llega a responderlo a tiempo.</span></span>
                 </label>
               {% endif %}
 

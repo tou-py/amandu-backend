@@ -99,6 +99,35 @@ def test_a_blank_name_is_refused(salon, member):
     assert res.status_code == 400
 
 
+def test_the_owner_words_the_answers_to_requests_and_the_whole_team_gets_them(salon, member):
+    """Whoever answers a request sends the business's wording, so every member
+    reads it (in /me, like the logo) while only the owner writes it."""
+    owner = member('o@example.com', Membership.Role.OWNER)
+    staff = member('s@example.com', Membership.Role.STAFF)
+    words = {
+        'request_accepted_message': 'Hola {cliente}, te esperamos el {dia} a las {hora}.',
+        'request_rejected_message': '',
+    }
+
+    res = api(owner.user, salon).patch(TENANT_URL, words, format='json')
+
+    assert res.status_code == 200
+    assert {key: res.data[key] for key in words} == words
+    [mine] = api(staff.user).get(reverse('accounts:me')).data['memberships']
+    assert mine['tenant_request_accepted_message'] == words['request_accepted_message']
+    assert mine['tenant_request_rejected_message'] == ''
+
+
+def test_an_answer_to_a_request_has_a_sensible_length(salon, member):
+    owner = member('o@example.com', Membership.Role.OWNER)
+
+    res = api(owner.user, salon).patch(
+        TENANT_URL, {'request_accepted_message': 'x' * 601}, format='json',
+    )
+
+    assert res.status_code == 400
+
+
 def test_an_admin_may_not_read_or_edit_the_business(salon, member):
     """An admin runs the diary and the team; the business itself is the owner's."""
     admin = member('a@example.com', Membership.Role.ADMIN)

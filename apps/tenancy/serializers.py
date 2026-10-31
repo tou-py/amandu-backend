@@ -36,6 +36,9 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     notices on for this business: every message gives it as the contact, and a
     message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
 
+    So are `request_accepted_message` and `request_rejected_message`, how the
+    business answers a public request by WhatsApp. Blank means Kyo's default.
+
     And so are `plan_period_start` and `plan_grace_days`, how this business
     collects its monthly plans. Changing them prefills the NEXT subscription
     and moves the due dates read from now on; no subscription's anchor moves.
@@ -56,7 +59,7 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
             'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url',
-            'created_at',
+            'request_accepted_message', 'request_rejected_message', 'created_at',
         )
         read_only_fields = ('id', 'slug', 'status', 'created_at')
 

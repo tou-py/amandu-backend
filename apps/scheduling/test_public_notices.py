@@ -277,6 +277,15 @@ def test_the_confirmation_offers_to_write_first(client, salon, ana, haircut, now
     assert 'https://wa.me/595981000000' in body
 
 
+def test_the_form_says_the_answer_comes_by_whatsapp_to_that_phone(client, salon, ana, haircut, now):
+    """The answer reaches every client with a phone, box or no box: the
+    business writes from its own WhatsApp. The box is only Kyo's receipt."""
+    body = client.get(page(salon)).content.decode()
+
+    assert 'te responde por WhatsApp a este número' in body
+    assert 'confirme o rechace' not in body
+
+
 def test_the_booking_form_is_rate_limited(client, salon, ana, haircut, now):
     """It writes rows and queues paid messages to any number typed."""
     codes = [book(client, salon, haircut, local(3), professional=ana).status_code
@@ -295,12 +304,15 @@ def request_for_ana(client, salon, ana, haircut, now):
     return Appointment.objects.get()
 
 
-def test_a_coordinator_accepting_tells_both(request_for_ana, coordinator, salon, ana):
-    act(coordinator, salon, request_for_ana, 'confirm')
+def test_accepting_leaves_the_answer_owed_to_the_client_not_to_kyo(
+    request_for_ana, coordinator, salon, ana,
+):
+    """The answer goes from the business's own WhatsApp (the step in the turno
+    sheet), so Kyo's number sends nothing: the client would get it twice."""
+    response = act(coordinator, salon, request_for_ana, 'confirm')
 
-    [to_client] = to(CLIENT_PHONE)
-    assert 'confirmó tu turno' in to_client
-    assert to(ana.user.phone) == []
+    assert response.json()['answer_notice'] == 'accepted'
+    assert not OutboundMessage.objects.exists()
     note = Notification.objects.get()
     assert (note.recipient, note.verb) == (ana, Notification.Verb.APPOINTMENT_CONFIRMED)
 
@@ -308,17 +320,60 @@ def test_a_coordinator_accepting_tells_both(request_for_ana, coordinator, salon,
 def test_accepting_your_own_request_is_not_news_to_you(request_for_ana, salon, ana):
     act(ana.user, salon, request_for_ana, 'confirm')
 
-    assert len(to(CLIENT_PHONE)) == 1
-    assert to(ana.user.phone) == []
     assert not Notification.objects.exists()
 
 
-def test_turning_a_request_down_tells_the_client_why(request_for_ana, coordinator, salon, ana):
-    act(coordinator, salon, request_for_ana, 'cancel', reason='Ese día cerramos')
+def test_turning_a_request_down_leaves_the_rejection_owed(request_for_ana, coordinator, salon, ana):
+    response = act(coordinator, salon, request_for_ana, 'cancel', reason='Ese día cerramos')
 
-    [to_client] = to(CLIENT_PHONE)
-    assert 'no puede tomar tu turno' in to_client and 'Ese día cerramos' in to_client
+    assert response.json()['answer_notice'] == 'rejected'
+    assert response.json()['cancellation_reason'] == 'Ese día cerramos'
+    assert not OutboundMessage.objects.exists()
     assert Notification.objects.get().verb == Notification.Verb.APPOINTMENT_REJECTED
+
+
+def test_calling_off_an_accepted_turno_drops_the_acceptance_owed(request_for_ana, coordinator, salon):
+    act(coordinator, salon, request_for_ana, 'confirm')
+
+    response = act(coordinator, salon, request_for_ana, 'cancel')
+
+    assert response.json()['answer_notice'] == ''
+
+
+def test_telling_the_client_clears_what_is_owed(request_for_ana, coordinator, salon):
+    act(coordinator, salon, request_for_ana, 'confirm')
+
+    first = act(coordinator, salon, request_for_ana, 'answer-told')
+    # A colleague told them first: still fine, never an error.
+    again = act(coordinator, salon, request_for_ana, 'answer-told')
+
+    assert first.status_code == 200 and first.json()['answer_notice'] == ''
+    assert again.status_code == 200
+
+
+def test_only_who_may_act_on_the_turno_marks_it_told(request_for_ana, salon, ana, bea):
+    request_for_ana.confirm()
+
+    assert act(bea.user, salon, request_for_ana, 'answer-told').status_code == 403
+    assert act(ana.user, salon, request_for_ana, 'answer-told').status_code == 200
+
+
+def test_a_late_kyo_payment_never_stops_telling_a_client(request_for_ana, coordinator, salon):
+    request_for_ana.confirm()
+    Tenant.objects.filter(pk=salon.pk).update(paid_until=date(2020, 1, 1))
+
+    assert act(coordinator, salon, request_for_ana, 'answer-told').status_code == 200
+
+
+def test_a_request_the_sweep_expires_owes_no_answer(request_for_ana, sent, now, settings):
+    settings.WAHA_URL = ''  # about the mark, not the delivery
+    now(local(9, 1))
+
+    call_command('send_reminders')
+
+    request_for_ana.refresh_from_db()
+    assert request_for_ana.status == Appointment.Status.CANCELLED
+    assert request_for_ana.answer_notice == ''
 
 
 def test_cancelling_a_confirmed_turno_is_unchanged(request_for_ana, coordinator, salon, ana):

@@ -12,7 +12,8 @@ Two channels:
   * push: a Notification row for a team member. The bell shows it at once; the
     sweep (send_reminders) pushes it to their devices.
   * WhatsApp from Kyo's number (WAHA, whatsapp.py): to the client of a public
-    request who ticked the box. Filed here as an OutboundMessage; only the
+    request who ticked the box -- the receipt and the expiry only; the shop's
+    answer goes from its own WhatsApp. Filed here as an OutboundMessage; only the
     sweep sends, paced. Never to the team: they have push, and every message
     to someone who never wrote to that number is the pattern that gets it
     banned.
@@ -82,8 +83,10 @@ RULES = {
     )),
     CANCELLED: Rule(push=((Verb.APPOINTMENT_CANCELLED, PROFESSIONAL),)),
     REQUESTED: Rule(push=((Verb.APPOINTMENT_REQUESTED, PROFESSIONAL),), client_whatsapp=True),
-    ACCEPTED: Rule(push=((Verb.APPOINTMENT_CONFIRMED, PROFESSIONAL),), client_whatsapp=True),
-    REJECTED: Rule(push=((Verb.APPOINTMENT_REJECTED, PROFESSIONAL),), client_whatsapp=True),
+    # The client hears the answer from the business's own WhatsApp: the turno
+    # sheet's "Avisar al cliente" step, owed through Appointment.answer_notice.
+    ACCEPTED: Rule(push=((Verb.APPOINTMENT_CONFIRMED, PROFESSIONAL),)),
+    REJECTED: Rule(push=((Verb.APPOINTMENT_REJECTED, PROFESSIONAL),)),
     # The professional never acted; telling them would be noise.
     EXPIRED: Rule(client_whatsapp=True),
     # Their own notice went unseen; the ones who run the diary are next.
@@ -104,12 +107,12 @@ ROLES = {
 }
 
 
-def notify(event, *, appointment=None, tenant=None, actor=None, previous=None, reason=''):
+def notify(event, *, appointment=None, tenant=None, actor=None, previous=None):
     """
     Tell whoever `event` concerns. `appointment` for a turno's events, `tenant`
     for the business's own; `actor` is the member who did it (None for the
     public page and the sweep); `previous` the professional a turno was taken
-    from; `reason` what the shop typed when turning a request down.
+    from.
     """
     rule = RULES[event]
     tenant = tenant or appointment.tenant
@@ -126,7 +129,7 @@ def notify(event, *, appointment=None, tenant=None, actor=None, previous=None, r
     Notification.objects.bulk_create(rows)
 
     if rule.client_whatsapp and whatsapp.enabled_for(tenant):
-        _file_whatsapp(event, appointment, reason)
+        _file_whatsapp(event, appointment)
 
 
 def edited(appointment, *, actor, was_with, was_at):
@@ -151,7 +154,7 @@ def _audience(audience, tenant, appointment, previous):
     return list(members)
 
 
-def _file_whatsapp(event, appointment, reason):
+def _file_whatsapp(event, appointment):
     shop = appointment.tenant
     facts = {
         'shop': shop.name,
@@ -159,7 +162,6 @@ def _file_whatsapp(event, appointment, reason):
         'service': appointment.service.name,
         'when': _when(appointment),
         'pro': appointment.professional.display_name(),
-        'reason': reason,
     }
     OutboundMessage.objects.bulk_create([
         OutboundMessage(
@@ -186,17 +188,10 @@ def _when(appointment):
 GREETINGS = ('Hola', 'Buenas', 'Qué tal')
 
 
-def _to_client(event, *, name, shop, shop_phone, service, when, pro, reason):
+def _to_client(event, *, name, shop, shop_phone, service, when, pro):
     hello = random.choice(GREETINGS)
     if event == REQUESTED:
         return (f'{hello} {name}, recibimos tu pedido de turno en {shop}: {service}, {when}, '
                 f'con {pro}. Te avisamos por acá cuando lo confirmen. Consultas al {shop_phone}.')
-    if event == ACCEPTED:
-        return (f'{hello} {name}, {shop} confirmó tu turno: {service}, {when}, con {pro}. '
-                f'Consultas al {shop_phone}.')
-    if event == EXPIRED:
-        return (f'{hello} {name}, en {shop} no llegaron a responder a tiempo tu pedido de {service} '
-                f'del {when}. Podés pedir otro horario o escribir al {shop_phone}.')
-    because = f' Motivo: {reason}.' if reason else ''
-    return (f'{hello} {name}, {shop} no puede tomar tu turno de {service} del {when}.{because} '
-            f'Podés pedir otro horario o escribir al {shop_phone}.')
+    return (f'{hello} {name}, en {shop} no llegaron a responder a tiempo tu pedido de {service} '
+            f'del {when}. Podés pedir otro horario o escribir al {shop_phone}.')
