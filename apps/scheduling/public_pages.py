@@ -24,6 +24,7 @@ from datetime import timedelta
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
+import phonenumbers
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils import timezone, translation
@@ -51,6 +52,12 @@ from apps.scheduling.public import (
     offered_slots,
 )
 from apps.scheduling.views import Overlaps
+from apps.tenancy import presence
+from apps.tenancy.theme import derive_theme
+
+# ponytail: the soonest-hour bar is switched off for now (owner's call,
+# 2026-11-01). True brings it back as it was; its tests turn it on themselves.
+SOONEST_BAR = False
 
 # Two weeks. Long enough that somebody booking a colour in advance finds a day,
 # short enough that the page stays one scroll and one query.
@@ -59,17 +66,35 @@ HORIZON_DAYS = 13
 # Where each field's error points, from the summary at the top of the form.
 ERROR_ANCHORS = {'start': 'cuando', 'name': 'f-name', 'phone': 'f-phone', 'email': 'f-email'}
 
-# The screens, in order, and what each one asks.
+# The screens, in order, and the question each one asks, in the words of
+# somebody at the counter, for any trade.
 STEPS = ('servicio', 'profesional', 'cuando', 'datos')
 TITLES = {
-    'servicio': 'Elegí un servicio',
-    'profesional': 'Elegí quién te atiende',
-    'cuando': 'Elegí día y hora',
-    'datos': 'Tus datos',
+    'servicio': '¿Qué reservás?',
+    'profesional': '¿Con quién?',
+    'cuando': '¿Cuándo?',
+    'datos': '¿A nombre de quién?',
 }
-# A logo this many times wider than tall is a wordmark: drawn on its own,
-# without the square tile a mark gets.
-WORDMARK = 2.2
+# Django's own messages are in "usted" and do not say which box they mean;
+# the page speaks "vos" and names it. A code not listed keeps its words: the
+# serializer's own are already written for this page.
+SPOKEN = {
+    ('name', 'required'): 'Falta tu nombre.',
+    ('name', 'blank'): 'Falta tu nombre.',
+    ('name', 'max_length'): 'Ese nombre es muy largo.',
+    ('phone', 'required'): 'Falta tu teléfono.',
+    ('phone', 'blank'): 'Falta tu teléfono.',
+    ('phone', 'invalid'): 'Revisá el teléfono: va con el código de área.',
+    ('email', 'invalid'): 'Ese email no parece válido. Revisalo o dejalo vacío.',
+}
+# Past these a logo is no longer a mark that fits a square tile: wider is a
+# wordmark, drawn on a line of its own; taller stands in an upright box.
+WORDMARK = 1.6
+UPRIGHT = 0.8
+# The week twice, Monday first as WorkSchedule.weekday counts it: as people
+# say it, and as schema.org names it.
+WEEKDAYS = ('Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo')
+SCHEMA_DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
 
 # The page speaks Spanish because its readers do. Activated by a {% language %}
 # block INSIDE the template, not around this Response: DRF renders a
@@ -158,7 +183,10 @@ def booking_page(request, slug):
                     'at': booked.start.isoformat(),
                 })))
         else:
-            errors = form.errors
+            errors = {
+                field: [SPOKEN.get((field, getattr(message, 'code', None)), message) for message in messages]
+                for field, messages in form.errors.items()
+            }
 
     # A shop of one has nobody to choose between: that step is skipped.
     steps = [one for one in STEPS if one != 'profesional' or len(professionals) > 1]
@@ -198,12 +226,24 @@ def booking_page(request, slug):
 
     for option in services:
         option.href = href(service=option.pk, day='', paso=steps[1])
+        # A look before the choice: its own address, so a shop can also share it.
+        option.view_href = '?' + urlencode({'ver': option.pk})
         option.price_label = _money(option.price)
         # The cover and the carousel's other two, all in one ratio.
         option.slides = [
             public_url(key) for key in (option.image_key, option.image_2_key, option.image_3_key) if key
         ]
         option.ratio = option.image_ratio.replace(':', ' / ')
+        option.more = len(option.slides) - 1
+    categories = _by_category(services)
+    # The first cover is the largest paint of the page: fetched at once, not lazily.
+    categories[0][1][0].eager = True
+    # The service looked at, on the first step only; an id that is not one of
+    # this shop's services just shows the list.
+    preview = next(
+        (one for one in services if str(one.pk) == asked.get('ver')),
+        None,
+    ) if step == steps[0] and not errors else None
     for n, one in enumerate(professionals):
         # Which of the six tints names this person. Same rule as the staff
         # panel, so a professional keeps one colour on both sides of the product.
@@ -212,21 +252,30 @@ def booking_page(request, slug):
         one.photo_url = public_url(one.photo_key)
         one.href = href(professional=one.pk, day='', paso='cuando')
     for one in days:
-        one['href'] = href(day=one['date'].isoformat(), paso='cuando')
+        # Straight to the hours: on a short phone they sit below the fortnight.
+        one['href'] = href(day=one['date'].isoformat(), paso='cuando') + '#cuando'
     periods = [
         (name, [{'at': slot, 'href': href(start=slot.isoformat(), paso='datos')} for slot in slots])
         for name, slots in _periods(day['slots'] if day else [], zone)
     ]
     position = steps.index(step)
+    booked_at = _booked_at(request, zone)
+    opening_hours = _opening_hours(professionals)
 
     return _render(shop, {
         'step': step,
         'step_number': position + 1,
         'step_count': len(steps),
-        'step_title': TITLES[step],
-        'progress': [n <= position for n in range(len(steps))],
-        'back_href': href(paso=steps[position - 1]) if position else '',
-        'categories': _by_category(services),
+        'step_title': preview.name if preview else TITLES[step],
+        'preview': preview,
+        # Done, under way, ahead: the last step is not full before anything is sent.
+        'progress': ['on' if n < position else 'now' if n == position else '' for n in range(len(steps))],
+        # From a service looked at, back to the list where it was.
+        'back_href': href(paso=steps[position - 1]) if position else f'{request.path}#svc-{preview.pk}' if preview else '',
+        # The two browsing steps open up on a desktop; the hours and the form
+        # keep a phone's measure.
+        'wide': step in ('servicio', 'profesional') and not preview,
+        'categories': categories,
         'service': service,
         'service_price': _money(service.price),
         'professionals': professionals,
@@ -241,7 +290,10 @@ def booking_page(request, slug):
         # the one picked was taken meanwhile.
         'periods': periods,
         'picked': picked,
-        'soonest': _soonest(shop, services, today, until, zone) if step == 'servicio' else None,
+        # Not on the confirmation, which also lands on the first step: right
+        # after a request it would only invite a second one.
+        # Nor over a service being looked at, whose own bar chooses it.
+        'soonest': _soonest(shop, services, today, until, zone) if SOONEST_BAR and step == 'servicio' and not booked_at and not preview else None,
         'open_until': _open_until(professionals, zone),
         'errors': errors,
         # Each message, with where its field is, for the summary above the form.
@@ -253,9 +305,11 @@ def booking_page(request, slug):
         'whatsapp_enabled': whatsapp.enabled_for(shop),
         'submitted': request.data if errors else {},
         'picked_start': asked.get('start', ''),
-        'booked_at': _booked_at(request, zone),
+        'phone_example': _phone_example(shop),
+        'booked_at': booked_at,
         'whatsapp_link': _whatsapp_link(shop),
-        'opening_hours': _opening_hours(professionals),
+        'opening_hours': opening_hours,
+        'week': _week(opening_hours, today),
     })
 
 
@@ -318,6 +372,15 @@ def _money(amount):
     return f'Gs. {amount:,}'.replace(',', '.') if amount is not None else ''
 
 
+def _phone_example(shop):
+    """A mobile number as people write it in the shop's country, for the hint
+    under the phone box. None where the country is not set."""
+    if not shop.country:
+        return None
+    number = phonenumbers.example_number_for_type(shop.country, phonenumbers.PhoneNumberType.MOBILE)
+    return number and phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.NATIONAL)
+
+
 def _initials(name):
     """Two letters for the avatar disc, by the panel's own rule (theme.ts)."""
     parts = [part for part in re.split(r'[\s@.]+', name.strip()) if part]
@@ -356,6 +419,13 @@ def _render(shop, context):
         {
             'shop': shop, 'shop_timezone': shop.timezone,
             'logo': _logo(shop),
+            # Kyo's own palette is the stylesheet; only a shop's own colour overrides it.
+            'theme': shop.brand_color and derive_theme(shop.brand_color, shop.brand_intensity),
+            'kyo_url': settings.KYO_LANDING_URL,
+            'socials': presence.social_links(shop),
+            'maps_link': presence.maps_link(shop),
+            'maps_embed': presence.maps_embed_url(shop),
+            'contact': _contact(shop),
             **context,
         },
         template_name='scheduling/booking.html',
@@ -372,9 +442,10 @@ def _logo(shop):
     if not shop.logo_key:
         return None
     meta = shop.logo_meta or {}
+    aspect = meta.get('aspect', 1)
     return {
         'url': public_url(shop.logo_key),
-        'wide': meta.get('aspect', 1) >= WORDMARK,
+        'shape': 'wide' if aspect > WORDMARK else 'tall' if aspect < UPRIGHT else 'square',
         'ink': meta.get('ink', 'dark'),
         # A hex the serializer validated, so it is safe in a style attribute.
         'background': meta.get('background'),
@@ -416,11 +487,38 @@ def _opening_hours(professionals):
         by_weekday[row.weekday] = (
             min(opens, row.start_time), max(closes, row.end_time),
         )
-    days = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
     return [
-        {'day': days[weekday], 'opens': opens, 'closes': closes}
+        {'day': SCHEMA_DAYS[weekday], 'opens': opens, 'closes': closes}
         for weekday, (opens, closes) in sorted(by_weekday.items())
     ]
+
+
+def _week(opening_hours, today):
+    """
+    The shop's week as a person reads it, Monday first, with the days it is
+    shut said so rather than left out, and today marked for the summary line.
+
+    ponytail: one span per day, lunch breaks merged away as in the structured
+    data; list each stretch if a shop's split day ever confuses somebody.
+    """
+    rows = {row['day']: row for row in opening_hours}
+    return [
+        {'name': name, 'today': n == today.weekday(), 'hours': rows.get(SCHEMA_DAYS[n])}
+        for n, name in enumerate(WEEKDAYS)
+    ] if opening_hours else []
+
+
+def _contact(shop):
+    """
+    How to reach the shop from its page: WhatsApp when its number is a mobile,
+    which in Paraguay is where people write first; a call otherwise.
+    """
+    if not shop.phone:
+        return None
+    kind = phonenumbers.number_type(shop.phone)
+    if kind in (phonenumbers.PhoneNumberType.MOBILE, phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE):
+        return {'kind': 'whatsapp', 'href': f'https://wa.me/{shop.phone.as_e164.lstrip("+")}'}
+    return {'kind': 'phone', 'href': f'tel:{shop.phone.as_e164}'}
 
 
 def _open_until(professionals, zone):

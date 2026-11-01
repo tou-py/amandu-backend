@@ -410,3 +410,10 @@ INVITATION_ACCEPT_URL = env.str(
 # Empty by default: the screens say "escribinos" instead of showing nothing wrong.
 KYO_PAYMENT_INSTRUCTIONS = env.str('KYO_PAYMENT_INSTRUCTIONS', default='')
 KYO_CONTACT_WHATSAPP = env.str('KYO_CONTACT_WHATSAPP', default='')
+# Kyo's own landing, linked from the foot of every public booking page. Empty
+# leaves the mark unlinked rather than pointing at a domain that is not live.
+KYO_LANDING_URL = env.str('KYO_LANDING_URL', default='')
+# Google Maps Embed API key for the map on the public booking page. It ships in
+# the page, so restrict it to this domain in Google Cloud. Empty shows no map,
+# only a link to Google Maps (apps/tenancy/presence.py).
+GOOGLE_MAPS_EMBED_KEY = env.str('GOOGLE_MAPS_EMBED_KEY', default='')

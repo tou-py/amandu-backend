@@ -114,6 +114,34 @@ class Tenant(TimestampMixin):
     # or one uploaded before this existed.
     logo_meta = models.JSONField(null=True, blank=True)
 
+    class BrandIntensity(models.TextChoices):
+        SUBTLE = 'sutil', 'Subtle'
+        BOLD = 'marcada', 'Bold'
+
+    # The one colour the owner picks for the public page; every other token is
+    # derived from it (apps/tenancy/theme.py). Blank is Kyo's own palette.
+    brand_color = models.CharField(
+        max_length=7, blank=True, validators=[RegexValidator(r'^#[0-9a-f]{6}$', 'A lowercase #rrggbb colour.')],
+    )
+    brand_intensity = models.CharField(
+        max_length=7,
+        choices=BrandIntensity.choices,  # type: ignore
+        default=BrandIntensity.SUBTLE,
+    )
+
+    # Where the business is and where it lives online, for the public page
+    # (apps/tenancy/presence.py turns them into links). All optional; the
+    # serializer is what normalises what the owner pastes.
+    address = models.CharField(max_length=200, blank=True, default='')
+    # The owner's own "Compartir" link, which pins the exact place; without it
+    # the page searches Maps for the address instead.
+    maps_url = models.URLField(max_length=300, blank=True, default='')
+    # Bare handles, no @ and no URL: the page builds the link and the label.
+    instagram = models.CharField(max_length=60, blank=True, default='')
+    facebook = models.CharField(max_length=60, blank=True, default='')
+    tiktok = models.CharField(max_length=60, blank=True, default='')
+    website = models.URLField(max_length=200, blank=True, default='')
+
     class PlanPeriodStart(models.TextChoices):
         # "Everyone pays October by the 10th": a new subscription starts on the
         # next 1st.

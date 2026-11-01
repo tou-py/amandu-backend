@@ -240,6 +240,15 @@ def test_a_logo_attaches_with_what_the_panel_measured_of_it(owner, bucket):
     assert res.data['logo_meta'] == {**META, 'background': '#ffffff'}
 
 
+def test_the_logo_brings_its_colours_lowercased_four_at_most(owner, bucket):
+    meta = {**META, 'colors': ['#C8102E', '#1f3a5f']}
+    res = owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': meta}, format='json')
+    assert res.data['logo_meta']['colors'] == ['#c8102e', '#1f3a5f']
+
+    meta = {**META, 'colors': ['#000000'] * 5}
+    assert owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': meta}, format='json').status_code == 400
+
+
 def test_replacing_or_clearing_the_logo_forgets_the_old_measurements(owner, bucket):
     owner.patch(TENANT_URL, {'logo_key': uploaded(owner, bucket), 'logo_meta': META}, format='json')
 
@@ -269,3 +278,16 @@ def test_malformed_measurements_are_refused(owner, bucket, bad):
 
     assert res.status_code == 400
     assert 'logo_meta' in res.data
+
+
+def test_the_owner_saves_a_colour_lowercased_and_an_intensity(owner, salon):
+    res = owner.patch(TENANT_URL, {'brand_color': '#C8102E', 'brand_intensity': 'marcada'}, format='json')
+    assert res.status_code == 200, res.data
+    salon.refresh_from_db()
+    assert (salon.brand_color, salon.brand_intensity) == ('#c8102e', 'marcada')
+    assert owner.patch(TENANT_URL, {'brand_color': ''}, format='json').data['brand_color'] == ''
+
+
+@pytest.mark.parametrize('bad', ['red', '#c8102', '#c8102e00', 'c8102e'])
+def test_anything_but_a_hex_colour_is_refused(owner, bad):
+    assert owner.patch(TENANT_URL, {'brand_color': bad}, format='json').status_code == 400

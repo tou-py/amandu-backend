@@ -1,16 +1,26 @@
-{% load i18n tz %}{% language "es" %}<!doctype html>
+{% load i18n tz static %}{% language "es" %}<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% if preview %}{% comment %}A service looked at is a page of its own, worth a link in a bio.{% endcomment %}
+<title>{{ preview.name }} en {{ shop.name }}</title>
+<meta name="description" content="{% if preview.description %}{{ preview.description }}{% else %}Reservá {{ preview.name }} en {{ shop.name }} y mirá los horarios libres.{% endif %}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ preview.name }} en {{ shop.name }}">
+<meta property="og:description" content="{% if preview.description %}{{ preview.description }}{% else %}Mirá los horarios libres y reservá tu turno.{% endif %}">
+{% if preview.slides %}<meta property="og:image" content="{{ preview.slides.0 }}">{% endif %}
+{% else %}
 <title>Reservar turno en {{ shop.name }}</title>
 <meta name="description" content="Reservá tu turno en {{ shop.name }}. Elegí el servicio, mirá los horarios libres y pedí el que te sirva.">
 <link rel="canonical" href="{{ request.build_absolute_uri|slice:':0' }}{{ request.path }}">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Reservar turno en {{ shop.name }}">
 <meta property="og:description" content="Elegí el servicio, mirá los horarios libres y pedí tu turno.">
-<meta name="theme-color" content="#f5f5f4" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#14110f" media="(prefers-color-scheme: dark)">
+{% endif %}
+<meta name="theme-color" content="{% if theme %}{{ theme.light.band }}{% else %}#ece9e6{% endif %}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="{% if theme %}{{ theme.dark.band }}{% else %}#3a332e{% endif %}" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="{% static 'scheduling/fonts/bricolage-grotesque.woff2' %}" as="font" type="font/woff2" crossorigin>
 {% comment %}Structured data straight off the shop's own WorkSchedule rows, so what a
    search engine prints as opening hours is what the diary actually enforces.
    A block comment: {# #} is single-line only, and the old two-line one was
@@ -18,10 +28,12 @@
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "HairSalon",
+  "@type": "LocalBusiness",
   "name": "{{ shop.name|escapejs }}",
   "url": "{{ request.path }}",{% if shop.phone %}
-  "telephone": "{{ shop.phone.as_e164 }}",{% endif %}
+  "telephone": "{{ shop.phone.as_e164 }}",{% endif %}{% if shop.address %}
+  "address": "{{ shop.address|escapejs }}",{% endif %}{% if socials %}
+  "sameAs": [{% for one in socials %}"{{ one.url|escapejs }}"{% if not forloop.last %}, {% endif %}{% endfor %}],{% endif %}
   "openingHoursSpecification": [{% for row in opening_hours %}{
     "@type": "OpeningHoursSpecification",
     "dayOfWeek": "https://schema.org/{{ row.day }}",
@@ -32,30 +44,37 @@
 </script>
 <style>
   /* ---------------------------------------------------------------------
-     Kyo's own system, carried outside the login wall. Not a second palette:
-     the values are the panel's (amandu-frontend src/styles/app.css and
-     kyo-motion.css), and the panel's three rules hold here too.
+     Kyo's own system, carried outside the login wall. The values are the
+     panel's (amandu-frontend src/styles/app.css and kyo-motion.css), and
+     its three rules hold here too.
 
-       1. The interface is achromatic -- warm near-black on warm off-white.
-          Every control, including the button that books, is drawn in ink.
+       1. Without a colour of its own the interface is achromatic: warm
+          near-black on warm off-white, every control drawn in ink.
        2. The only colour is the work: the tint that names a professional in
           the staff panel is the tint of the hour you take from them here.
-          "Cualquiera" names nobody, so it is drawn in ink.
+          "Cualquiera" names nobody, so it is drawn in ink. A shop with a
+          colour of its own gets one wash of it for everybody instead: six
+          tints would fight its colour (the theme block below the defaults).
        3. The reserved red is spent on nothing but a problem with the form.
 
-     The brand's sun appears where the brand kit allows it inside the
-     interface: the mark, and the confirmation of a booking.
+     The layout is "cálida en bloque": each step opens on a block in the
+     shop's band colour with the step's question in large type, and the step
+     itself rises over it as a sheet. Services in a mosaic with the first
+     one wide, hours as big buttons for a thumb, the soonest free hour in a
+     bar at the foot. The block follows the shop's intensity: a pale wash of
+     its colour (sutil) or the colour itself (marcada).
 
-     Type is system-ui on purpose. The panel's Inter ships in its bundle; a
-     stranger on cellular should not wait on a webfont to read a price, and
-     Kyo's display voice was never the typeface anyway -- it is the tracking.
-
-     The layout is the "escaparate": a compact band with who the shop is,
-     then one decision per screen in big cards with the shop's own pictures,
-     and the soonest free hour in a bar at the foot while services are
-     browsed. The band reads --band/--band-ink, so a shop's own palette can
-     take it over later without touching the markup.
+     Type: one display face, Bricolage Grotesque, self-hosted (41 KB, OFL,
+     fonts/OFL.txt) for the question, names, prices and hours; the system
+     face for everything read at length. font-display: swap, so text never
+     waits on it. Pictures are shown whole, never taller than their card's
+     box (16:9 for the wide card, square for the rest).
   --------------------------------------------------------------------- */
+  @font-face {
+    font-family: "Bricolage";
+    src: url("{% static 'scheduling/fonts/bricolage-grotesque.woff2' %}") format("woff2");
+    font-weight: 200 800; font-display: swap;
+  }
   :root {
     color-scheme: light dark;
 
@@ -72,14 +91,21 @@
 
     --accent: #1c1917;
     --accent-ink: #ffffff;
-    --band: #f5f5f4;
+    --accent-line: #1c1917;
+    --soft: #ece9e6;
+    --soft-ink: #1c1917;
+    --band: #ece9e6;
     --band-ink: #1c1917;
     --signal-ink: #be123c;
     --signal-bg: #fff1f2;
 
-    --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.06);
-    --shadow-md: 0 4px 12px -2px rgba(28, 25, 23, 0.1), 0 2px 4px -2px rgba(28, 25, 23, 0.06);
-    --shadow-dock: 0 10px 30px -10px rgba(28, 25, 23, 0.35);
+    --f-display: "Bricolage", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --f-text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    /* A tile's lift, tinted by the shop's own colour. */
+    --lift: 0 1px 2px color-mix(in srgb, var(--accent) 8%, transparent), 0 12px 24px -16px color-mix(in srgb, var(--accent) 34%, transparent);
+    --lift-edge: transparent;
+    --shadow-dock: 0 10px 22px -10px rgba(28, 25, 23, 0.45);
 
     --kyo-ambar: #fda23b;
     --kyo-naranja: #f5763a;
@@ -87,6 +113,10 @@
 
     --radius: 12px;
     --radius-lg: 18px;
+
+    /* Paper grain: a fine noise with its alpha baked in, dark specks on a
+       light ground and light ones on a dark ground. */
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .2 -.08'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -103,14 +133,19 @@
 
       --accent: #f5f3f1;
       --accent-ink: #1a1715;
-      --band: #14110f;
+      --accent-line: #f5f3f1;
+      --soft: #3a332e;
+      --soft-ink: #f5f3f1;
+      --band: #3a332e;
       --band-ink: #f5f3f1;
       --signal-ink: #fb7185;
       --signal-bg: #3f1620;
 
-      --shadow-sm: none;
-      --shadow-md: none;
-      --shadow-dock: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+      /* A shadow does not read on a dark ground; an edge does. */
+      --lift: none;
+      --lift-edge: var(--border);
+      --shadow-dock: 0 10px 22px -10px rgba(0, 0, 0, 0.7);
+      --grain: none;
     }
   }
 
@@ -138,7 +173,9 @@
     margin: 0;
     background: var(--canvas);
     color: var(--ink);
-    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 16px/1.55 var(--f-text);
+    /* Paint is not paper; the grain makes it so. */
+    background-image: var(--grain);
     -webkit-font-smoothing: antialiased;
     -webkit-text-size-adjust: 100%;
   }
@@ -146,21 +183,13 @@
   :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   [id] { scroll-margin-top: 1rem; }
   img { max-width: 100%; }
-
-  .skip {
-    position: absolute; left: 1rem; top: -4rem;
-    padding: .6rem 1rem; border-radius: var(--radius);
-    background: var(--accent); color: var(--accent-ink); font-weight: 600;
-  }
-  .skip:focus { top: 1rem; }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+  /* Read aloud, not drawn. */
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
   /* Ported by name from the panel's app.css, one vocabulary on both sides. */
   .amandu-time { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
-  .amandu-display { font-weight: 700; letter-spacing: -.03em; }
-  .amandu-eyebrow {
-    font-size: 12px; font-weight: 600; letter-spacing: .6px;
-    text-transform: uppercase; color: var(--ink-subtle);
-  }
+  .amandu-display { font-family: var(--f-display); font-weight: 700; letter-spacing: -.03em; }
   .amandu-lozenge {
     display: inline-flex; align-items: center; gap: .35rem;
     padding: 3px 10px; border-radius: 999px;
@@ -173,97 +202,178 @@
     stroke-linecap: round; stroke-linejoin: round;
   }
 
-  .wrap { max-width: 40rem; margin: 0 auto; padding: 1.25rem 1rem 2rem; }
+  /* --- moving between steps -------------------------------------------- */
 
-  /* --- the band: who the shop is, in one row --------------------------- */
+  /* Each step is its own page, so the move between them is the browser's,
+     with no script: the block stays and morphs its question, the sheet slides
+     in. Where the browser cannot, the page simply changes, as before. */
+  @view-transition { navigation: auto; }
+  .hero { view-transition-name: hero; }
+  .sheet { view-transition-name: sheet; }
+  ::view-transition-old(sheet) { animation: sheet-out 160ms ease-in both; }
+  ::view-transition-new(sheet) { animation: sheet-in 340ms var(--ease-out) both; }
+  @keyframes sheet-out { to { opacity: 0; transform: translateX(-20px); } }
+  @keyframes sheet-in { from { opacity: 0; transform: translateX(28px); } }
 
-  .band { background: var(--band); color: var(--band-ink); }
-  .band .in {
-    max-width: 40rem; margin: 0 auto; padding: 1rem;
-    display: flex; align-items: center; gap: .8rem;
+  /* --- the block: who the shop is, and what this step asks -------------- */
+
+  /* The band colour exactly as the palette gives it, under the same faint
+     grain as the page: no light or marks of our own that would shift it. */
+  .hero {
+    background: var(--grain), var(--band);
+    color: var(--band-ink);
+    /* The text on the block, one step quieter than its ink but still read. */
+    --band-sub: color-mix(in srgb, var(--band-ink) 82%, var(--band));
+    --band-track: color-mix(in srgb, var(--band-ink) 22%, var(--band));
   }
-  .band .id { min-width: 0; display: grid; gap: .1rem; }
-  .band h1 {
-    font-size: 1.4rem; line-height: 1.2; margin: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .band .status { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; font-weight: 600; opacity: .85; }
-  .band .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-  .band .status.closed { font-weight: 500; }
+  .hero .in { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 2.6rem; display: grid; gap: .9rem; }
+  .id { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+  .id .who { min-width: 0; display: grid; gap: .05rem; }
+  /* A long name wraps rather than losing its end: it is the shop's name. */
+  .id h1, .id .name { font-family: var(--f-display); font-size: 1.2rem; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; margin: 0; overflow-wrap: anywhere; text-wrap: balance; }
+  /* Open or shut first, short and always whole; the address after it, cut
+     with an ellipsis where the phone runs out (it is in full further down). */
+  .where { display: flex; align-items: center; gap: .4rem; min-width: 0; margin: 0; font-size: .82rem; font-weight: 600; color: var(--band-sub); }
+  .status { display: inline-flex; align-items: center; gap: .4rem; flex: none; }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .where .addr { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .where .status + .addr::before { content: "·"; margin-right: .4rem; }
 
-  /* The shop's mark, drawn by what the panel measured of it on upload: a
-     wordmark wide and bare, a mark in a square tile, a logo with a ground of
-     its own on that ground. A drawing with no ground gets a plate only where
-     it would vanish: a dark one on a dark page, a light one on a light page. */
-  .logo { display: grid; place-items: center; flex: none; overflow: hidden; border-radius: var(--radius); }
-  .logo:not(.wide) { width: 48px; height: 48px; }
-  .logo.wide { height: 36px; max-width: 160px; }
+  /* The shop's mark, never cropped, always on a plate so it shows on any
+     block: its own ground when the panel measured one, white under a dark
+     drawing, ink under a light one. Sized by shape so the three weigh about
+     the same: a square tile beside the name, an upright box beside it, a
+     wordmark on a line of its own above it. */
+  .logo { display: grid; place-items: center; flex: none; overflow: hidden; border-radius: var(--radius); background: #fff; padding: 6px; }
+  .logo.square { width: 56px; height: 56px; }
+  .logo.tall { width: 48px; height: 80px; }
+  .logo.wide { height: 52px; max-width: 176px; padding: 6px 10px; }
   .logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
-  .logo.wide img { width: auto; }
-  .logo.plated { border: 1px solid var(--border); padding: 3px; }
-  .logo.ink-light:not(.plated) { background: #1c1917; padding: 4px; }
-  @media (prefers-color-scheme: dark) {
-    .logo.ink-light:not(.plated) { background: none; padding: 0; }
-    .logo.ink-dark:not(.plated) { background: #fafaf9; padding: 4px; }
+  .logo.wide img { width: auto; max-width: 100%; }
+  .logo.ink-light:not(.plated) { background: #1c1917; }
+  .id:has(.logo.wide) { flex-direction: column; align-items: flex-start; gap: .6rem; }
+  @media (min-width: 640px) {
+    .logo.square { width: 64px; height: 64px; }
+    .logo.tall { width: 54px; height: 90px; }
+    .logo.wide { height: 60px; max-width: 208px; }
   }
 
-  /* --- the step: where you are, and the way back ------------------------- */
+  /* The three things a stranger does besides booking: write, find the door,
+     look at the work. Only on the list, where they are browsing. */
+  .acts { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .acts a {
+    display: inline-flex; align-items: center; gap: .35rem;
+    min-height: 36px; padding: .35rem .8rem .35rem .65rem; border-radius: 999px;
+    font-size: .86rem; font-weight: 650; text-decoration: none;
+    background: color-mix(in srgb, var(--band-ink) 11%, var(--band));
+    transition: background-color 140ms var(--ease-out);
+  }
+  .acts .icon { width: 17px; height: 17px; }
+  @media (hover: hover) { .acts a:hover { background: color-mix(in srgb, var(--band-ink) 18%, var(--band)); } }
 
-  .steptop { display: flex; align-items: center; gap: .75rem; margin: 0 0 .25rem; }
+  .ask { font-family: var(--f-display); font-size: clamp(2rem, 9vw, 2.6rem); font-weight: 800; line-height: .98; letter-spacing: -.035em; margin: .35rem 0 0; text-wrap: balance; }
+  .summary { margin: -.35rem 0 0; color: var(--band-sub); font-size: .95rem; font-weight: 500; }
+
+  .steptop { display: flex; align-items: center; gap: .7rem; }
   .back {
     display: grid; place-items: center; flex: none;
-    width: 44px; height: 44px; border-radius: 50%;
-    border: 1px solid var(--border); background: var(--surface); text-decoration: none;
+    width: 40px; height: 40px; border-radius: 50%; text-decoration: none;
+    background: color-mix(in srgb, var(--band-ink) 12%, var(--band));
   }
   .progress { flex: 1; display: flex; gap: 5px; }
-  .progress i { flex: 1; height: 4px; border-radius: 4px; background: var(--border); }
-  .progress i.on { background: var(--accent); }
-  .steplabel { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin: .75rem 0 .25rem; }
-  /* The one big type on the page: the band stays small on purpose, so the
-     question being asked is what leads. */
-  .steplabel h2 { font-size: 1.75rem; line-height: 1.15; margin: 0; letter-spacing: -.03em; }
-  .steplabel span { font-size: .8rem; font-weight: 600; color: var(--ink-subtle); white-space: nowrap; }
-  .summary { margin: 0 0 1.25rem; color: var(--ink-secondary); font-size: .95rem; }
-  .step-body { margin-top: 1rem; }
+  .progress i { flex: 1; height: 5px; border-radius: 5px; background: var(--band-track); }
+  .progress i.on { background: var(--band-ink); }
+  /* The step on screen is under way, not done: half drawn. */
+  .progress i.now { background: linear-gradient(90deg, var(--band-ink) 50%, var(--band-track) 50%); }
+  .count { font-size: .8rem; font-weight: 600; color: var(--band-sub); white-space: nowrap; }
 
-  /* --- services: big cards with the shop's own pictures ------------------ */
+  /* --- the sheet: the step itself, risen over the block ----------------- */
 
-  .cat { margin: 0 0 1.75rem; }
-  .cat h3 { font-size: 1.05rem; margin: 0 0 .75rem; letter-spacing: -.01em; }
-  .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
-  /* A card is not one link: the carousel inside it has controls of its own,
-     and a control cannot sit inside a link. Each picture and the text are
-     links to the same next step instead, so a tap anywhere still goes on. */
-  .card {
-    display: grid; gap: .55rem; padding: .5rem .5rem .9rem;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
-    transition: border-color 140ms var(--ease-out);
+  .sheet {
+    position: relative; margin-top: -1.4rem;
+    background: var(--grain), var(--canvas); border-radius: 26px 26px 0 0;
   }
-  /* A 1200px picture must not widen its track past the phone: the card's
-     one column is capped, and a slide (a flex item with an aspect ratio)
-     may shrink below the picture's own width. */
-  .cards, .card { grid-template-columns: minmax(0, 1fr); }
-  .cards > li, .card > *, .slide { min-width: 0; }
-  @media (hover: hover) { .card:hover { border-color: var(--border-strong); } }
-  .card .text { display: grid; gap: .2rem; padding: 0 .5rem; text-decoration: none; transition: transform 140ms var(--ease-out); }
-  .card .text:active { transform: scale(.99); }
-  .card strong { font-size: 1.1rem; line-height: 1.3; overflow-wrap: anywhere; }
-  .card .desc { color: var(--ink-secondary); font-size: .95rem; overflow-wrap: anywhere; }
-  .card .meta { color: var(--ink-subtle); font-size: .9rem; }
-  .card .meta b { color: var(--ink); font-weight: 650; }
+  .wrap { max-width: 40rem; margin: 0 auto; padding: 1.25rem 1rem 2rem; }
 
-  /* The cover and up to two more, one whole picture at a time, swiped
-     sideways: CSS scroll-snap, no script. Each slide carries its own "1/3"
-     and, while there is another to its right, an arrow at its edge, so what
-     they say is right with no script tracking the scroll. */
-  .gallery { position: relative; }
+  /* --- services: a list to scan, each with a page of its own ------------- */
+
+  /* The categories stay in reach while the list scrolls under them. */
+  .cats {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none;
+    margin: -.5rem -1rem .6rem; padding: .6rem 1rem;
+    background: color-mix(in srgb, var(--canvas) 86%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  }
+  .cats ~ .cat { scroll-margin-top: 3.6rem; }
+  .cats::-webkit-scrollbar { display: none; }
+  .cats a {
+    flex: none; padding: .4rem .85rem; border-radius: 999px; text-decoration: none;
+    font-size: .88rem; font-weight: 600; color: var(--soft-ink);
+    background: var(--surface); box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .cat { margin: 0 0 1.6rem; }
+  .cat h3 { font-family: var(--f-display); font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; margin: 0 0 .7rem; }
+  /* A list to scan, as a menu is: the words on the left, one picture on the
+     right as a taste. The pictures get their room on the service's own page,
+     one tap away. One column on a phone, two once there is the width. */
+  .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 768px) { .wide .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .card { min-width: 0; scroll-margin-top: 4.5rem; }
+  .card > a {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .9rem;
+    height: 100%; padding: .8rem .8rem .8rem 1rem; text-decoration: none;
+    background: var(--surface); border-radius: var(--radius-lg);
+    box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge);
+    transition: transform 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  }
+  .card > a:active { transform: scale(.985); }
+  @media (hover: hover) {
+    .card > a:hover { transform: translateY(-2px); box-shadow: 0 2px 4px color-mix(in srgb, var(--accent) 10%, transparent), 0 20px 30px -18px color-mix(in srgb, var(--accent) 42%, transparent), inset 0 0 0 1px var(--lift-edge); }
+    .card > a:hover .thumb img { scale: 1.05; }
+  }
+  .card .text { display: grid; gap: .3rem; min-width: 0; }
+  .card strong { font-family: var(--f-display); font-size: 1.08rem; font-weight: 700; line-height: 1.2; letter-spacing: -.015em; overflow-wrap: anywhere; }
+  .card .desc { color: var(--ink-secondary); font-size: .88rem; line-height: 1.4; overflow-wrap: anywhere;
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .55rem; margin-top: .1rem; color: var(--ink-subtle); font-size: .85rem; }
+  .thumb { position: relative; display: block; width: 104px; aspect-ratio: 1; border-radius: var(--radius); overflow: hidden; background: var(--sunken); }
+  .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; transition: scale 420ms var(--ease-out); }
+  .thumb .plus {
+    position: absolute; right: .35rem; bottom: .35rem; padding: 1px 7px; border-radius: 999px;
+    background: rgba(0, 0, 0, .58); color: #fff; font-size: 11px; font-weight: 700;
+  }
+  @media (min-width: 640px) { .thumb { width: 120px; } }
+  .price { font-family: var(--f-display); font-weight: 700; font-size: .85rem; white-space: nowrap; padding: .1rem .55rem; border-radius: 999px; background: var(--soft); color: var(--soft-ink); }
+  .price.ask { font-family: var(--f-text); font-weight: 600; background: none; color: var(--ink-subtle); padding: 0; }
+
+  /* --- a service looked at: its pictures large, then the words ----------- */
+
+  /* Whole, in the shape it was uploaded in, the width of the sheet, but never
+     taller than 4:5 nor than most of the screen, so the bar that chooses it
+     stays in reach. A narrower picture stands centred on a mat (--r is width
+     over height). */
+  .gallery {
+    position: relative; container-type: inline-size;
+    display: grid; justify-items: center;
+    background: var(--sunken); border-radius: var(--radius-lg);
+  }
+  .look { display: grid; gap: 1.1rem; }
+  .look .facts { display: grid; gap: .6rem; }
+  .look .meta { font-size: .95rem; margin: 0; }
+  .look .meta .price:not(.ask) { font-size: 1rem; padding: .2rem .7rem; }
+  /* A service name is longer than a question: a step smaller, so three
+     lines of it do not push the pictures below the fold. */
+  h1.ask { font-size: clamp(1.7rem, 7vw, 2.2rem); line-height: 1.04; }
+  .look .about { margin: 0; color: var(--ink-secondary); font-size: 1rem; line-height: 1.6; max-width: 62ch; white-space: pre-line; }
   .carousel {
+    --cap: min(125cqi, 70svh);
     display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
-    border-radius: var(--radius); scrollbar-width: none;
+    width: 100%; width: min(100%, calc(var(--cap) * var(--r)));
+    border-radius: var(--radius-lg); scrollbar-width: none;
   }
   .carousel::-webkit-scrollbar { display: none; }
-  .slide { position: relative; display: block; flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--sunken); }
+  .slide { position: relative; display: block; flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--sunken); }
 
   /* Where the browser draws carousel buttons itself (Chrome 135+, Android
      included), the arrows are real buttons, still without a script: they
@@ -271,12 +381,12 @@
      Elsewhere the per-slide arrow below stays as the hint to swipe. */
   .carousel::scroll-button(*) {
     position: absolute; top: 50%; translate: 0 -50%;
-    width: 36px; height: 36px; border: 0; border-radius: 50%;
-    background: rgba(0, 0, 0, .55); color: #fff;
-    font: 700 1.4rem/1 system-ui, sans-serif; cursor: pointer;
+    width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 50%;
+    background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+    font: 700 1.25rem/1 var(--f-text); cursor: pointer;
   }
-  .carousel::scroll-button(right) { content: "›" / "Foto siguiente"; right: .5rem; }
-  .carousel::scroll-button(left) { content: "‹" / "Foto anterior"; left: .5rem; }
+  .carousel::scroll-button(right) { content: "›" / "Foto siguiente"; right: .6rem; }
+  .carousel::scroll-button(left) { content: "‹" / "Foto anterior"; left: .6rem; }
   .carousel::scroll-button(*):disabled { opacity: 0; pointer-events: none; }
   /* A property shipped with the buttons: `selector(::scroll-button(...))`
      is not recognised by the browsers that draw them. */
@@ -286,30 +396,39 @@
     position: absolute; display: grid; place-items: center;
     background: rgba(0, 0, 0, .55); color: #fff; font-weight: 700;
   }
-  .slide .count { right: .5rem; top: .5rem; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
-  .slide .more { right: .5rem; top: 50%; width: 32px; height: 32px; margin-top: -16px; border-radius: 50%; }
-  .slide .more .icon { width: 18px; height: 18px; stroke-width: 2.2; }
+  .slide .count { right: .6rem; top: .6rem; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
+  .slide .more { right: .6rem; top: 50%; width: 32px; height: 32px; margin-top: -16px; border-radius: 50%; }
+  .slide .more .icon { width: 16px; height: 16px; stroke-width: 2.2; }
 
-  /* --- who: portrait cards --------------------------------------------- */
+  /* --- who: "Cualquiera" first and wide, then everybody in squares ------- */
 
-  .pros { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
-  @media (min-width: 560px) { .pros { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  .pro { display: grid; gap: .35rem; text-decoration: none; }
+  .pros { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+  @media (min-width: 420px) { .pros { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .pros > .first { grid-column: 1 / -1; }
+  .pro { display: grid; gap: .4rem; text-decoration: none; }
   .pro .ph {
-    aspect-ratio: 3 / 4; border-radius: var(--radius-lg); overflow: hidden;
+    aspect-ratio: 1; border-radius: var(--radius-lg); overflow: hidden;
     display: grid; place-items: center;
     background: var(--sel-bg); color: var(--sel-ink);
-    border: 1px solid var(--border);
-    transition: border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+    box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge);
+    transition: transform 140ms var(--ease-out);
   }
   .pro .ph img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; }
-  .pro .ph .initials { font-size: 2rem; font-weight: 700; letter-spacing: .5px; }
-  .pro.any .ph { background: var(--sunken); color: var(--ink-secondary); }
-  .pro.any .ph .icon { width: 44px; height: 44px; stroke-width: 1.3; }
-  .pro strong { font-size: 1rem; }
-  .pro small { color: var(--ink-subtle); font-size: .85rem; line-height: 1.3; }
-  .pro:active .ph { transform: scale(.98); }
-  @media (hover: hover) { .pro:hover .ph { border-color: var(--border-strong); } }
+  .pro .ph .initials { font-family: var(--f-display); font-size: 1.9rem; font-weight: 700; letter-spacing: -.01em; }
+  .pro strong { font-family: var(--f-display); font-size: 1rem; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
+  .pro small { color: var(--ink-subtle); font-size: .9rem; line-height: 1.3; }
+  .pro:not(.any):active .ph { transform: scale(.97); }
+  /* What most people want, so the one drawn as an answer, not a blank. */
+  .pro.any {
+    grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: .9rem;
+    padding: .65rem; background: var(--surface); border-radius: var(--radius-lg);
+    box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge);
+    transition: transform 140ms var(--ease-out);
+  }
+  .pro.any .ph { border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+  .pro.any .ph .icon { width: 28px; height: 28px; stroke-width: 1.6; }
+  .pro.any .t { display: grid; gap: .1rem; }
+  .pro.any:active { transform: scale(.99); }
 
   .who-line { display: inline-flex; align-items: center; gap: .45rem; color: var(--ink-secondary); font-size: .95rem; }
   .avatar {
@@ -325,75 +444,78 @@
   .month { margin: 0 0 .5rem; color: var(--ink-secondary); font-size: .9rem; font-weight: 600; }
   .month::first-letter { text-transform: uppercase; }
   .days {
-    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem;
-    list-style: none; margin: 0 0 1.5rem; padding: 0;
+    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .35rem;
+    list-style: none; margin: 0 0 1.6rem; padding: 0;
   }
   .d {
+    position: relative;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    min-height: 58px; border-radius: var(--radius);
-    text-decoration: none; line-height: 1.15;
-    border: 1px solid transparent;
-    transition: background-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+    min-height: 62px; padding-bottom: 6px; border-radius: 15px;
+    text-decoration: none; line-height: 1.1;
+    transition: transform 140ms var(--ease-out);
   }
   .d .wd { font-size: 12px; color: var(--ink-subtle); }
-  .d .num { font-size: 1.1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
-  a.d { background: var(--surface); border-color: var(--border); }
+  .d .num { font-family: var(--f-display); font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  a.d { background: var(--surface); box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge); }
+  /* A day with hours carries a dot, as a diary marks a day with room. */
+  a.d::after { content: ""; position: absolute; bottom: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-line); }
   a.d:active { transform: scale(.95); }
-  @media (hover: hover) { a.d:hover { border-color: var(--border-strong); } }
-  a.d[aria-current="date"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-  a.d[aria-current="date"] .wd { color: var(--accent-ink); opacity: .75; }
+  a.d[aria-current="date"] { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+  a.d[aria-current="date"] .wd { color: var(--accent-ink); opacity: .8; }
+  a.d[aria-current="date"]::after { background: var(--accent-ink); }
   /* A day with nothing free is still drawn, so the fortnight keeps its shape,
      but it is not a control. */
-  span.d { color: var(--ink-subtle); }
+  span.d { color: var(--ink-subtle); opacity: .7; }
   span.d .num { font-weight: 450; text-decoration: line-through; text-decoration-color: var(--border-strong); }
 
-  .day-title { font-size: 1.05rem; font-weight: 650; margin: 0 0 .15rem; }
+  .day-title { font-family: var(--f-display); font-size: 1.25rem; font-weight: 700; letter-spacing: -.02em; margin: 0 0 .1rem; }
   .day-title::first-letter { text-transform: uppercase; }
   .day-sub { margin: 0 0 1rem; color: var(--ink-subtle); font-size: .9rem; }
   fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-  .period { margin: 0 0 1rem; }
-  .period .amandu-eyebrow { margin: 0 0 .5rem; }
-  .times {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(5.25rem, 1fr)); gap: .5rem;
-  }
+  /* A legend straddles a box's top border unless it is floated into it. */
+  fieldset.card-box legend { float: left; width: 100%; padding: 0; }
+  fieldset.card-box legend + * { clear: both; }
+  fieldset .error { margin-bottom: 1rem; }
+  .period { margin: 0 0 1.1rem; }
+  .pname { font-family: var(--f-display); font-size: 1rem; font-weight: 700; margin: 0 0 .5rem; color: var(--ink-secondary); }
+  .times { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
   .slot { position: relative; display: block; cursor: pointer; text-decoration: none; }
   .slot input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  /* Big enough for a thumb, in the shop's wash, an hour read at a glance. */
   .slot span, a.slot {
     display: flex; align-items: center; justify-content: center;
-    min-height: 48px; border-radius: var(--radius);
-    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm);
-    font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em;
-    transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+    min-height: 54px; border-radius: 15px;
+    background: var(--soft); color: var(--soft-ink);
+    font-family: var(--f-display); font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+    transition: transform 140ms var(--ease-out), background-color 140ms var(--ease-out);
   }
   .slot:active span, a.slot:active { transform: scale(.96); }
-  @media (hover: hover) { .slot:hover span, a.slot:hover { border-color: var(--border-strong); } }
+  @media (hover: hover) { .slot:hover span, a.slot:hover { background: color-mix(in srgb, var(--soft) 80%, var(--accent)); } }
   /* The appointment block from the staff panel: the person's pale tint with
      its own deeper ink, the selection and the name of whose hour it is. */
-  .slot input:checked + span { background: var(--sel-bg); color: var(--sel-ink); border-color: var(--sel-bg); }
+  .slot input:checked + span { background: var(--sel-bg); color: var(--sel-ink); }
   .slot input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
 
   /* --- form ------------------------------------------------------------ */
 
   .card-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    background: var(--surface); border-radius: 20px;
+    box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge);
     padding: 1.25rem 1.1rem;
   }
   .field { margin: 0 0 1.1rem; }
   .field label { display: block; font-size: .9rem; font-weight: 600; margin-bottom: .4rem; }
   .field label small { font-weight: 400; color: var(--ink-subtle); }
   input[type=text], input[type=tel], input[type=email] {
-    width: 100%; min-height: 48px; padding: .7rem .9rem;
+    width: 100%; min-height: 50px; padding: .7rem .9rem;
     font: inherit; color: var(--ink);
-    background: var(--surface);
+    background: var(--canvas);
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
+    border-radius: 14px;
     transition: border-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
   }
   input[type=text]:focus, input[type=tel]:focus, input[type=email]:focus {
-    outline: none; border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink);
+    outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line);
   }
   input[aria-invalid="true"] { border-color: var(--signal-ink); }
   .help { margin: .4rem 0 0; color: var(--ink-subtle); font-size: .85rem; }
@@ -401,31 +523,30 @@
   .consent {
     display: flex; gap: .75rem; align-items: flex-start;
     padding: .9rem 1rem; margin: .25rem 0 1.25rem;
-    border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--sunken); cursor: pointer;
+    border-radius: 14px; background: var(--soft); color: var(--soft-ink); cursor: pointer;
   }
-  .consent input { width: 20px; height: 20px; margin: .1rem 0 0; accent-color: var(--accent); flex: none; cursor: pointer; }
+  .consent input { width: 20px; height: 20px; margin: .1rem 0 0; accent-color: var(--accent-line); flex: none; cursor: pointer; }
   .consent strong { display: block; font-size: .95rem; font-weight: 600; }
-  .consent span span { display: block; font-size: .85rem; color: var(--ink-subtle); }
+  .consent span span { display: block; font-size: .85rem; opacity: .85; }
 
   button {
     display: flex; align-items: center; justify-content: center; gap: .5rem;
-    width: 100%; min-height: 52px; padding: .9rem 1rem;
-    font: inherit; font-weight: 650;
+    width: 100%; min-height: 54px; padding: .9rem 1rem;
+    font: 700 1.05rem var(--f-display); letter-spacing: -.01em;
     color: var(--accent-ink); background: var(--accent);
-    border: 0; border-radius: var(--radius);
+    border: 0; border-radius: 16px;
     cursor: pointer;
     transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
   }
   button:active { transform: scale(.98); }
-  @media (hover: hover) { button:hover { opacity: .9; } }
+  @media (hover: hover) { button:hover { opacity: .92; } }
   .fine { margin: .75rem 0 0; text-align: center; color: var(--ink-subtle); font-size: .85rem; }
 
   .error { display: flex; gap: .35rem; color: var(--signal-ink); font-size: .9rem; margin: .4rem 0 0; }
   .error::before { content: "!"; font-weight: 800; }
   .alert {
     border: 1px solid var(--signal-ink); background: var(--signal-bg);
-    border-radius: var(--radius); padding: .9rem 1rem; margin: 0 0 1.5rem;
+    border-radius: 14px; padding: .9rem 1rem; margin: 0 0 1.25rem;
   }
   .alert:focus { outline: 2px solid var(--signal-ink); outline-offset: 2px; }
   .alert h2 { font-size: 1rem; margin: 0 0 .35rem; color: var(--signal-ink); }
@@ -434,16 +555,16 @@
 
   .notice {
     display: flex; gap: .75rem; align-items: flex-start;
-    background: var(--sunken); border-radius: var(--radius);
-    padding: 1rem 1.1rem; color: var(--ink-secondary);
+    background: var(--soft); color: var(--soft-ink); border-radius: 16px;
+    padding: 1rem 1.1rem;
   }
   .notice p { margin: 0; }
 
   /* --- the ticket: what is being asked for ------------------------------ */
 
-  .ticket { text-align: left; padding: 0; overflow: hidden; margin: 0 0 1.25rem; }
+  .ticket { text-align: left; padding: 0; overflow: hidden; margin: 0 0 1rem; }
   .ticket .top { padding: 1.1rem 1.2rem 1rem; }
-  .ticket .when { display: block; font-size: 1.5rem; line-height: 1.15; margin: .25rem 0 .6rem; }
+  .ticket .when { display: block; font-size: 1.55rem; line-height: 1.1; margin: .1rem 0 .6rem; }
   .ticket .when::first-letter { text-transform: uppercase; }
   .ticket dl { margin: 0; padding: .9rem 1.2rem; border-top: 1px dashed var(--border-strong); display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; font-size: .95rem; }
   .ticket dt { color: var(--ink-subtle); }
@@ -454,39 +575,42 @@
 
   .dock {
     position: sticky; bottom: 0; z-index: 2;
-    padding: 0 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+    padding: 0 1rem calc(.9rem + env(safe-area-inset-bottom, 0px));
   }
+  /* Ink, so it does not compete with the block; its button wears the block. */
   .dock a {
     max-width: 38rem; margin: 0 auto;
     display: flex; align-items: center; gap: .75rem;
-    padding: .6rem .6rem .6rem .8rem;
-    background: var(--surface); color: var(--ink); text-decoration: none;
-    border: 1px solid var(--border); border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-dock);
+    padding: .55rem .55rem .55rem .9rem;
+    background: var(--ink); color: var(--canvas); text-decoration: none;
+    border-radius: 20px; box-shadow: var(--shadow-dock);
   }
-  .dock .ic { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--radius); background: var(--sunken); }
-  .dock .w { flex: 1; min-width: 0; line-height: 1.25; }
-  .dock small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-subtle); }
-  .dock strong { font-size: 1rem; }
-  .dock .sv { display: block; font-size: .85rem; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock .ic { display: grid; place-items: center; flex: none; opacity: .8; }
+  .dock .w { flex: 1; min-width: 0; line-height: 1.3; }
+  /* The service leads: whoever taps is booking that, and must see it. */
+  .dock strong { display: block; font-family: var(--f-display); font-size: 1.02rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock .sv { display: block; font-size: .84rem; opacity: .85; }
+  .dock .sv b { font-weight: 650; }
   .dock .go {
-    flex: none; padding: .6rem .9rem; border-radius: var(--radius);
-    background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: .95rem;
+    flex: none; padding: .65rem 1rem; border-radius: 14px;
+    background: var(--band); color: var(--band-ink); font: 700 .98rem var(--f-display);
   }
+  /* Zoomed in, or a phone on its side: a bar that holds the screen is in the way. */
+  @media (max-height: 32rem) { .dock { position: static; } }
 
   /* --- the confirmation ------------------------------------------------ */
 
-  .done { text-align: center; padding-top: 1rem; }
-  .done h1 { font-size: clamp(2rem, 8vw, 2.6rem); line-height: 1.1; margin: .5rem 0 .6rem; }
+  .done { text-align: center; padding-top: 1.5rem; }
+  .done h2 { font-family: var(--f-display); font-size: clamp(2rem, 8vw, 2.6rem); font-weight: 800; line-height: 1.05; letter-spacing: -.035em; margin: .5rem 0 .6rem; }
   .done .lede { color: var(--ink-secondary); margin: 0 auto 1.75rem; max-width: 24rem; }
   .actions { display: grid; gap: .6rem; margin: 1.5rem 0 0; }
   .button-link {
     display: flex; align-items: center; justify-content: center; gap: .5rem;
-    min-height: 52px; border-radius: var(--radius);
-    font-weight: 650; text-decoration: none;
+    min-height: 54px; border-radius: 16px;
+    font: 700 1rem var(--f-display); text-decoration: none;
     background: var(--accent); color: var(--accent-ink);
   }
-  .button-link.quiet { background: transparent; color: var(--ink); border: 1px solid var(--border-strong); }
+  .button-link.quiet { background: var(--soft); color: var(--soft-ink); }
 
   /* The brand kit's confirmation, verbatim: the whole sun and a check,
      600ms, once (kyo-motion.css). */
@@ -499,41 +623,170 @@
   @keyframes kyo-check { from { stroke-dashoffset: 36; } to { stroke-dashoffset: 0; } }
   @keyframes kyo-rayo { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: scale(1); } }
 
+  /* --- where the shop is, when it opens, where else it lives ------------ */
+
+  .info { margin: 2.2rem 0 0; }
+  .info h3 { font-family: var(--f-display); font-size: 1.35rem; font-weight: 750; letter-spacing: -.025em; margin: 0 0 .8rem; }
+  .panel {
+    background: var(--surface); border-radius: 20px; overflow: hidden;
+    box-shadow: var(--lift), inset 0 0 0 1px var(--lift-edge);
+  }
+  /* One panel, its parts ruled apart rather than boxed again. */
+  .panel > * { margin: 0; padding: 1rem 1.1rem; }
+  .panel > * + * { border-top: 1px solid var(--border); }
+  .panel .map { display: block; padding: 0; width: 100%; aspect-ratio: 16 / 10; border: 0; background: var(--sunken); }
+  .place { display: grid; gap: .8rem; }
+  .place address { font-style: normal; font-size: 1rem; font-weight: 550; line-height: 1.4; display: flex; gap: .55rem; }
+  .place address .icon { margin-top: .1rem; color: var(--ink-subtle); }
+  .btns { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .45rem;
+    min-height: 44px; padding: .5rem 1rem; border-radius: 14px;
+    font: 700 .95rem var(--f-display); text-decoration: none;
+    background: var(--soft); color: var(--soft-ink);
+    transition: transform 140ms var(--ease-out);
+  }
+  .btn.main { background: var(--accent); color: var(--accent-ink); }
+  .btn:active { transform: scale(.97); }
+  .btn .icon { width: 18px; height: 18px; }
+
+  .hours summary {
+    display: flex; align-items: center; gap: .55rem; cursor: pointer; list-style: none;
+    font-weight: 600;
+  }
+  .hours summary::-webkit-details-marker { display: none; }
+  .hours summary .icon { color: var(--ink-subtle); }
+  .hours summary .chev { margin-left: auto; width: 18px; height: 18px; transition: rotate 200ms var(--ease-out); }
+  .hours[open] summary .chev { rotate: 180deg; }
+  .hours dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: .8rem 0 0 1.85rem; font-size: .95rem; }
+  .hours dt { color: var(--ink-secondary); }
+  .hours dd { margin: 0; text-align: right; }
+  .hours .today { font-weight: 700; color: var(--ink); }
+  .hours .shut { color: var(--ink-subtle); }
+
+  .socials { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; }
+  .socials a {
+    display: inline-flex; align-items: center; gap: .45rem;
+    min-height: 40px; padding: .4rem .85rem .4rem .7rem; border-radius: 999px;
+    font-size: .9rem; font-weight: 600; text-decoration: none;
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    transition: background-color 140ms var(--ease-out);
+  }
+  .socials .icon { width: 18px; height: 18px; }
+  @media (hover: hover) {
+    .socials a:hover { background-color: var(--hover); }
+    .btn:hover { background: color-mix(in srgb, var(--soft) 80%, var(--accent)); }
+    .btn.main:hover { background: var(--accent); opacity: .92; }
+  }
+
   /* --- footer ---------------------------------------------------------- */
 
-  .foot {
-    display: flex; align-items: center; justify-content: center; gap: .5rem;
-    margin: 2.5rem 0 0; font-size: .85rem; color: var(--ink-subtle);
-  }
-  .foot svg { height: 18px; width: auto; color: var(--ink); }
+  .foot { display: grid; justify-items: center; margin: 2.5rem 0 0; font-size: .85rem; color: var(--ink-subtle); }
+  .foot a { display: grid; justify-items: center; gap: .35rem; padding: .7rem 1.1rem; border-radius: var(--radius-lg); text-decoration: none; }
+  .foot .by { display: flex; align-items: center; gap: .5rem; }
+  .foot .by svg { height: 18px; width: auto; color: var(--ink); }
+  .foot .cta { display: inline-flex; align-items: center; gap: .25rem; font-weight: 600; color: var(--ink-secondary); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+  .foot .cta .icon { width: 14px; height: 14px; stroke-width: 2; }
+  @media (hover: hover) { .foot a:hover { background: var(--hover); } .foot a:hover .cta { text-decoration-color: currentColor; } }
   .kyo-sol-a { fill: var(--kyo-ambar); }
   .kyo-sol-b { fill: var(--kyo-naranja); }
 
+  /* A desktop gets the browsing steps three (or four) across; the hours and
+     the form keep a phone's measure, which is the right one for them. */
+  @media (min-width: 1024px) {
+    .wide .hero .in, .wide .wrap { max-width: 64rem; }
+    .wide .pros { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .wide .info { max-width: 40rem; }
+    .wide .dock a { max-width: 62rem; }
+  }
+
+  /* Things arrive as they scroll in rather than sitting there already: the
+     browser's scroll timeline, no script; where it is missing they are
+     simply there. */
+  @supports (animation-timeline: view()) {
+    .card, .pros > li, .period, .card-box {
+      animation: arrive linear both;
+      animation-timeline: view(); animation-range: entry 0% entry 55%;
+    }
+  }
+  @keyframes arrive { from { opacity: 0; translate: 0 22px; scale: .97; } }
+
   @media (prefers-reduced-motion: reduce) {
+    @view-transition { navigation: none; }
     html { scroll-behavior: auto; }
     *, *::before, *::after { transition: none !important; animation: none !important; }
   }
 </style>
-</head>
-<body class="h{{ hue|default:0 }}">
+{% if theme %}{% comment %}The shop's own palette (apps/tenancy/theme.py), after the defaults so it
+   wins at the same specificity. Everybody wears one pale wash of it rather
+   than six tints that would fight it; a picked hour is the colour itself.{% endcomment %}
+<style>
+  :root { {% for name, value in theme.light.items %} --{{ name }}: {{ value }};{% endfor %} }
+  @media (prefers-color-scheme: dark) {
+    :root { {% for name, value in theme.dark.items %} --{{ name }}: {{ value }};{% endfor %} }
+  }
+  .h1, .h2, .h3, .h4, .h5, .h6 { --sel-bg: var(--soft); --sel-ink: var(--soft-ink); }
+  .slot input:checked + span { background: var(--accent); color: var(--accent-ink); }
+</style>
+{% endif %}</head>
+<body class="h{{ hue|default:0 }}{% if wide and not booked_at %} wide{% endif %}">
 {% timezone shop_timezone %}
 
-<header class="band">
+{% comment %}The icons drawn more than once, defined once: the networks, the pin, the phone.{% endcomment %}
+<svg width="0" height="0" style="position: absolute" aria-hidden="true">
+  <symbol id="i-instagram" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r=".7" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-facebook" viewBox="0 0 24 24"><path d="M14.5 8.5H16V5h-2a4 4 0 0 0-4 4v2H8v3.5h2V21h3.5v-6.5H16l.5-3.5h-3V9.5a1 1 0 0 1 1-1Z"/></symbol>
+  <symbol id="i-tiktok" viewBox="0 0 24 24"><path d="M14 3.5v11a3.5 3.5 0 1 1-3.5-3.5"/><path d="M14 3.5c.6 2.6 2.4 4.3 5 4.5"/></symbol>
+  <symbol id="i-website" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.6 3.5 5.4 3.5 8.5s-1.1 5.9-3.5 8.5c-2.4-2.6-3.5-5.4-3.5-8.5s1.1-5.9 3.5-8.5Z"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M5.5 4h3l1.5 4-2 1.3a11 11 0 0 0 6.7 6.7L16 14l4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 3.5 6a2 2 0 0 1 2-2Z"/></symbol>
+  <symbol id="i-whatsapp" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 3.6 6.7L4 20l1.3-3.6A8 8 0 0 1 4 12Z"/></symbol>
+</svg>
+
+<header class="hero">
   <div class="in">
-    {% if logo %}<span class="logo{% if logo.wide %} wide{% endif %} ink-{{ logo.ink }}{% if logo.background %} plated{% endif %}"{% if logo.background %} style="background: {{ logo.background }}"{% endif %}><img src="{{ logo.url }}" alt="Logo de {{ shop.name }}"></span>{% endif %}
     <div class="id">
-      {% if booked_at %}<p class="amandu-display" style="margin:0;font-size:1.25rem">{{ shop.name }}</p>{% else %}<h1 class="amandu-display">{{ shop.name }}</h1>{% endif %}
-      {% if not unconfigured %}
-        {% if open_until %}
-          <span class="status"><span class="dot" aria-hidden="true"></span>Abierto hasta las {{ open_until|time:"H:i" }}</span>
-        {% else %}
-          <span class="status closed">Cerrado ahora · reservá igual</span>
+      {% if logo %}<span class="logo {{ logo.shape }} ink-{{ logo.ink }}{% if logo.background %} plated{% endif %}"{% if logo.background %} style="background: {{ logo.background }}"{% endif %}><img src="{{ logo.url }}" alt="Logo de {{ shop.name }}"></span>{% endif %}
+      <div class="who">
+        {% if booked_at or preview %}<p class="name">{{ shop.name }}</p>{% else %}<h1>{{ shop.name }}</h1>{% endif %}
+        {% if not unconfigured %}
+          <p class="where">
+            {% if open_until %}
+              <span class="status"><span class="dot" aria-hidden="true"></span>Abierto hasta las {{ open_until|time:"H:i" }}</span>
+            {% else %}
+              <span class="status">Cerrado ahora, reservá igual</span>
+            {% endif %}
+            {% if shop.address and not booked_at %}<span class="addr">{{ shop.address }}</span>{% endif %}
+          </p>
         {% endif %}
-      {% endif %}
+      </div>
     </div>
+    {% if step == "servicio" and not preview and not booked_at and not unconfigured %}
+      {% if contact or maps_link or socials %}
+        <nav class="acts" aria-label="Contacto">
+          {% if contact.kind == "whatsapp" %}<a href="{{ contact.href }}"><svg class="icon" aria-hidden="true"><use href="#i-whatsapp"/></svg>WhatsApp</a>
+          {% elif contact %}<a href="{{ contact.href }}"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg>Llamar</a>{% endif %}
+          {% if maps_link %}<a href="{{ maps_link }}"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg>Cómo llegar</a>{% endif %}
+          {% with first=socials.0 %}{% if first %}<a href="{{ first.url }}"><svg class="icon" aria-hidden="true"><use href="#i-{{ first.network }}"/></svg>{% if first.network == "website" %}Web{% else %}{{ first.network|capfirst }}{% endif %}</a>{% endif %}{% endwith %}
+        </nav>
+      {% endif %}
+    {% endif %}
+    {% if not booked_at and not unconfigured %}
+      {% if preview %}<h1 class="ask">{{ step_title }}</h1>{% else %}<h2 class="ask">{{ step_title }}</h2>{% endif %}
+      {% comment %}What was chosen so far. Not over the form's ticket, which says it all again.{% endcomment %}
+      {% if step == "profesional" or step == "cuando" or errors.start %}
+        <p class="summary">{{ service.name }}{% if step != "profesional" %} · {% if professional %}con {{ professional.display_name }}{% else %}con quien esté libre{% endif %}{% endif %}{% if picked %} · <span class="amandu-time">{{ picked|date:"l j" }}, {{ picked|time:"H:i" }}</span>{% endif %}</p>
+      {% endif %}
+      <nav class="steptop" aria-label="Pasos">
+        {% if back_href %}<a class="back" href="{{ back_href }}" aria-label="{% if preview %}Volver a los servicios{% else %}Volver al paso anterior{% endif %}"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg></a>{% endif %}
+        <div class="progress" aria-hidden="true">{% for state in progress %}<i{% if state %} class="{{ state }}"{% endif %}></i>{% endfor %}</div>
+        <span class="count">Paso {{ step_number }} de {{ step_count }}</span>
+      </nav>
+    {% endif %}
   </div>
 </header>
 
+<div class="sheet">
 {% if booked_at %}
   <main class="wrap done">
     <svg class="sun" viewBox="0 0 100 100" role="img" aria-label="Pedido enviado">
@@ -552,8 +805,9 @@
       <circle cx="50" cy="50" r="25"/>
       <path d="M38 51 L46 59 L63 42" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
-    <h1 class="amandu-display">¡Pedido enviado!</h1>
-    <p class="lede">Lo mandamos a {{ shop.name }}. Te confirman ellos — hasta entonces el horario te queda guardado.</p>
+    <h1 class="sr">Pedido enviado a {{ shop.name }}</h1>
+    <h2>¡Pedido enviado!</h2>
+    <p class="lede">Lo mandamos a {{ shop.name }}. Hasta que te confirmen, el horario queda guardado para vos.</p>
 
     <div class="card-box ticket">
       <div class="top">
@@ -566,8 +820,7 @@
       <dl>
         <dt>Servicio</dt><dd>{{ service.name }}</dd>
         <dt>Duración</dt><dd>{{ service.duration_minutes }} min</dd>
-        {% if service_price %}<dt>Precio</dt><dd class="amandu-time">{{ service_price }}</dd>{% endif %}
-        <dt>Lugar</dt><dd>{{ shop.name }}</dd>
+        <dt>Precio</dt><dd class="amandu-time">{{ service_price|default:"A consultar" }}</dd>
       </dl>
     </div>
 
@@ -597,41 +850,46 @@
 
 {% else %}
   <main class="wrap" id="paso">
-    {% if back_href %}
-      <nav class="steptop" aria-label="Pasos">
-        <a class="back" href="{{ back_href }}" aria-label="Volver al paso anterior"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg></a>
-        <div class="progress" aria-hidden="true">{% for on in progress %}<i{% if on %} class="on"{% endif %}></i>{% endfor %}</div>
-      </nav>
-    {% endif %}
-    <div class="steplabel"><h2>{{ step_title }}</h2><span>Paso {{ step_number }} de {{ step_count }}</span></div>
-    {% if step != "servicio" %}
-      <p class="summary">{{ service.name }}{% if step != "profesional" %} · {% if professional %}con {{ professional.display_name }}{% else %}con quien esté libre{% endif %}{% endif %}{% if picked %} · <span class="amandu-time">{{ picked|date:"l j" }}, {{ picked|time:"H:i" }}</span>{% endif %}</p>
-    {% endif %}
+    {% if preview %}
+      {% comment %}The pictures are what this page is for, so they are content here:
+         named for a screen reader, the first one fetched at once. The first one
+         carries the list's thumbnail across the move, where the browser can.{% endcomment %}
+      <article class="look">
+        {% if preview.slides %}
+          <div class="gallery" style="--r: {{ preview.ratio }}">
+            <div class="carousel">
+              {% for src in preview.slides %}
+                <div class="slide" style="aspect-ratio: {{ preview.ratio }}{% if forloop.first %}; view-transition-name: svc-{{ preview.pk }}{% endif %}"><img src="{{ src }}" alt="{{ preview.name }}{% if preview.slides|length > 1 %}, foto {{ forloop.counter }} de {{ preview.slides|length }}{% endif %}"{% if forloop.first %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>{% if preview.slides|length > 1 %}<span class="count" aria-hidden="true">{{ forloop.counter }}/{{ preview.slides|length }}</span>{% if not forloop.last %}<span class="more" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg></span>{% endif %}{% endif %}</div>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+        <div class="facts">
+          <p class="meta">{% if preview.price_label %}<span class="price amandu-time">{{ preview.price_label }}</span>{% else %}<span class="price ask">Precio a consultar</span>{% endif %}<span>{{ preview.duration_minutes }} min</span></p>
+          {% if preview.description %}<p class="about">{{ preview.description }}</p>{% endif %}
+        </div>
+      </article>
 
-    <div class="step-body">
-    {% if step == "servicio" %}
+    {% elif step == "servicio" %}
+      {% if categories|length > 1 %}
+        <nav class="cats" aria-label="Categorías">{% for name, items in categories %}<a href="#cat-{{ forloop.counter }}">{{ name }}</a>{% endfor %}</nav>
+      {% endif %}
       {% for name, items in categories %}
-        <section class="cat"{% if name %} aria-label="{{ name }}"{% endif %}>
+        <section class="cat" id="cat-{{ forloop.counter }}"{% if name %} aria-label="{{ name }}"{% endif %}>
           {% if name %}<h3>{{ name }}</h3>{% endif %}
           <ul class="cards">
             {% for option in items %}
-              <li class="card">
-                {% if option.slides %}
-                  {% comment %}The pictures repeat the card's link, out of the tab
-                     order and hidden from screen readers: the text link below
-                     names the service, once.{% endcomment %}
-                  <div class="gallery">
-                    <div class="carousel"{% if option.slides|length > 1 %} aria-label="Fotos de {{ option.name }}"{% endif %}>
-                      {% for src in option.slides %}
-                        <a class="slide" href="{{ option.href }}" tabindex="-1" aria-hidden="true" style="aspect-ratio: {{ option.ratio }}"><img src="{{ src }}" alt="" loading="lazy">{% if option.slides|length > 1 %}<span class="count">{{ forloop.counter }}/{{ option.slides|length }}</span>{% if not forloop.last %}<span class="more"><svg class="icon" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg></span>{% endif %}{% endif %}</a>
-                      {% endfor %}
-                    </div>
-                  </div>
-                {% endif %}
-                <a class="text" href="{{ option.href }}">
-                  <strong>{{ option.name }}</strong>
-                  {% if option.description %}<span class="desc">{{ option.description }}</span>{% endif %}
-                  <span class="meta">{% if option.price_label %}<b class="amandu-time">{{ option.price_label }}</b> · {% endif %}{{ option.duration_minutes }} min</span>
+              {% comment %}One link per service, to its own page: a look before
+                 the choice. The thumbnail is a taste, so it says nothing to a
+                 screen reader; "+2" says there is more to see there.{% endcomment %}
+              <li class="card" id="svc-{{ option.pk }}">
+                <a href="{{ option.view_href }}">
+                  <span class="text">
+                    <strong>{{ option.name }}</strong>
+                    {% if option.description %}<span class="desc">{{ option.description }}</span>{% endif %}
+                    <span class="meta">{% if option.price_label %}<span class="price amandu-time">{{ option.price_label }}</span>{% else %}<span class="price ask">A consultar</span>{% endif %}<span>{{ option.duration_minutes }} min</span></span>
+                  </span>
+                  {% if option.slides %}<span class="thumb" style="view-transition-name: svc-{{ option.pk }}"><img src="{{ option.slides.0 }}" alt="" width="120" height="120"{% if option.eager %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>{% if option.more %}<span class="plus" aria-hidden="true">+{{ option.more }}</span><span class="sr">, {{ option.more }} foto{{ option.more|pluralize }} más</span>{% endif %}</span>{% endif %}
                 </a>
               </li>
             {% endfor %}
@@ -639,12 +897,49 @@
         </section>
       {% endfor %}
 
+      {% comment %}Where the door is, when it is open, where else the shop lives.
+         Last, because it is what somebody looks for after deciding, and left
+         out entirely when the shop has told us none of it.{% endcomment %}
+      {% if shop.address or week or shop.phone or socials %}
+        <section class="info" aria-labelledby="h-info">
+          <h3 id="h-info">{% if shop.address %}Dónde estamos{% else %}Cómo encontrarnos{% endif %}</h3>
+          <div class="panel">
+            {% if shop.address or shop.phone %}
+              <div class="place">
+                {% if shop.address %}<address><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg>{{ shop.address }}</address>{% endif %}
+                <div class="btns">
+                  {% if maps_link %}<a class="btn main" href="{{ maps_link }}"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg>Cómo llegar</a>{% endif %}
+                  {% if shop.phone %}<a class="btn" href="tel:{{ shop.phone.as_e164 }}"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg><span class="amandu-time">{{ shop.phone.as_national }}</span></a>{% endif %}
+                </div>
+              </div>
+            {% endif %}
+            {% if maps_embed %}<iframe class="map" src="{{ maps_embed }}" title="Mapa de {{ shop.name }}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>{% endif %}
+            {% if week %}
+              <details class="hours">
+                <summary>
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+                  {% for one in week %}{% if one.today %}<span class="amandu-time">Hoy: {% if one.hours %}{{ one.hours.opens|time:"H:i" }} a {{ one.hours.closes|time:"H:i" }}{% else %}cerrado{% endif %}</span>{% endif %}{% endfor %}
+                  <svg class="icon chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9.5 6 6 6-6"/></svg>
+                </summary>
+                <dl class="amandu-time">
+                  {% for one in week %}<dt{% if one.today %} class="today"{% endif %}>{{ one.name }}</dt><dd class="{% if one.today %}today{% endif %}{% if not one.hours %} shut{% endif %}">{% if one.hours %}{{ one.hours.opens|time:"H:i" }} a {{ one.hours.closes|time:"H:i" }}{% else %}Cerrado{% endif %}</dd>{% endfor %}
+                </dl>
+              </details>
+            {% endif %}
+            {% if socials %}
+              <ul class="socials">
+                {% for one in socials %}<li><a href="{{ one.url }}" rel="noopener" target="_blank"><svg class="icon" aria-hidden="true"><use href="#i-{{ one.network }}"/></svg><span class="sr">{% if one.network == "website" %}Página web{% else %}{{ one.network|capfirst }}{% endif %}: </span>{{ one.label }}</a></li>{% endfor %}
+              </ul>
+            {% endif %}
+          </div>
+        </section>
+      {% endif %}
+
     {% elif step == "profesional" %}
       <ul class="pros">
-        <li><a class="pro any" href="{{ anyone_href }}">
+        <li class="first"><a class="pro any" href="{{ anyone_href }}">
           <span class="ph" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17.5 14.8c2.1.6 3.5 2.5 3.5 5.2"/></svg></span>
-          <strong>Cualquiera</strong>
-          <small>Te atiende quien esté libre a esa hora</small>
+          <span class="t"><strong>Cualquiera</strong><small>Más horarios: te atiende quien esté libre</small></span>
         </a></li>
         {% for option in professionals %}
           <li><a class="pro h{{ option.hue }}" href="{{ option.href }}">
@@ -656,7 +951,7 @@
 
     {% elif step == "cuando" %}
       {% if day %}
-        <p class="month">{{ days.0.date|date:"F" }}{% with last=days|last %}{% if last.date.month != days.0.date.month %} – {{ last.date|date:"F" }}{% endif %}{% endwith %}</p>
+        <p class="month">{{ days.0.date|date:"F" }}{% with last=days|last %}{% if last.date.month != days.0.date.month %} y {{ last.date|date:"F" }}{% endif %}{% endwith %}</p>
         <ol class="days">
           {% for one in days %}
             <li>
@@ -665,8 +960,9 @@
                   <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
                 </a>
               {% else %}
-                <span class="d" aria-label="{{ one.date|date:'l j' }}: sin horarios">
-                  <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span>
+                {% comment %}Said in words: an aria-label on a plain span is not read, and a strike-through is not heard.{% endcomment %}
+                <span class="d">
+                  <span class="wd">{{ one.date|date:"D" }}</span><span class="num">{{ one.date|date:"j" }}</span><span class="sr">, sin horarios</span>
                 </span>
               {% endif %}
             </li>
@@ -675,10 +971,10 @@
 
         <section id="cuando" aria-labelledby="h-day">
           <h3 class="day-title" id="h-day">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</h3>
-          <p class="day-sub">{{ day.slots|length }} horario{{ day.slots|length|pluralize }} libre{{ day.slots|length|pluralize }} · {{ service.name }}, {{ service.duration_minutes }} min</p>
+          <p class="day-sub">{{ day.slots|length }} horario{{ day.slots|length|pluralize }} libre{{ day.slots|length|pluralize }} de {{ service.duration_minutes }} min</p>
           {% for name, slots in periods %}
             <div class="period">
-              <p class="amandu-eyebrow">{{ name }}</p>
+              <p class="pname">{{ name }}</p>
               <div class="times">
                 {% for slot in slots %}<a class="slot" href="{{ slot.href }}"><time datetime="{{ slot.at.isoformat }}">{{ slot.at|time:"H:i" }}</time></a>{% endfor %}
               </div>
@@ -708,12 +1004,12 @@
         {% if errors.start and day %}
           {% comment %}The hour picked was taken, or is not one on offer: the day's
              hours again, as choices in the form, so what was typed below stays.{% endcomment %}
-          <fieldset id="cuando" class="card-box" style="margin:0 0 1.25rem" aria-describedby="e-start">
+          <fieldset id="cuando" class="card-box" style="margin:0 0 1rem" aria-describedby="e-start">
             <legend class="day-title">{{ day.date|date:"l j" }} de {{ day.date|date:"F" }}</legend>
             <p class="error" id="e-start">{{ errors.start.0 }}</p>
             {% for name, slots in periods %}
               <div class="period">
-                <p class="amandu-eyebrow">{{ name }}</p>
+                <p class="pname">{{ name }}</p>
                 <div class="times">
                   {% for slot in slots %}
                     <label class="slot">
@@ -730,7 +1026,6 @@
           {% if picked %}
             <div class="card-box ticket">
               <div class="top">
-                <span class="amandu-eyebrow">Tu turno</span>
                 <strong class="when amandu-display amandu-time">{{ picked|date:"l j" }} de {{ picked|date:"F" }}, {{ picked|time:"H:i" }}</strong>
                 {% if professional %}
                   <span class="who-line h{{ professional.hue }}">{% if professional.photo_url %}<img class="avatar" src="{{ professional.photo_url }}" alt="" width="28" height="28">{% else %}<span class="avatar" aria-hidden="true">{{ professional.initials }}</span>{% endif %}con {{ professional.display_name }}</span>
@@ -741,7 +1036,7 @@
               <dl>
                 <dt>Servicio</dt><dd>{{ service.name }}</dd>
                 <dt>Duración</dt><dd>{{ service.duration_minutes }} min</dd>
-                {% if service_price %}<dt>Precio</dt><dd class="amandu-time">{{ service_price }}</dd>{% endif %}
+                <dt>Precio</dt><dd class="amandu-time">{{ service_price|default:"A consultar" }}</dd>
               </dl>
             </div>
           {% endif %}
@@ -759,7 +1054,7 @@
             <label for="f-phone">Teléfono</label>
             <input id="f-phone" type="tel" name="phone" maxlength="32" required inputmode="tel" autocomplete="tel"
                    value="{{ submitted.phone|default:'' }}" aria-describedby="h-phone{% if errors.phone %} e-phone{% endif %}"{% if errors.phone %} aria-invalid="true"{% endif %}>
-            <p class="help" id="h-phone">{{ shop.name }} te responde por WhatsApp a este número.</p>
+            <p class="help" id="h-phone">Con código de área{% if phone_example %}, por ejemplo <span class="amandu-time">{{ phone_example }}</span>{% endif %}. {{ shop.name }} te responde por WhatsApp a este número.</p>
             {% if errors.phone %}<p class="error" id="e-phone">{{ errors.phone.0 }}</p>{% endif %}
           </div>
 
@@ -782,11 +1077,11 @@
         </section>
       </form>
     {% endif %}
-    </div>
 {% endif %}
 
     <footer class="foot">
-      Agenda de {{ shop.name }} en
+      {% if kyo_url %}<a href="{{ kyo_url }}" target="_blank" rel="noopener">{% endif %}
+      <span class="by">Agenda de {{ shop.name }} en
       <svg viewBox="-15 0 1739 465" role="img" aria-label="Kyo">
         <g transform="translate(0 37.5) scale(10) translate(-9 -30.5)">
           <path class="kyo-sol-a" d="M26 45.5 A30 30 0 0 1 74 45.5 Z"/>
@@ -796,11 +1091,24 @@
         <g transform="translate(968 0) scale(0.246) translate(-69.7 1400)">
           <path fill="currentColor" d="M403.4 -479.7 977.5 -1159.5Q1022.8 -1206.7 1034.5 -1251.9Q1046.2 -1297.2 1028.6 -1331.1Q1010.9 -1365 965.2 -1377.4L907.3 -1386.8Q902.2 -1388.3 900.2 -1389.8Q898.2 -1391.4 898.2 -1394.4Q898.2 -1396.9 900.4 -1398.5Q902.7 -1400 905.8 -1400H1307.2Q1310.8 -1400 1312.5 -1398.5Q1314.3 -1397 1314.3 -1394.4Q1314.3 -1391.4 1311.8 -1389.4Q1309.2 -1387.4 1305.7 -1386.3Q1276.7 -1379.1 1247.1 -1365Q1217.4 -1351 1182.2 -1325.9Q1146.9 -1300.8 1101.9 -1259.8Q1056.8 -1218.8 996.6 -1156.1L410.1 -465.3ZM632.4 -748.6 810.3 -926.7 1259.5 -97.1Q1282.1 -54.7 1304.6 -36.4Q1327 -18 1370.9 -14.1Q1375.4 -13.6 1377.7 -11.6Q1379.9 -9.6 1379.9 -7Q1379.9 -3.5 1377.4 -1.8Q1374.9 0 1370.4 0H894.2Q891.1 0 888.8 -1.8Q886.6 -3.6 886.6 -7.1Q886.6 -10.6 889.1 -12.1Q891.6 -13.6 895.7 -14.2L980.1 -25Q996.4 -27 1000.9 -40.3Q1005.4 -53.5 989.4 -84.3ZM454.4 -53.2Q454.4 -41.2 463.8 -35.2Q473.1 -29.1 491.8 -26.1L577.5 -13.2Q583.6 -12.7 586.2 -11.2Q588.7 -9.6 588.7 -6.1Q588.7 -4 586.4 -2Q584.2 0 579.6 0H78.8Q74.2 0 72 -2Q69.7 -4 69.7 -6.1Q69.7 -11.6 80.9 -13.2L166.6 -26.1Q185.8 -29.1 194.9 -35.2Q204 -41.2 204 -53.2V-1346.8Q204 -1358.8 194.9 -1365.1Q185.8 -1371.4 166.6 -1373.9L80.9 -1386.8Q69.7 -1388.4 69.7 -1393.9Q69.7 -1396.4 72 -1398.2Q74.2 -1400 78.8 -1400H579.6Q584.2 -1400 586.4 -1398.2Q588.7 -1396.4 588.7 -1393.9Q588.7 -1388.4 577.5 -1386.8L491.8 -1373.9Q473.1 -1371.4 463.8 -1365.1Q454.4 -1358.8 454.4 -1346.8ZM1888.7 -197.4 1782.8 75.8 1445.9 -732.5Q1421.2 -791.4 1390.5 -822.6Q1359.8 -853.7 1321.5 -859.7Q1312.3 -861.8 1310.2 -863.8Q1308.2 -865.8 1308.2 -867.8Q1308.2 -871.4 1310.5 -872.7Q1312.8 -873.9 1316.3 -873.9H1748.2Q1752.7 -873.9 1754.7 -872.4Q1756.8 -870.9 1756.8 -866.9Q1756.8 -863.4 1754.5 -861.9Q1752.2 -860.4 1747.2 -859.3L1673.7 -849.8Q1650.2 -846.8 1644.9 -828.1Q1639.6 -809.4 1652.4 -778.8ZM1712.5 233.2 1815.4 -28.2 1828 -61.2 2091.1 -744.8Q2110.6 -795.7 2099.5 -818.2Q2088.5 -840.6 2052.5 -847.7L1995.8 -858.8Q1989.8 -860.4 1987.3 -861.9Q1984.8 -863.4 1984.8 -866.4Q1984.8 -870.4 1987.1 -872.2Q1989.4 -873.9 1993.4 -873.9H2237.8Q2242.8 -873.9 2245.1 -872.2Q2247.4 -870.4 2247.4 -866.9Q2247.4 -863.9 2245.1 -862.4Q2242.8 -860.8 2236.8 -859.3Q2185.4 -850.6 2156 -825.4Q2126.6 -800.2 2105.7 -745.2L1722 245Q1689.8 330.3 1665.1 384.7Q1640.4 439 1608 464.5Q1575.7 490 1518.6 490Q1446.4 490 1402 446.5Q1357.6 403 1357.6 341Q1357.6 295.9 1381.6 270.4Q1405.6 244.9 1441.4 244.9Q1473 244.9 1493.5 265.9Q1513.9 287 1524.8 325.3L1534.7 362.9Q1541.5 391.6 1555.1 414.5Q1568.8 437.4 1591.9 437.4Q1610.9 437.4 1628.9 413.6Q1646.9 389.8 1667.3 343.9Q1687.6 298.1 1712.5 233.2ZM2697 -893.9Q2826.6 -893.9 2926.9 -835.4Q3027.3 -776.8 3085 -672.9Q3142.7 -569.1 3142.7 -433.4Q3142.7 -299.4 3083.7 -197.3Q3024.7 -95.2 2921.8 -37.6Q2818.9 20 2685.8 20Q2556.2 20 2456.3 -37.3Q2356.4 -94.6 2299.7 -196.7Q2243 -298.8 2243 -433.4Q2243 -568 2300.8 -671.6Q2358.6 -775.2 2461.1 -834.6Q2563.6 -893.9 2697 -893.9ZM2744.9 3.8Q2811.6 -2.1 2855.5 -56.7Q2899.4 -111.3 2915.9 -212.6Q2932.4 -313.8 2916.2 -458.6Q2900 -604.9 2861.9 -700.3Q2823.9 -795.6 2768 -839.9Q2712 -884.1 2641.4 -877.6Q2571.8 -871.2 2528.2 -815.4Q2484.5 -759.6 2470 -658.6Q2455.4 -557.6 2471.1 -414.7Q2487.4 -272.3 2526.1 -176.7Q2564.8 -81.1 2621 -35.7Q2677.2 9.8 2744.9 3.8Z"/>
         </g>
-      </svg>
+      </svg></span>
+      {% if kyo_url %}<span class="cta">¿Tenés un negocio? Conocé Kyo <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></span></a>{% endif %}
     </footer>
   </main>
+</div>
 
-{% if soonest %}
+{% if preview %}
+  {% comment %}The one thing to do after looking, held in reach under the pictures.{% endcomment %}
+  <aside class="dock" aria-label="Elegir este servicio">
+    <a href="{{ preview.href }}">
+      <span class="w">
+        <strong>{{ preview.name }}</strong>
+        <span class="sv amandu-time">{{ preview.price_label|default:"Precio a consultar" }}, {{ preview.duration_minutes }} min</span>
+      </span>
+      <span class="go">Elegir este servicio</span>
+    </a>
+  </aside>
+{% elif soonest %}
   {% comment %}The soonest free hour in the whole shop, held at the foot while the
      services are browsed. Sticky, not fixed: it sits at the end of the page
      and only floats while there is page below it.{% endcomment %}
@@ -808,11 +1116,10 @@
     <a href="{{ soonest.href }}">
       <span class="ic" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
       <span class="w">
-        <small>Próximo turno libre</small>
-        <strong class="amandu-time">{% if soonest.is_today %}Hoy{% else %}{{ soonest.at|date:"l j" }}{% endif %}, {{ soonest.at|time:"H:i" }}</strong>
-        <span class="sv">{{ soonest.service.name }} · {{ soonest.service.duration_minutes }} min</span>
+        <strong>{{ soonest.service.name }}</strong>
+        <span class="sv">Próximo turno libre: <b class="amandu-time">{% if soonest.is_today %}Hoy{% else %}{{ soonest.at|date:"l j"|capfirst }}{% endif %}, {{ soonest.at|time:"H:i" }}</b></span>
       </span>
-      <span class="go">Reservar</span>
+      <span class="go">Elegir</span>
     </a>
   </aside>
 {% endif %}
