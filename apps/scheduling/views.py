@@ -415,7 +415,8 @@ class ServiceViewSet(TenantScopedModelViewSet):
         # After the delete went through: a service still booked raises Referenced
         # first and keeps its image.
         super().perform_destroy(instance)
-        images.discard(instance.image_key)
+        for key in (instance.image_key, instance.image_2_key, instance.image_3_key):
+            images.discard(key)
 
 
 class PlanViewSet(TenantScopedModelViewSet):
@@ -1072,7 +1073,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             response = self._transition(appointment, lambda: appointment.cancel(reason))
             notify.notify(
                 notify.REJECTED if turning_down else notify.CANCELLED,
-                appointment=appointment, actor=request.membership, reason=reason,
+                appointment=appointment, actor=request.membership,
             )
         return response
 
@@ -1104,6 +1105,26 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             response = self._transition(appointment, appointment.confirm)
             notify.notify(notify.ACCEPTED, appointment=appointment, actor=request.membership)
         return response
+
+    # No body, and idempotent: a colleague who told the client first is not an
+    # error, only one less thing owed.
+    @extend_schema(request=None, responses=AppointmentSerializer)
+    @action(detail=True, methods=['post'], url_path='answer-told')
+    def answer_told(self, request, pk=None):
+        """
+        The client has been told the shop's answer to their request: the person
+        who answered tapped "Enviar por WhatsApp" in the turno sheet. wa.me
+        cannot report whether the message actually went, so the tap is the fact.
+        """
+        appointment = self.get_object()
+        appointment.answer_told()
+        return Response(self.get_serializer(appointment).data)
+
+    @property
+    def billing_exempt(self):
+        # Telling a client the answer is a conversation, not the business's
+        # work: a late Kyo payment must never leave somebody without a reply.
+        return self.action == 'answer_told'
 
     def _following(self, appointment):
         """

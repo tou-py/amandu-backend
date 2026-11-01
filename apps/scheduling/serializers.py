@@ -299,13 +299,20 @@ class ServiceSerializer(images.ImageKeysMixin, TenantUniqueNameMixin, serializer
     image_url = images.UrlField(source='image_key')
     # The small version, for a list; it has no column (images.thumb_key).
     image_thumb_url = images.ThumbUrlField(source='image_key')
+    # The carousel's second and third pictures, cropped to the same ratio.
+    image_2_key = images.KeyField('gallery')
+    image_2_url = images.UrlField(source='image_2_key')
+    image_3_key = images.KeyField('gallery')
+    image_3_url = images.UrlField(source='image_3_key')
 
     class Meta:
         model = Service
         # `created_by` is the membership id, so the UI can tell a staff member
         # which services are theirs to edit (ManagesService).
         fields = (
-            'id', 'name', 'price', 'duration', 'category', 'image_key', 'image_url', 'image_thumb_url',
+            'id', 'name', 'description', 'price', 'duration', 'category',
+            'image_key', 'image_ratio', 'image_url', 'image_thumb_url',
+            'image_2_key', 'image_2_url', 'image_3_key', 'image_3_url',
             'created_by', 'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
@@ -315,6 +322,27 @@ class ServiceSerializer(images.ImageKeysMixin, TenantUniqueNameMixin, serializer
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             self.fields['category'].queryset = Category.objects.for_tenant(tenant)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # KeyField sees one slot at a time; both slots in one request is here.
+        if attrs.get('image_2_key') and attrs.get('image_2_key') == attrs.get('image_3_key'):
+            raise serializers.ValidationError(
+                {'image_3_key': 'This image is already attached elsewhere.'}, code='image_taken',
+            )
+        current = self.instance.image_key if self.instance else None
+        new_image = attrs.get('image_key') not in (None, current)
+        # The ratio is how the uploaded picture was cropped: relabelling the
+        # same picture would stretch or crop it on the public page.
+        ratio = attrs.get('image_ratio')
+        if ratio is not None and not new_image and ratio != getattr(self.instance, 'image_ratio', None):
+            raise serializers.ValidationError(
+                {'image_ratio': 'The ratio changes only with a new image.'}, code='image_ratio_alone',
+            )
+        # A panel on the old bundle attaches without a ratio, and crops to 4:3.
+        if new_image and ratio is None:
+            attrs['image_ratio'] = Service.ImageRatio.LANDSCAPE
+        return attrs
 
 
 class ProfessionalScopedMixin:
@@ -792,12 +820,14 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         fields = (
             'id', 'professional', 'professional_name', 'clients', 'attendees',
             'service', 'service_name', 'service_price', 'start', 'end', 'status', 'capacity',
-            'series', 'cancelled_at', 'cancellation_reason', 'notes',
+            'series', 'cancelled_at', 'cancellation_reason', 'answer_notice', 'notes',
             'rescheduled_from', 'source', 'created_by', 'created_by_name',
             'created_at', 'updated_at',
         )
         read_only_fields = (
             'id', 'end', 'status', 'series', 'cancelled_at', 'cancellation_reason',
+            # Set by confirm/cancel, cleared by answer_told: never by an edit.
+            'answer_notice',
             # Recorded by validate() when the start actually moves. A payload
             # that could set it could claim a booking was moved when it never was.
             'rescheduled_from',

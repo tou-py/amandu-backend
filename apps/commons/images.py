@@ -22,6 +22,7 @@ import uuid
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers
 
 from apps.commons import storage
@@ -34,6 +35,9 @@ CAPS = {
     'logo': 300 * 1024,
     'photo': 300 * 1024,
     'service': 300 * 1024,
+    # A service's second and third picture, for the public page's carousel.
+    # The same photo as `service`, without a thumbnail: lists show the cover.
+    'gallery': 300 * 1024,
 }
 # Kinds that also carry a thumbnail, and its cap: what the public booking page
 # shows in a service's row, so a list of services stays light on a phone.
@@ -126,9 +130,21 @@ class KeyField(serializers.CharField):
             raise serializers.ValidationError('Not an upload of this business for this image.', code='image_foreign')
         # One owner per key: replacing one owner's image deletes the object,
         # which another owner showing it would then lose. The unique column
-        # backs this up; this check turns it into a 400 on the field.
-        owners = self.parent.Meta.model.objects.filter(**{self.source: key})
-        if owners.exclude(pk=self.parent.instance.pk).exists():
+        # backs this up; this check turns it into a 400 on the field. A kind
+        # can fill several columns (a service's carousel), so each of them
+        # counts, this row's other ones too.
+        columns = [
+            field.source for field in self.parent.fields.values()
+            if isinstance(field, KeyField) and field.kind == self.kind
+        ]
+        taken = Q()
+        for column in columns:
+            taken |= Q(**{column: key})
+        mine = self.parent.instance
+        owners = self.parent.Meta.model.objects.filter(taken)
+        if owners.exclude(pk=mine.pk).exists() or any(
+            getattr(mine, column) == key for column in columns if column != self.source
+        ):
             raise serializers.ValidationError('This image is already attached elsewhere.', code='image_taken')
         # The image and, for a kind that has one, its thumbnail: both must be
         # there and valid, or the public page would show a broken row.

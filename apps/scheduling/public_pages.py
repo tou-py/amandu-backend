@@ -12,6 +12,11 @@ No JavaScript at all. Every step is a link or a form, which is also why the
 booking POST comes back here rather than to the JSON endpoint: both go through
 BookingRequestSerializer and both land in create_booking(), so there is one
 meaning of "book" and two ways of asking for it.
+
+One decision per screen, in STEPS order, carried in `?paso=`: the service,
+who gives it, the day and the hour, then the person's details. Every choice
+made so far travels in the query, so a step is a plain GET anybody can go
+back to.
 """
 
 import re
@@ -19,6 +24,7 @@ from datetime import timedelta
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
+import phonenumbers
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils import timezone, translation
@@ -36,7 +42,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import SimpleRateThrottle
 
 from apps.accounts.models import Membership
-from apps.commons.images import public_url, thumb_key
+from apps.commons.images import public_url
 from apps.scheduling import whatsapp
 from apps.scheduling.models import Service, WorkSchedule
 from apps.scheduling.public import (
@@ -46,6 +52,12 @@ from apps.scheduling.public import (
     offered_slots,
 )
 from apps.scheduling.views import Overlaps
+from apps.tenancy import presence
+from apps.tenancy.theme import derive_theme
+
+# ponytail: the soonest-hour bar is switched off for now (owner's call,
+# 2026-11-01). True brings it back as it was; its tests turn it on themselves.
+SOONEST_BAR = False
 
 # Two weeks. Long enough that somebody booking a colour in advance finds a day,
 # short enough that the page stays one scroll and one query.
@@ -53,6 +65,36 @@ HORIZON_DAYS = 13
 
 # Where each field's error points, from the summary at the top of the form.
 ERROR_ANCHORS = {'start': 'cuando', 'name': 'f-name', 'phone': 'f-phone', 'email': 'f-email'}
+
+# The screens, in order, and the question each one asks, in the words of
+# somebody at the counter, for any trade.
+STEPS = ('servicio', 'profesional', 'cuando', 'datos')
+TITLES = {
+    'servicio': '¿Qué reservás?',
+    'profesional': '¿Con quién?',
+    'cuando': '¿Cuándo?',
+    'datos': '¿A nombre de quién?',
+}
+# Django's own messages are in "usted" and do not say which box they mean;
+# the page speaks "vos" and names it. A code not listed keeps its words: the
+# serializer's own are already written for this page.
+SPOKEN = {
+    ('name', 'required'): 'Falta tu nombre.',
+    ('name', 'blank'): 'Falta tu nombre.',
+    ('name', 'max_length'): 'Ese nombre es muy largo.',
+    ('phone', 'required'): 'Falta tu teléfono.',
+    ('phone', 'blank'): 'Falta tu teléfono.',
+    ('phone', 'invalid'): 'Revisá el teléfono: va con el código de área.',
+    ('email', 'invalid'): 'Ese email no parece válido. Revisalo o dejalo vacío.',
+}
+# Past these a logo is no longer a mark that fits a square tile: wider is a
+# wordmark, drawn on a line of its own; taller stands in an upright box.
+WORDMARK = 1.6
+UPRIGHT = 0.8
+# The week twice, Monday first as WorkSchedule.weekday counts it: as people
+# say it, and as schema.org names it.
+WEEKDAYS = ('Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo')
+SCHEMA_DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
 
 # The page speaks Spanish because its readers do. Activated by a {% language %}
 # block INSIDE the template, not around this Response: DRF renders a
@@ -96,7 +138,7 @@ def booking_page(request, slug):
     shop = _shop(slug)
     zone = ZoneInfo(shop.timezone)
 
-    services = list(Service.objects.filter(tenant=shop))
+    services = list(Service.objects.filter(tenant=shop).select_related('category'))
     professionals = list(Membership.professionals_for(shop))
     if not services or not professionals:
         # A shop that turned the page on before setting itself up. Saying so is
@@ -141,12 +183,20 @@ def booking_page(request, slug):
                     'at': booked.start.isoformat(),
                 })))
         else:
-            errors = form.errors
+            errors = {
+                field: [SPOKEN.get((field, getattr(message, 'code', None)), message) for message in messages]
+                for field, messages in form.errors.items()
+            }
+
+    # A shop of one has nobody to choose between: that step is skipped.
+    steps = [one for one in STEPS if one != 'profesional' or len(professionals) > 1]
+    step = asked.get('paso') if asked.get('paso') in steps else steps[0]
+    if errors:
+        step = 'datos'
 
     today = timezone.localdate(timezone=zone)
-    offered = offered_slots(
-        shop, service, professional, today, today + timedelta(days=HORIZON_DAYS),
-    )
+    until = today + timedelta(days=HORIZON_DAYS)
+    offered = offered_slots(shop, service, professional, today, until) if step in ('cuando', 'datos') else {}
     days = [
         {'date': today + timedelta(days=n), 'slots': offered.get(today + timedelta(days=n), [])}
         for n in range(HORIZON_DAYS + 1)
@@ -159,7 +209,11 @@ def booking_page(request, slug):
         open_days[0] if open_days else None,
     )
     picked_day = day['date'].isoformat() if day else ''
-    first_slot = open_days[0]['slots'][0] if open_days else None
+    # The hour asked for, as one of that day's actual slots: a stale or forged
+    # `start` sends the person back to the hours rather than to a form for it.
+    picked = next((one for one in (day['slots'] if day else []) if one.isoformat() == asked.get('start')), None)
+    if step == 'datos' and picked is None and not errors:
+        step = 'cuando'
 
     def href(**changes):
         params = {
@@ -171,40 +225,75 @@ def booking_page(request, slug):
         return '?' + urlencode(params)
 
     for option in services:
-        option.href = href(service=option.pk) + '#servicio'
+        option.href = href(service=option.pk, day='', paso=steps[1])
+        # A look before the choice: its own address, so a shop can also share it.
+        option.view_href = '?' + urlencode({'ver': option.pk})
         option.price_label = _money(option.price)
-        option.thumb_url = public_url(option.image_key and thumb_key(option.image_key))
+        # The cover and the carousel's other two, all in one ratio.
+        option.slides = [
+            public_url(key) for key in (option.image_key, option.image_2_key, option.image_3_key) if key
+        ]
+        option.ratio = option.image_ratio.replace(':', ' / ')
+        option.more = len(option.slides) - 1
+    categories = _by_category(services)
+    # The first cover is the largest paint of the page: fetched at once, not lazily.
+    categories[0][1][0].eager = True
+    # The service looked at, on the first step only; an id that is not one of
+    # this shop's services just shows the list.
+    preview = next(
+        (one for one in services if str(one.pk) == asked.get('ver')),
+        None,
+    ) if step == steps[0] and not errors else None
     for n, one in enumerate(professionals):
         # Which of the six tints names this person. Same rule as the staff
         # panel, so a professional keeps one colour on both sides of the product.
         one.hue = n % 6 + 1
         one.initials = _initials(one.display_name())
         one.photo_url = public_url(one.photo_key)
-        one.href = href(professional=one.pk) + '#profesional'
+        one.href = href(professional=one.pk, day='', paso='cuando')
     for one in days:
-        one['href'] = href(day=one['date'].isoformat()) + '#cuando'
+        # Straight to the hours: on a short phone they sit below the fortnight.
+        one['href'] = href(day=one['date'].isoformat(), paso='cuando') + '#cuando'
+    periods = [
+        (name, [{'at': slot, 'href': href(start=slot.isoformat(), paso='datos')} for slot in slots])
+        for name, slots in _periods(day['slots'] if day else [], zone)
+    ]
+    position = steps.index(step)
+    booked_at = _booked_at(request, zone)
+    opening_hours = _opening_hours(professionals)
 
     return _render(shop, {
-        'services': services,
+        'step': step,
+        'step_number': position + 1,
+        'step_count': len(steps),
+        'step_title': preview.name if preview else TITLES[step],
+        'preview': preview,
+        # Done, under way, ahead: the last step is not full before anything is sent.
+        'progress': ['on' if n < position else 'now' if n == position else '' for n in range(len(steps))],
+        # From a service looked at, back to the list where it was.
+        'back_href': href(paso=steps[position - 1]) if position else f'{request.path}#svc-{preview.pk}' if preview else '',
+        # The two browsing steps open up on a desktop; the hours and the form
+        # keep a phone's measure.
+        'wide': step in ('servicio', 'profesional') and not preview,
+        'categories': categories,
         'service': service,
         'service_price': _money(service.price),
         'professionals': professionals,
         'professional': professional,
-        'anyone_href': href(professional='') + '#profesional',
+        'anyone_href': href(professional='', day='', paso='cuando'),
         # "Cualquiera" names nobody, so it wears no tint: the selection is drawn
         # in ink, as every other control is.
         'hue': professional.hue if professional else 0,
         'days': days,
         'day': day,
-        'periods': _periods(day['slots'] if day else [], zone),
-        # The one fact somebody arrives for. It leads the page, and one tap on
-        # it lands on the form with that hour already ticked.
-        'first_slot': first_slot,
-        'first_href': href(
-            day=first_slot.astimezone(zone).date().isoformat(), start=first_slot.isoformat(),
-        ) + '#datos' if first_slot else '',
-        'first_is_today': bool(first_slot) and first_slot.astimezone(zone).date() == today,
-        'picked_start': asked.get('start', ''),
+        # The day's hours: links on their step, choices again in the form when
+        # the one picked was taken meanwhile.
+        'periods': periods,
+        'picked': picked,
+        # Not on the confirmation, which also lands on the first step: right
+        # after a request it would only invite a second one.
+        # Nor over a service being looked at, whose own bar chooses it.
+        'soonest': _soonest(shop, services, today, until, zone) if SOONEST_BAR and step == 'servicio' and not booked_at and not preview else None,
         'open_until': _open_until(professionals, zone),
         'errors': errors,
         # Each message, with where its field is, for the summary above the form.
@@ -215,10 +304,57 @@ def booking_page(request, slug):
         # The box is a promise; it is only made where something will keep it.
         'whatsapp_enabled': whatsapp.enabled_for(shop),
         'submitted': request.data if errors else {},
-        'booked_at': _booked_at(request, zone),
+        'picked_start': asked.get('start', ''),
+        'phone_example': _phone_example(shop),
+        'booked_at': booked_at,
         'whatsapp_link': _whatsapp_link(shop),
-        'opening_hours': _opening_hours(professionals),
+        'opening_hours': opening_hours,
+        'week': _week(opening_hours, today),
     })
+
+
+def _by_category(services):
+    """
+    The catalogue as the shop filed it: one run of cards per category, by
+    name, with whatever has none last. A shop that never filed anything gets
+    one unnamed run rather than a heading that says nothing.
+    """
+    groups = {}
+    for one in services:
+        groups.setdefault(one.category.name if one.category else '', []).append(one)
+    named = sorted((name, items) for name, items in groups.items() if name)
+    if '' in groups:
+        named.append(('Otros servicios' if named else '', groups['']))
+    return named
+
+
+def _soonest(shop, services, today, until, zone):
+    """
+    The soonest hour the shop has free, for the bar at the foot of the
+    services, with whoever is free and the service that fits it.
+
+    One service asked, not all: the shortest fits in any gap a longer one
+    does, so its first slot is the soonest there is.
+
+    ponytail: on a grid that steps by each service's own length the shortest
+    one's first slot can trail another's by a few minutes. It is always a
+    real, bookable hour; compute every service if that ever matters.
+    """
+    shortest = min(services, key=lambda one: one.duration)
+    # Days come back empty too: the first one with something in it.
+    first = next((slots[0] for slots in offered_slots(shop, shortest, None, today, until).values() if slots), None)
+    if first is None:
+        return None
+    local = first.astimezone(zone)
+    return {
+        'at': local,
+        'is_today': local.date() == today,
+        'service': shortest,
+        'href': '?' + urlencode({
+            'service': shortest.pk, 'professional': '', 'day': local.date().isoformat(),
+            'start': first.isoformat(), 'paso': 'datos',
+        }),
+    }
 
 
 def _periods(slots, zone):
@@ -234,6 +370,15 @@ def _money(amount):
     """Gs. 80.000, as the panel prints it (es-PY). None is a service not charged
     per session, which says nothing rather than 'Gs. 0'."""
     return f'Gs. {amount:,}'.replace(',', '.') if amount is not None else ''
+
+
+def _phone_example(shop):
+    """A mobile number as people write it in the shop's country, for the hint
+    under the phone box. None where the country is not set."""
+    if not shop.country:
+        return None
+    number = phonenumbers.example_number_for_type(shop.country, phonenumbers.PhoneNumberType.MOBILE)
+    return number and phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.NATIONAL)
 
 
 def _initials(name):
@@ -273,11 +418,38 @@ def _render(shop, context):
     return Response(
         {
             'shop': shop, 'shop_timezone': shop.timezone,
-            'logo_url': public_url(shop.logo_key),
+            'logo': _logo(shop),
+            # Kyo's own palette is the stylesheet; only a shop's own colour overrides it.
+            'theme': shop.brand_color and derive_theme(shop.brand_color, shop.brand_intensity),
+            'kyo_url': settings.KYO_LANDING_URL,
+            'socials': presence.social_links(shop),
+            'maps_link': presence.maps_link(shop),
+            'maps_embed': presence.maps_embed_url(shop),
+            'contact': _contact(shop),
             **context,
         },
         template_name='scheduling/booking.html',
     )
+
+
+def _logo(shop):
+    """
+    The logo and how to draw it, from what the panel measured on upload
+    (Tenant.logo_meta): a wordmark wide and bare, a mark in a square tile; on
+    its own ground when it has one. One uploaded before the measurements is
+    taken as a dark drawing on a clear ground, as most logos are.
+    """
+    if not shop.logo_key:
+        return None
+    meta = shop.logo_meta or {}
+    aspect = meta.get('aspect', 1)
+    return {
+        'url': public_url(shop.logo_key),
+        'shape': 'wide' if aspect > WORDMARK else 'tall' if aspect < UPRIGHT else 'square',
+        'ink': meta.get('ink', 'dark'),
+        # A hex the serializer validated, so it is safe in a style attribute.
+        'background': meta.get('background'),
+    }
 
 
 def _pick_professional(professionals, raw):
@@ -315,11 +487,38 @@ def _opening_hours(professionals):
         by_weekday[row.weekday] = (
             min(opens, row.start_time), max(closes, row.end_time),
         )
-    days = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
     return [
-        {'day': days[weekday], 'opens': opens, 'closes': closes}
+        {'day': SCHEMA_DAYS[weekday], 'opens': opens, 'closes': closes}
         for weekday, (opens, closes) in sorted(by_weekday.items())
     ]
+
+
+def _week(opening_hours, today):
+    """
+    The shop's week as a person reads it, Monday first, with the days it is
+    shut said so rather than left out, and today marked for the summary line.
+
+    ponytail: one span per day, lunch breaks merged away as in the structured
+    data; list each stretch if a shop's split day ever confuses somebody.
+    """
+    rows = {row['day']: row for row in opening_hours}
+    return [
+        {'name': name, 'today': n == today.weekday(), 'hours': rows.get(SCHEMA_DAYS[n])}
+        for n, name in enumerate(WEEKDAYS)
+    ] if opening_hours else []
+
+
+def _contact(shop):
+    """
+    How to reach the shop from its page: WhatsApp when its number is a mobile,
+    which in Paraguay is where people write first; a call otherwise.
+    """
+    if not shop.phone:
+        return None
+    kind = phonenumbers.number_type(shop.phone)
+    if kind in (phonenumbers.PhoneNumberType.MOBILE, phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE):
+        return {'kind': 'whatsapp', 'href': f'https://wa.me/{shop.phone.as_e164.lstrip("+")}'}
+    return {'kind': 'phone', 'href': f'tel:{shop.phone.as_e164}'}
 
 
 def _open_until(professionals, zone):

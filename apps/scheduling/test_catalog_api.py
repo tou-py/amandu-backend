@@ -214,6 +214,24 @@ def test_a_service_round_trips_with_and_without_a_price(receptionist, salon):
     assert Service.objects.get(name='Pilates').price is None
 
 
+def test_a_service_carries_a_short_description(receptionist, salon):
+    http = api(receptionist, salon)
+
+    described = http.post(
+        SERVICE_LIST, {'name': 'Haircut', 'duration': '00:30:00', 'description': 'Incluye lavado.'}, format='json',
+    )
+    bare = http.post(SERVICE_LIST, {'name': 'Pilates', 'duration': '01:00:00'}, format='json')
+    too_long = http.post(
+        SERVICE_LIST, {'name': 'Color', 'duration': '01:00:00', 'description': 'x' * 141}, format='json',
+    )
+
+    assert described.status_code == 201
+    assert described.data['description'] == 'Incluye lavado.'
+    assert bare.data['description'] == ''
+    assert too_long.status_code == 400
+    assert 'description' in too_long.data
+
+
 def _member(django_user_model, tenant, email, role):
     user = django_user_model.objects.create_user(email=email, password='pw')
     return Membership.objects.create(user=user, tenant=tenant, role=role)

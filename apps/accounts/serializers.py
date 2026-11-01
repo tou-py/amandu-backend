@@ -66,6 +66,8 @@ def active_memberships(user):
             'tenant_name': tenant.name,
             'tenant_country': str(tenant.country),
             'tenant_logo_url': images.public_url(tenant.logo_key),
+            'tenant_request_accepted_message': tenant.request_accepted_message,
+            'tenant_request_rejected_message': tenant.request_rejected_message,
             'role': m.role,
             'attends_appointments': m.attends_appointments,
             'photo_url': images.public_url(m.photo_key),
@@ -96,6 +98,10 @@ class ActiveMembershipSerializer(serializers.Serializer):
     tenant_country = serializers.CharField()
     # Everyone inside sees it in the top bar, not only the owner who may read /api/tenant/.
     tenant_logo_url = serializers.URLField(allow_null=True)
+    # The business's wording for answering a public request, also for everyone:
+    # whoever answers sends it. Blank means Kyo's default (the frontend's).
+    tenant_request_accepted_message = serializers.CharField(allow_blank=True)
+    tenant_request_rejected_message = serializers.CharField(allow_blank=True)
     role = serializers.CharField()
     # Whether this person can be booked, so the UI can gate "my agenda" without
     # fetching the professionals list.
@@ -452,11 +458,16 @@ class NotificationActorSerializer(serializers.ModelSerializer):
 
 
 class NotificationAppointmentSerializer(serializers.ModelSerializer):
-    """Just enough to point at the slot -- the agenda already holds the rest."""
+    """Enough to say the slot in a sentence and to answer a request from the bell:
+    who, what, when, and whether it is still waiting. The agenda holds the rest."""
+
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    clients = serializers.SlugRelatedField(many=True, read_only=True, slug_field='name')
 
     class Meta:
         model = Appointment
-        fields = ('id', 'start')
+        fields = ('id', 'start', 'status', 'service_name', 'clients')
+        read_only_fields = fields
 
 
 class NotificationSerializer(serializers.ModelSerializer):

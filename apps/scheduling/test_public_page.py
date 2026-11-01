@@ -89,7 +89,7 @@ def test_the_opening_hours_become_structured_data(client, salon, stylist, haircu
     there is no second place to keep them true."""
     body = html(client, salon)
 
-    assert '"@type": "HairSalon"' in body
+    assert '"@type": "LocalBusiness"' in body
     assert '"dayOfWeek": "https://schema.org/Monday"' in body
     assert '"opens": "09:00"' in body
     assert '"closes": "11:00"' in body
@@ -113,7 +113,7 @@ def test_the_page_is_written_in_spanish(client, salon, stylist, haircut, open_mo
     TemplateHTMLRenderer response after the view returns, so activating around
     the Response is already over by the time a day name is formatted.
     """
-    body = html(client, salon)
+    body = html(client, salon, paso='cuando')
 
     assert 'lunes' in body
     assert 'agosto' in body
@@ -122,7 +122,7 @@ def test_the_page_is_written_in_spanish(client, salon, stylist, haircut, open_mo
 
 def test_the_slots_are_drawn_in_the_shops_own_hours(client, salon, stylist, haircut,
                                                     open_monday, monday_morning):
-    body = html(client, salon)
+    body = html(client, salon, paso='cuando')
 
     assert '>09:00<' in body
     assert '>10:30<' in body
@@ -130,15 +130,40 @@ def test_the_slots_are_drawn_in_the_shops_own_hours(client, salon, stylist, hair
     assert '>11:00<' not in body
 
 
-# --- the hero -----------------------------------------------------------------
+# --- the band and the bar at the foot -----------------------------------------
 
-def test_the_hero_leads_with_the_next_free_slot(client, salon, stylist, haircut,
-                                                open_monday, monday_morning):
-    """The one fact somebody arrives for, above everything they have to choose."""
+@pytest.fixture
+def soonest_bar(monkeypatch):
+    """The bar is off on the live page for now; these tests keep it working."""
+    monkeypatch.setattr('apps.scheduling.public_pages.SOONEST_BAR', True)
+
+
+def test_the_soonest_bar_is_off_for_now(client, salon, stylist, haircut, open_monday, monday_morning):
+    assert 'Próximo turno libre' not in html(client, salon)
+
+
+def test_the_soonest_free_hour_waits_at_the_foot_of_the_services(client, salon, stylist, haircut, soonest_bar,
+                                                                 open_monday, monday_morning):
+    """The one fact somebody arrives for, one tap from the form, without
+    pushing the services below the fold."""
     body = html(client, salon)
 
-    assert 'Lo más cercano' in body
-    assert 'Hoy a las 09:00' in body
+    assert 'Próximo turno libre' in body
+    assert 'Hoy, 09:00' in body
+    assert 'paso=datos' in body.split('class="dock"')[1]
+
+
+def test_the_soonest_hour_is_the_shortest_services(client, salon, stylist, haircut, soonest_bar,
+                                                   open_monday, monday_morning):
+    """It fits in any gap a longer one does: its first hour is the shop's first."""
+    Service.objects.create(tenant=salon, name='Color', duration=timedelta(minutes=90))
+    Appointment.objects.create(tenant=salon, professional=stylist, service=haircut,
+                               start=local(9, 30), end=local(10, 30))
+
+    dock = html(client, salon).split('class="dock"')[1]
+
+    assert 'Hoy, 09:00' in dock
+    assert 'Corte' in dock
 
 
 def test_the_badge_says_open_while_somebody_is_working(client, salon, stylist, haircut,
@@ -185,7 +210,7 @@ def test_a_booked_slot_is_simply_absent_never_named(client, salon, stylist, hair
 
     # The page shows one day's hours at a time, the first open one by default:
     # this Monday, not the next one, which is legitimately free at nine.
-    first_day = html(client, salon)
+    first_day = html(client, salon, paso='cuando')
 
     assert '>09:00<' not in first_day
     assert '>09:30<' in first_day
@@ -228,7 +253,7 @@ def test_the_confirmation_names_the_time_that_was_taken(client, salon, stylist,
     body = response.content.decode()
 
     assert '09:00' in body
-    assert 'Te confirman ellos' in body
+    assert 'Hasta que te confirmen' in body
 
 
 def test_the_confirmation_url_carries_no_identifier(client, salon, stylist, haircut,
@@ -261,7 +286,7 @@ def test_a_day_with_no_hours_is_left_out(client, salon, stylist, haircut, open_m
                                          monday_morning):
     """Two weeks are drawn, but only the days that have something to offer can
     be picked: the rest are there to keep the fortnight's shape."""
-    body = html(client, salon)
+    body = html(client, salon, paso='cuando')
 
     assert body.count('<a class="d"') == 2
     assert body.count('<span class="d"') == 12
@@ -270,17 +295,27 @@ def test_a_day_with_no_hours_is_left_out(client, salon, stylist, haircut, open_m
 def test_another_day_shows_its_own_hours(client, salon, stylist, haircut, open_monday,
                                          monday_morning):
     next_monday = MONDAY + timedelta(days=7)
-    body = html(client, salon, day=next_monday.isoformat())
+    body = html(client, salon, paso='cuando', day=next_monday.isoformat())
 
     assert local(9, day=next_monday).isoformat() in body
     assert local(9).isoformat() not in body
 
 
-def test_the_soonest_hour_lands_on_the_form_already_ticked(client, salon, stylist, haircut,
-                                                           open_monday, monday_morning):
-    body = html(client, salon, day=MONDAY.isoformat(), start=local(9).isoformat())
+def test_a_picked_hour_lands_on_the_form_with_it_named(client, salon, stylist, haircut,
+                                                      open_monday, monday_morning):
+    body = html(client, salon, paso='datos', day=MONDAY.isoformat(), start=local(9).isoformat())
 
-    assert f'value="{local(9).isoformat()}" required checked' in body
+    assert f'<input type="hidden" name="start" value="{local(9).isoformat()}">' in body
+    assert 'class="card-box ticket"' in body
+    assert '10 de agosto, 09:00' in body
+
+
+def test_a_form_for_an_hour_not_on_offer_goes_back_to_the_hours(client, salon, stylist, haircut,
+                                                                open_monday, monday_morning):
+    body = html(client, salon, paso='datos', day=MONDAY.isoformat(), start=local(3).isoformat())
+
+    assert '¿Cuándo?' in body
+    assert 'name="phone"' not in body
 
 
 def test_a_slot_taken_in_the_meantime_is_a_sentence_not_a_409(client, salon, stylist,
@@ -314,6 +349,7 @@ def test_the_form_errors_are_spanish(client, salon, stylist, haircut, open_monda
 
     assert 'role="alert"' in body
     assert 'This field' not in body
+    assert 'Falta tu nombre.' in body
 
 
 # --- images -----------------------------------------------------------------
@@ -327,15 +363,45 @@ def cdn(settings):
 
 def test_the_logo_heads_the_page(client, cdn, salon, stylist, haircut, open_monday,
                                  monday_morning):
+    """One uploaded before it was measured is drawn as most logos are: a dark
+    mark on a clear ground, in a square tile."""
     salon.logo_key = f'{salon.pk}/logo/a.webp'
     salon.save()
 
     body = html(client, salon)
 
     assert (
-        f'<img class="logo" src="https://img.example.com/{salon.pk}/logo/a.webp" '
-        'alt="Logo de Salón Iguazú" height="56">'
+        f'<span class="logo square ink-dark"><img src="https://img.example.com/{salon.pk}/logo/a.webp" '
+        'alt="Logo de Salón Iguazú"></span>'
     ) in body
+
+
+def test_a_measured_logo_is_drawn_to_its_shape_and_on_its_own_ground(client, cdn, salon, stylist,
+                                                                     haircut, open_monday,
+                                                                     monday_morning):
+    salon.logo_key = f'{salon.pk}/logo/a.webp'
+    salon.logo_meta = {'aspect': 3.5, 'transparent': False, 'background': '#f3f1ea', 'ink': 'dark'}
+    salon.save()
+
+    body = html(client, salon)
+
+    assert '<span class="logo wide ink-dark plated" style="background: #f3f1ea">' in body
+
+
+def test_a_shop_colour_themes_the_page_and_drops_the_professional_tints(client, salon, stylist,
+                                                                        haircut, open_monday,
+                                                                        monday_morning):
+    assert '.h1, .h2' not in html(client, salon)
+
+    salon.brand_color = '#1f3a5f'
+    salon.brand_intensity = 'marcada'
+    salon.save()
+    body = html(client, salon)
+
+    assert '--accent: #1f3a5f; --accent-ink: #ffffff;' in body
+    assert '--band: #1f3a5f; --band-ink: #ffffff;' in body
+    assert '<meta name="theme-color" content="#1f3a5f" media="(prefers-color-scheme: light)">' in body
+    assert '.h1, .h2, .h3, .h4, .h5, .h6 { --sel-bg: var(--soft)' in body
 
 
 def test_a_professional_with_a_photo_shows_their_face(client, cdn, salon, stylist,
@@ -345,7 +411,7 @@ def test_a_professional_with_a_photo_shows_their_face(client, cdn, salon, stylis
     stylist.photo_key = f'{salon.pk}/photo/b.webp'
     stylist.save()
 
-    body = html(client, salon)
+    body = html(client, salon, paso='datos', day=MONDAY.isoformat(), start=local(9).isoformat())
 
     assert (
         f'<img class="avatar" src="https://img.example.com/{salon.pk}/photo/b.webp" '
@@ -357,22 +423,216 @@ def test_a_professional_with_a_photo_shows_their_face(client, cdn, salon, stylis
 def test_a_professional_without_a_photo_keeps_the_initials(client, cdn, salon, stylist,
                                                           haircut, open_monday,
                                                           monday_morning):
-    body = html(client, salon)
+    body = html(client, salon, paso='datos', day=MONDAY.isoformat(), start=local(9).isoformat())
 
     assert '<span class="avatar" aria-hidden="true">AN</span>' in body
     assert '<img class="avatar"' not in body
 
 
-def test_a_service_with_an_image_shows_it_in_its_row(client, cdn, salon, stylist, haircut,
-                                                     open_monday, monday_morning):
-    """Below the fold on a phone, so it loads lazily; empty alt because the
-    service's name is the link text right next to it."""
+def test_a_service_row_shows_its_cover_as_a_taste_and_counts_the_rest(client, cdn, salon, stylist,
+                                                                    haircut, open_monday,
+                                                                    monday_morning):
+    """One link per row, to the service's own page; the first cover fetched at once."""
     haircut.image_key = f'{salon.pk}/service/c.webp'
+    haircut.image_2_key = f'{salon.pk}/gallery/d.webp'
+    haircut.save()
+
+    row = html(client, salon).split(f'<li class="card" id="svc-{haircut.pk}">')[1].split('</li>')[0]
+
+    assert row.count('<a ') == 1
+    assert f'href="?ver={haircut.pk}"' in row
+    assert f'<img src="https://img.example.com/{salon.pk}/service/c.webp" alt="" width="120" height="120" fetchpriority="high">' in row
+    assert '>+1<' in row
+    assert 'gallery/d.webp' not in row
+
+
+def test_a_service_looked_at_shows_its_pictures_large_and_chooses_it(client, cdn, salon, stylist, bea,
+                                                                    haircut, open_monday,
+                                                                    monday_morning):
+    haircut.image_key = f'{salon.pk}/service/c.webp'
+    haircut.image_2_key = f'{salon.pk}/gallery/d.webp'
+    haircut.image_ratio = '3:4'
+    haircut.description = 'Incluye lavado.'
+    haircut.save()
+
+    body = html(client, salon, ver=haircut.pk)
+
+    assert '<title>Corte en Salón Iguazú</title>' in body
+    assert '<meta property="og:title" content="Corte en Salón Iguazú">' in body
+    assert '<div class="carousel">' in body
+    assert body.count('aspect-ratio: 3 / 4') == 2
+    assert 'alt="Corte, foto 2 de 2" loading="lazy"' in body
+    assert 'Incluye lavado.' in body
+    assert 'Elegir este servicio' in body
+    assert f'service={haircut.pk}&amp;professional=&amp;day=&amp;paso=profesional' in body.split('class="dock"')[1]
+    assert 'Próximo turno libre' not in body
+    assert f'href="/reservar/iguazu/#svc-{haircut.pk}"' in body
+
+
+def test_a_service_that_is_not_the_shops_just_shows_the_list(client, salon, stylist, haircut,
+                                                              open_monday, monday_morning):
+    other = Tenant.objects.create(name='Otro', slug='otro', timezone='America/Asuncion')
+    theirs = Service.objects.create(tenant=other, name='Ajeno', duration=timedelta(minutes=30))
+
+    for asked in (theirs.pk, 'x'):
+        body = html(client, salon, ver=asked)
+        assert '¿Qué reservás?' in body
+        assert 'Elegir este servicio' not in body
+
+
+# --- one decision per screen --------------------------------------------------
+
+@pytest.fixture
+def bea(db, django_user_model, salon):
+    user = django_user_model.objects.create_user(email='b@example.com', password='pw', first_name='Bea')
+    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+
+
+def test_a_service_card_says_what_it_is_and_leads_to_who(client, salon, stylist, bea, haircut,
+                                                         open_monday, monday_morning):
+    haircut.description = 'Incluye lavado.'
     haircut.save()
 
     body = html(client, salon)
 
-    assert (
-        f'<img class="thumb" src="https://img.example.com/{salon.pk}/service/c.thumb.webp" '
-        'alt="" width="64" height="48" loading="lazy">'
-    ) in body
+    assert '¿Qué reservás?' in body
+    assert 'Incluye lavado.' in body
+    assert f'service={haircut.pk}&amp;professional=&amp;day=&amp;paso=profesional' in html(client, salon, ver=haircut.pk)
+
+
+def test_a_shop_of_one_skips_choosing_who(client, salon, stylist, haircut, open_monday,
+                                          monday_morning):
+    services = html(client, salon)
+    who = html(client, salon, paso='profesional')
+
+    assert 'paso=cuando' in html(client, salon, ver=haircut.pk)
+    assert 'Paso 1 de 3' in services
+    assert '¿Qué reservás?' in who
+
+
+def test_choosing_who_offers_anyone_first(client, salon, stylist, bea, haircut, open_monday,
+                                          monday_morning):
+    body = html(client, salon, service=haircut.pk, paso='profesional')
+
+    assert '¿Con quién?' in body
+    assert body.index('Cualquiera') < body.index('Bea')
+    assert 'Paso 2 de 4' in body
+
+
+def test_services_are_shown_by_category_with_the_unfiled_last(client, salon, stylist, haircut,
+                                                              open_monday, monday_morning):
+    from apps.scheduling.models import Category
+    nails = Category.objects.create(tenant=salon, name='Manos')
+    Service.objects.create(tenant=salon, name='Kapping', duration=timedelta(minutes=60), category=nails)
+
+    body = html(client, salon)
+
+    assert '<h3>Manos</h3>' in body
+    assert '<h3>Otros servicios</h3>' in body
+    assert body.index('Kapping') < body.index('Corte')
+
+
+# --- after the critique: the end of the journey and the small print --------------
+
+def test_the_confirmation_does_not_offer_another_booking_at_its_foot(client, salon, stylist, haircut,
+                                                                    open_monday, monday_morning):
+    body = html(client, salon, service=haircut.pk, at=local(9).isoformat())
+
+    assert '¡Pedido enviado!' in body
+    assert 'class="dock"' not in body
+
+
+def test_the_foot_links_to_kyo_only_once_its_landing_is_set(client, salon, settings):
+    settings.KYO_LANDING_URL = ''
+    assert 'Conocé Kyo' not in html(client, salon)
+
+    settings.KYO_LANDING_URL = 'https://kyo.example/'
+    assert '<a href="https://kyo.example/" target="_blank" rel="noopener">' in html(client, salon)
+
+
+def test_the_soonest_bar_names_the_service_it_books_first(client, salon, stylist, haircut, soonest_bar,
+                                                         open_monday, monday_morning):
+    dock = html(client, salon).split('class="dock"')[1]
+
+    assert dock.index('<strong>Corte</strong>') < dock.index('Hoy, 09:00')
+
+
+def test_a_day_link_lands_on_its_hours(client, salon, stylist, haircut, open_monday, monday_morning):
+    body = html(client, salon, service=haircut.pk, paso='cuando')
+
+    assert 'paso=cuando#cuando"' in body
+
+
+def test_a_day_without_hours_says_so_in_words(client, salon, stylist, haircut, open_monday,
+                                              monday_morning):
+    body = html(client, salon, service=haircut.pk, paso='cuando')
+
+    assert '<span class="sr">, sin horarios</span>' in body
+
+
+def test_the_last_step_is_under_way_not_done(client, salon, stylist, haircut, open_monday,
+                                             monday_morning):
+    body = html(client, salon, service=haircut.pk, day=MONDAY.isoformat(),
+                start=local(9).isoformat(), paso='datos')
+
+    assert '<i class="now"></i></div>' in body
+
+
+def test_a_service_without_a_price_says_to_ask(client, salon, stylist, haircut, open_monday,
+                                               monday_morning):
+    haircut.price = None
+    haircut.save()
+
+    assert 'A consultar' in html(client, salon)
+
+
+def test_a_bad_phone_is_named_in_the_pages_own_voice(client, salon, stylist, haircut, open_monday,
+                                                     monday_morning):
+    body = client.post(page_url(salon), {
+        'service': haircut.pk, 'professional': stylist.pk,
+        'start': local(9).isoformat(), 'name': 'Ada', 'phone': '12',
+    }).content.decode()
+
+    assert 'Revisá el teléfono: va con el código de área.' in body
+    assert 'por ejemplo <span class="amandu-time">0961 456789</span>' in body
+
+
+# --- who the shop is, and where ----------------------------------------------
+
+def test_a_logo_is_drawn_to_its_shape(client, cdn, salon, stylist, haircut, open_monday, monday_morning):
+    salon.logo_key = f'{salon.pk}/logo/a.webp'
+    for aspect, shape in ((0.5, 'tall'), (1.2, 'square'), (2.0, 'wide')):
+        salon.logo_meta = {'aspect': aspect, 'ink': 'dark'}
+        salon.save()
+        assert f'<span class="logo {shape} ink-dark">' in html(client, salon)
+
+
+def test_where_the_shop_is_closes_the_list(client, salon, stylist, haircut, open_monday, monday_morning):
+    salon.address = 'Av. España 1240, Asunción'
+    salon.instagram = 'iguazu'
+    salon.save()
+
+    body = html(client, salon)
+    info = body.split('class="info"')[1]
+
+    assert 'Av. España 1240, Asunción</address>' in info
+    assert 'https://www.google.com/maps/search/?api=1&amp;query=Av.+Espa%C3%B1a+1240%2C+Asunci%C3%B3n' in info
+    assert '@iguazu</a>' in info
+    assert 'Hoy: 09:00 a 11:00' in info
+    assert '<iframe' not in info
+    assert '"address": "Av. Espa\u00F1a 1240, Asunci\u00F3n"' in body
+    assert '"sameAs": ["https://www.instagram.com/iguazu/"]' in body
+
+
+def test_the_map_is_drawn_only_with_a_key(client, salon, stylist, haircut, open_monday, monday_morning,
+                                          settings):
+    settings.GOOGLE_MAPS_EMBED_KEY = 'k'
+    salon.address = 'Av. España 1240'
+    salon.save()
+
+    assert '<iframe class="map" src="https://www.google.com/maps/embed/v1/place?key=k&amp;q=' in html(client, salon)
+
+
+def test_a_shop_that_said_nothing_of_itself_has_no_where_section(client, salon, stylist, haircut,
+                                                                 monday_morning):
+    assert 'class="info"' not in html(client, salon)

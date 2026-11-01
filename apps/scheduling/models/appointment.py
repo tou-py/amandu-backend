@@ -54,6 +54,11 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         STAFF = 'staff', 'Staff'
         PUBLIC = 'public', 'Public page'
 
+    class AnswerNotice(models.TextChoices):
+        NONE = '', 'Nothing owed'
+        ACCEPTED = 'accepted', 'Acceptance owed'
+        REJECTED = 'rejected', 'Rejection owed'
+
     professional = models.ForeignKey(
         'accounts.Membership',
         # A booked professional cannot be deleted out from under their history.
@@ -101,6 +106,17 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
     # carries when and why it was called off.
     cancelled_at = models.DateTimeField(null=True, blank=True, editable=False)
     cancellation_reason = models.TextField(blank=True)
+    # A person answered a public request and the client has not been told yet.
+    # The answer goes from the business's own WhatsApp (wa.me, the step in the
+    # turno sheet), which cannot report back, so tapping "Enviar por WhatsApp"
+    # is what clears it (`answer_told`). Which answer, not a timestamp: the sheet
+    # needs to know which message is owed, and a turno only ever owes one.
+    answer_notice = models.CharField(
+        max_length=10,
+        choices=AnswerNotice.choices,  # type: ignore
+        blank=True,
+        default=AnswerNotice.NONE,
+    )
     # How many people this slot can hold. On the appointment and not on the
     # Service because the ceiling is physical, not commercial: it is how many
     # reformers are on the floor, how many chairs the room has -- and one of them
@@ -215,17 +231,30 @@ class Appointment(PublicIdentifierMixin, TenantOwnedMixin, TimestampMixin):
         if self.status != self.Status.PENDING:
             raise ValidationError('Only a pending appointment can be confirmed.')
         self.status = self.Status.SCHEDULED
-        self.save(update_fields=['status', 'updated_at'])
+        self.answer_notice = self.AnswerNotice.ACCEPTED
+        self.save(update_fields=['status', 'answer_notice', 'updated_at'])
 
     def cancel(self, reason=''):
         # Turning down a request off the public page and cancelling a confirmed
         # booking are the same transition: the slot is given back either way.
         # Only the two terminal states are refused.
         self._require_not_terminal()
+        # Turning a request down owes the client the answer; calling off a
+        # booking makes an acceptance nobody sent yet moot. The sweep's expiry
+        # does not come through here (an .update()), so it owes nothing.
+        rejected = self.status == self.Status.PENDING
+        self.answer_notice = self.AnswerNotice.REJECTED if rejected else self.AnswerNotice.NONE
         self.status = self.Status.CANCELLED
         self.cancelled_at = timezone.now()
         self.cancellation_reason = reason
-        self.save(update_fields=['status', 'cancelled_at', 'cancellation_reason', 'updated_at'])
+        self.save(update_fields=[
+            'status', 'cancelled_at', 'cancellation_reason', 'answer_notice', 'updated_at',
+        ])
+
+    def answer_told(self):
+        # Idempotent: a colleague who told the client first leaves nothing owed.
+        self.answer_notice = self.AnswerNotice.NONE
+        self.save(update_fields=['answer_notice', 'updated_at'])
 
     def complete(self):
         self._require_scheduled()

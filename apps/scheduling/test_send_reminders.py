@@ -596,10 +596,13 @@ def test_one_digest_a_day_however_often_the_sweep_runs(salon, team, owing, sent)
         with clock(2026, 10, 2, hour, 0):
             call_command('send_reminders')
     assert digests().count() == 2
+    first = set(digests().values_list('pk', flat=True))
 
     with clock(2026, 10, 3, 8, 0):  # the next local day
         call_command('send_reminders')
-    assert digests().count() == 4
+    # Filed again, and in place of yesterday's: still one per person.
+    assert digests().count() == 2
+    assert first.isdisjoint(digests().values_list('pk', flat=True))
 
 
 def test_a_missed_morning_still_gets_its_digest_late(salon, team, owing, sent):

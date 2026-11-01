@@ -263,7 +263,8 @@ class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets
         return (
             Notification.objects
             .filter(recipient=self.request.membership)
-            .select_related('actor__user', 'appointment')
+            .select_related('actor__user', 'appointment__service')
+            .prefetch_related('appointment__clients')
         )
 
     @extend_schema(
