@@ -370,6 +370,8 @@ def test_a_late_kyo_payment_never_stops_telling_a_client(request_for_ana, coordi
 
 def test_a_request_the_sweep_expires_owes_no_answer(request_for_ana, sent, now, settings):
     settings.WAHA_URL = ''  # about the mark, not the delivery
+    settings.VAPID_PRIVATE_KEY = 'k'  # else the command raises, as on CI
+    settings.VAPID_SUBJECT = 'mailto:x@example.com'
     now(local(9, 1))
 
     call_command('send_reminders')
