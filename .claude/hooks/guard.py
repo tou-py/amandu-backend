@@ -59,6 +59,8 @@ if mode == 'pre':
         if re.search(r'/migrations/\d{4}_\w+\.py$', path) and run('git', 'ls-files', '--error-unmatch', path).returncode == 0:
             block('This migration is committed and may already be applied somewhere. Write a new migration instead.')
     cmd = tool_input.get('command') or ''
+    if re.search(r'ALLOW_BIG_COMMIT|\bgit\b.*\s--no-verify\b', cmd):
+        ask('This skips the commit policy (size or message). Split the commit, or confirm by hand.')
     if cmd and ships_to_prod(cmd, data.get('cwd') or ROOT):
         ask('This ships to Prod (Dokploy deploys on every push). Confirm by hand.')
 
