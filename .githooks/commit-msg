@@ -1,9 +1,11 @@
 #!/bin/sh
 # Commit policy for every author, human or agent: Conventional Commits, short,
-# no co-author or "generated with" trailers.
+# no co-author or "generated with" trailers, and small (one reviewable step).
 # Install once per clone: sh .githooks/install
 MAX_SUBJECT=72
 MAX_BODY_LINES=4
+MAX_LINES=300
+MAX_FILES=10
 
 msg=$(grep -v '^#' "$1")
 subject=$(printf '%s\n' "$msg" | sed -n 1p)
@@ -22,4 +24,17 @@ case $subject in *.) fail 'no trailing period in the subject' ;; esac
 printf '%s\n' "$msg" | grep -Eiq '^(co-authored-by:|.*generated with)' && fail 'no Co-Authored-By or "Generated with" lines'
 body=$(printf '%s\n' "$msg" | sed 1,2d | grep -c .)
 [ "$body" -le "$MAX_BODY_LINES" ] || fail "body has $body lines, keep it to $MAX_BODY_LINES"
+
+# Size counts hand-written text only: lock files, migrations, generated types,
+# graphify output and binaries (numstat "-") are left out.
+# ponytail: --amend is measured against the old HEAD, so it counts only the new delta
+[ -n "$ALLOW_BIG_COMMIT" ] && exit 0
+read -r lines files <<EOF
+$(git diff --cached --numstat -M | awk -F'\t' '
+  $1 != "-" && $3 !~ /(^|\/)(uv\.lock|package-lock\.json|schema\.d\.ts)$|\/migrations\/|^graphify-out\/|parity\.json$/ { l += $1 + $2; f++ }
+  END { print l + 0, f + 0 }')
+EOF
+[ "$lines" -le "$MAX_LINES" ] && [ "$files" -le "$MAX_FILES" ] ||
+  fail "commit is $lines lines in $files files, keep it to $MAX_LINES lines and $MAX_FILES files: split it.
+  If it truly cannot split, the user approves: ALLOW_BIG_COMMIT=1 git commit ..."
 exit 0
