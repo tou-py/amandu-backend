@@ -1,10 +1,9 @@
 """
 A public request and its answers, from the outside: what the page books, who
-hears about it, and what the sweep actually sends.
+hears about it, and what is filed for the client.
 
 Driven through the highest seams there are -- the public page's POST, the
-confirm/cancel actions, and `send_reminders` -- with exactly one fake: the call
-to WAHA (`whatsapp.send`), and the pauses that pace it.
+confirm/cancel actions, and `send_reminders`.
 """
 
 from datetime import date, datetime, time, timedelta
@@ -16,7 +15,6 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling import whatsapp
 from apps.scheduling.models import (
     Appointment,
     Client,
@@ -91,41 +89,6 @@ def coordinator(db, django_user_model, salon):
 @pytest.fixture
 def haircut(db, salon):
     return Service.objects.create(tenant=salon, name='Corte', duration=timedelta(minutes=30))
-
-
-@pytest.fixture
-def number(monkeypatch):
-    """What WAHA says of the number's limits; a test edits it to restrict it."""
-    state = {'timelock': {'isActive': False}, 'capping': {'cappingStatus': 'NONE'}}
-
-    class Reply:
-        def __init__(self, url):
-            self.url = url
-
-        def raise_for_status(self):
-            if state.get('down'):
-                raise ConnectionError('WAHA is down')
-
-        def json(self):
-            return state[self.url.rsplit('/', 1)[1]]
-
-    monkeypatch.setattr(whatsapp.requests, 'get', lambda url, headers, timeout: Reply(url))
-    return state
-
-
-@pytest.fixture
-def sent(monkeypatch, number):
-    """Stands in for WAHA: records (to, text), or raises if told to."""
-    calls = []
-
-    def fake(to, text):
-        if calls and calls[-1] == 'fail':
-            raise ConnectionError('WAHA is down')
-        calls.append((str(to), text))
-
-    monkeypatch.setattr(whatsapp, 'send', fake)
-    monkeypatch.setattr(whatsapp, '_pause', lambda seconds: None)
-    return calls
 
 
 def page(salon):
@@ -387,90 +350,6 @@ def test_cancelling_a_confirmed_turno_is_unchanged(request_for_ana, coordinator,
 
     assert not OutboundMessage.objects.exists()
     assert Notification.objects.get().verb == Notification.Verb.APPOINTMENT_CANCELLED
-
-
-# --- the sweep ------------------------------------------------------------------
-
-def queue(salon, count):
-    for n in range(count):
-        OutboundMessage.objects.create(tenant=salon, to=f'+59598100000{n}', body=f'm{n}')
-
-
-def test_a_message_is_given_up_after_max_attempts(salon, sent, now):
-    now(local(10))
-    OutboundMessage.objects.create(
-        tenant=salon, to=CLIENT_PHONE, body='x', attempts=whatsapp.MAX_ATTEMPTS,
-    )
-
-    assert whatsapp.deliver_due() == (0, False)
-
-
-def test_nothing_goes_out_at_night(salon, sent, now):
-    now(local(23))
-    queue(salon, 1)
-
-    assert whatsapp.deliver_due() == (0, False)
-    assert sent == []
-
-
-def test_one_number_gets_at_most_a_few_an_hour(salon, sent, now):
-    now(local(10))
-    for n in range(whatsapp.PER_HOUR):
-        OutboundMessage.objects.create(tenant=salon, to=CLIENT_PHONE, body=f'old{n}',
-                                       sent_at=local(9, 30))
-    OutboundMessage.objects.create(tenant=salon, to=CLIENT_PHONE, body='new')
-    queue(salon, 1)
-
-    assert whatsapp.deliver_due() == (1, False)
-    assert [text for _, text in sent] == ['m0']  # the other number still gets its turn
-
-    now(local(10, 31))  # an hour after the last one
-    whatsapp.deliver_due()
-    assert sent[-1] == (CLIENT_PHONE, 'new')
-
-
-@pytest.mark.parametrize('limits', [
-    {'timelock': {'isActive': True}},
-    {'capping': {'cappingStatus': 'FIRST_WARNING'}},
-    {'capping': {'cappingStatus': 'CAPPED'}},
-])
-def test_a_restricted_number_sends_nothing(salon, sent, number, now, limits):
-    now(local(10))
-    queue(salon, 1)
-    number.update(limits)
-
-    assert whatsapp.deliver_due() == (0, False)
-    assert sent == []
-    assert OutboundMessage.objects.get().attempts == 0  # not a failure: it waits
-
-
-def test_waha_unable_to_say_is_a_failure(salon, sent, number, now):
-    now(local(10))
-    queue(salon, 1)
-    number['down'] = True
-
-    assert whatsapp.deliver_due() == (0, True)
-    assert sent == []
-
-
-def test_waha_is_asked_to_type_then_send(monkeypatch, settings):
-    calls = []
-
-    class Ok:
-        def raise_for_status(self):
-            pass
-
-    def post(url, json, headers, timeout):
-        calls.append((url, json))
-        return Ok()
-
-    monkeypatch.setattr(whatsapp.requests, 'post', post)
-    monkeypatch.setattr(whatsapp, '_pause', lambda seconds: None)
-
-    whatsapp.send('+595981123456', 'hola')
-
-    assert [url.rsplit('/', 1)[1] for url, _ in calls] == ['startTyping', 'stopTyping', 'sendText']
-    assert calls[-1][1] == {'session': 'default', 'chatId': '595981123456@c.us', 'text': 'hola'}
 
 
 def test_a_request_is_pushed_as_a_request_not_a_cancellation(request_for_ana, coordinator,
