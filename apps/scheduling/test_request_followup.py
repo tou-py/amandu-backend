@@ -1,7 +1,7 @@
 """
 Public requests nobody answered, as the sweep (send_reminders) handles them:
 put to the shop's managers after a while, turned down once their hour passed.
-Driven through the real command; the push service and WAHA are faked.
+Driven through the real command; the push service is faked.
 """
 from datetime import datetime, time, timedelta
 from unittest.mock import patch
@@ -12,6 +12,7 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from apps.accounts.models import Membership, Notification
+from apps.scheduling import notify
 from apps.scheduling.models import Appointment, Client, OutboundMessage, Service
 from apps.tenancy.models import Tenant
 
@@ -156,16 +157,15 @@ def test_a_manager_is_not_told_about_their_own_request(daytime, owner, turno):
     assert waiting_for(owner) == 0
 
 
-def test_a_request_whose_hour_passed_expires_and_frees_the_slot(daytime, settings, owner, salon, ana, request_):
+def test_a_request_whose_hour_passed_expires_and_frees_the_slot(daytime, monkeypatch, owner, salon, ana, request_):
     salon.phone = '+595210000000'
     salon.save()
     ana.whatsapp_opt_in = True
     ana.save()
     expired = request_(hours_ago=30, start=daytime - timedelta(hours=1))
 
-    settings.WAHA_URL = 'http://waha'
-    with patch('apps.scheduling.whatsapp.send'):
-        call_command('send_reminders')
+    monkeypatch.setattr(notify, 'WHATSAPP_SENDER', True)
+    call_command('send_reminders')
 
     expired.refresh_from_db()
     assert expired.status == Appointment.Status.CANCELLED

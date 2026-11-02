@@ -8,8 +8,7 @@ The sweep. Four things come due on the same tick and share one run:
   * a Notification row nobody has been told about yet -- a teammate cancelling
     a slot that was not theirs (AppointmentViewSet.cancel), a request from the
     public page and its answer (apps/scheduling/notify.py), or the digest
-    above;
-  * a few WhatsApp messages from the outbox, paced (apps/scheduling/whatsapp.py).
+    above.
 
 Kept in one command, under a name that only says "reminders", deliberately: the
 cron entry lives in Dokploy's UI, not in this repo, and a second command means a
@@ -49,7 +48,7 @@ from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling import billing, whatsapp
+from apps.scheduling import billing
 from apps.scheduling import notify
 from apps.scheduling.models import Appointment
 from apps.tenancy import pricing
@@ -78,6 +77,8 @@ DIGEST_HOUR = 5
 # How long a public request may wait on its professional before the shop's
 # managers hear about it. It holds its slot the whole time.
 ESCALATE_AFTER = timedelta(hours=2)
+# Local hours a manager may be told about a waiting request: never at night.
+WAKING_HOURS = range(8, 21)
 EXPIRED_REASON = 'Vencida sin respuesta'
 
 
@@ -109,11 +110,6 @@ class Command(BaseCommand):
             if settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT:
                 self._run()
                 self._run_notifications()
-            # Last, because it is the slow one: its pauses between messages
-            # are deliberate, and must not hold up a reminder about to be due.
-            # Not behind the VAPID check -- WhatsApp does not need push.
-            if settings.WAHA_URL:
-                self._run_whatsapp()
         finally:
             cache.delete(LOCK_KEY)
 
@@ -124,14 +120,6 @@ class Command(BaseCommand):
             raise CommandError(
                 'VAPID_PRIVATE_KEY and VAPID_SUBJECT are unset; push is not configured.'
             )
-
-    def _run_whatsapp(self):
-        sent, failed = whatsapp.deliver_due()
-        if failed:
-            # Once per run at most: deliver_due stops at the first failure.
-            self.stderr.write('WhatsApp send failed; the rest waits for the next run.')
-        if sent or failed:
-            self.stdout.write(f'{sent} WhatsApp message(s) sent.')
 
     def _run_billing(self):
         """
@@ -271,7 +259,7 @@ class Command(BaseCommand):
         filed = 0
         for appointment in waiting:
             local_hour = timezone.localtime(now, ZoneInfo(appointment.tenant.timezone)).hour
-            if local_hour not in whatsapp.WAKING_HOURS:
+            if local_hour not in WAKING_HOURS:
                 continue
             with transaction.atomic():
                 claimed = Appointment.objects.filter(

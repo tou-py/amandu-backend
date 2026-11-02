@@ -11,12 +11,10 @@ Two channels:
 
   * push: a Notification row for a team member. The bell shows it at once; the
     sweep (send_reminders) pushes it to their devices.
-  * WhatsApp from Kyo's number (WAHA, whatsapp.py): to the client of a public
-    request who ticked the box -- the receipt and the expiry only; the shop's
-    answer goes from its own WhatsApp. Filed here as an OutboundMessage; only the
-    sweep sends, paced. Never to the team: they have push, and every message
-    to someone who never wrote to that number is the pattern that gets it
-    banned.
+  * WhatsApp from Kyo's number: to the client of a public request who ticked
+    the box -- the receipt and the expiry only; the shop's answer goes from its
+    own WhatsApp. Filed here as an OutboundMessage. Never to the team: they have
+    push.
 
 One rule for everyone: nobody is told about what they did themselves.
 
@@ -28,12 +26,10 @@ a change, it is computed from the clock and pushed by the sweep directly
 (send_reminders._run), stamped on the appointment so it goes once.
 """
 
-import random
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 from apps.accounts.models import Membership, Notification
-from apps.scheduling import whatsapp
 from apps.scheduling.models import OutboundMessage
 
 Verb = Notification.Verb
@@ -100,6 +96,20 @@ RULES = {
 # never fills up with twenty identical "Resumen de cobros".
 REPLACES = (Verb.PLAN_DIGEST, Verb.BILLING_DUE)
 
+# ponytail: no sender yet. Until Meta's Cloud API sends the outbox nothing is
+# filed and the public page does not offer the box. The Cloud API turns this on.
+WHATSAPP_SENDER = False
+
+
+def client_whatsapp_on(tenant):
+    """
+    Whether the clients of a public request are written to at all. Needs a
+    sender AND the business's own number: every message gives it as the
+    contact, and a message nobody can answer is worse than none.
+    """
+    return WHATSAPP_SENDER and bool(tenant.phone)
+
+
 ROLES = {
     MANAGERS: (Membership.Role.OWNER, Membership.Role.ADMIN, Membership.Role.COORDINATOR),
     MONEY: (Membership.Role.OWNER, Membership.Role.ADMIN),
@@ -128,7 +138,7 @@ def notify(event, *, appointment=None, tenant=None, actor=None, previous=None):
         rows += [Notification(recipient=r, actor=actor, appointment=appointment, verb=verb) for r in recipients]
     Notification.objects.bulk_create(rows)
 
-    if rule.client_whatsapp and whatsapp.enabled_for(tenant):
+    if rule.client_whatsapp and client_whatsapp_on(tenant):
         _file_whatsapp(event, appointment)
 
 
@@ -183,15 +193,9 @@ def _when(appointment):
     return f'{WEEKDAYS[local.weekday()]} {local:%d/%m} a las {local:%H:%M}'
 
 
-# Said a few ways on purpose: the same sentence to every client is one of the
-# patterns WhatsApp reads as a bot (WAHA's "How to avoid blocking").
-GREETINGS = ('Hola', 'Buenas', 'Qué tal')
-
-
 def _to_client(event, *, name, shop, shop_phone, service, when, pro):
-    hello = random.choice(GREETINGS)
     if event == REQUESTED:
-        return (f'{hello} {name}, recibimos tu pedido de turno en {shop}: {service}, {when}, '
+        return (f'Hola {name}, recibimos tu pedido de turno en {shop}: {service}, {when}, '
                 f'con {pro}. Te avisamos por acá cuando lo confirmen. Consultas al {shop_phone}.')
-    return (f'{hello} {name}, en {shop} no llegaron a responder a tiempo tu pedido de {service} '
+    return (f'Hola {name}, en {shop} no llegaron a responder a tiempo tu pedido de {service} '
             f'del {when}. Podés pedir otro horario o escribir al {shop_phone}.')

@@ -21,7 +21,7 @@ back to.
 
 import re
 from datetime import timedelta
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import phonenumbers
@@ -43,7 +43,7 @@ from rest_framework.throttling import SimpleRateThrottle
 
 from apps.accounts.models import Membership
 from apps.commons.images import public_url
-from apps.scheduling import whatsapp
+from apps.scheduling import notify
 from apps.scheduling.models import Service, WorkSchedule
 from apps.scheduling.public import (
     BookingRequestSerializer,
@@ -302,12 +302,11 @@ def booking_page(request, slug):
             for field, messages in errors.items()
         ],
         # The box is a promise; it is only made where something will keep it.
-        'whatsapp_enabled': whatsapp.enabled_for(shop),
+        'whatsapp_enabled': notify.client_whatsapp_on(shop),
         'submitted': request.data if errors else {},
         'picked_start': asked.get('start', ''),
         'phone_example': _phone_example(shop),
         'booked_at': booked_at,
-        'whatsapp_link': _whatsapp_link(shop),
         'opening_hours': opening_hours,
         'week': _week(opening_hours, today),
     })
@@ -398,20 +397,6 @@ def _booked_at(request, zone):
         return None
     parsed = serializers.DateTimeField(required=False).run_validation(raw)
     return parsed.astimezone(zone)
-
-
-def _whatsapp_link(shop):
-    """
-    A wa.me link to the Kyo number, offered once a request is in.
-
-    The single best defence the shared number has against being banned:
-    a client who writes first turns every notice after it into a reply, which
-    is what WhatsApp expects of an automated number (apps/scheduling/whatsapp.py).
-    """
-    if not (settings.WHATSAPP_NUMBER and shop.phone):
-        return None
-    number = settings.WHATSAPP_NUMBER.lstrip('+')
-    return f'https://wa.me/{number}?text=' + quote(f'Hola, pedí un turno en {shop.name}.')
 
 
 def _render(shop, context):

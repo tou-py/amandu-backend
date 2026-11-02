@@ -263,16 +263,6 @@ VAPID_PRIVATE_KEY = env.str('VAPID_PRIVATE_KEY', default='')
 VAPID_SUBJECT = env.str('VAPID_SUBJECT', default='')
 
 
-# WhatsApp through a self-hosted WAHA (apps/scheduling/whatsapp.py). Optional
-# like push: unset, no message is ever filed and the rest works as before.
-WAHA_URL = env.str('WAHA_URL', default='')
-WAHA_API_KEY = env.str('WAHA_API_KEY', default='')
-WAHA_SESSION = env.str('WAHA_SESSION', default='default')
-# The Kyo number paired with that session, international. Only used to offer
-# clients a wa.me link to write first.
-WHATSAPP_NUMBER = env.str('WHATSAPP_NUMBER', default='')
-
-
 # Images: an S3-compatible bucket (Cloudflare R2 in production, SeaweedFS in dev),
 # reached only through apps/commons/storage.py. The browser uploads straight to
 # it with a signed PUT and nothing ever streams through Django, which is why no

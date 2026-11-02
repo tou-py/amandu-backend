@@ -12,8 +12,8 @@ class OutboundMessage(TenantOwnedMixin):
     `pushed_at`: the turno is written in a transaction and WhatsApp is a remote
     service that is down, slow or rate-limiting whenever it likes. Filing the
     message with the turn means neither can exist without the other; sending it
-    is the sweep's job (send_reminders), paced so a shared number does not look
-    like a spam bot (apps/scheduling/whatsapp.py).
+    is a separate job. Nothing sends yet: Meta's Cloud API will
+    (notify.WHATSAPP_SENDER).
 
     `body` is the finished text, rendered when the event happened: the message
     says what was true then, even if the turno moves before it is sent.

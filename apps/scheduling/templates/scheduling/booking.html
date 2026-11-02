@@ -825,13 +825,6 @@
     </div>
 
     <div class="actions">
-      {% if whatsapp_link %}
-        <a class="button-link" href="{{ whatsapp_link }}">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 1 3.6 6.7L4 20l1.3-3.6A8 8 0 0 1 4 12Z"/></svg>
-          Escribinos por WhatsApp
-        </a>
-        <p class="fine">Si nos escribís, te avisamos por ahí cuando te respondan.</p>
-      {% endif %}
       {% if shop.phone %}
         <a class="button-link quiet" href="tel:{{ shop.phone.as_e164 }}">Llamar a {{ shop.name }}</a>
       {% endif %}
