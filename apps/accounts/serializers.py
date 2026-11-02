@@ -79,6 +79,8 @@ def active_memberships(user):
             'tenant_status': tenant.status,
             'billing': state,
             'paid_until': tenant.paid_until,
+            'trial': pricing.on_trial(tenant),
+            'trial_until': tenant.trial_until,
             'addons': pricing.addons(tenant),
             'payment_instructions': (
                 pricing.payment_instructions()
@@ -120,6 +122,8 @@ class ActiveMembershipSerializer(serializers.Serializer):
         'writes refused with billing_read_only); suspended.',
     )
     paid_until = serializers.DateField(allow_null=True)
+    trial = serializers.BooleanField()
+    trial_until = serializers.DateField(allow_null=True)
     addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
     payment_instructions = serializers.CharField(
         help_text='How to pay Kyo. Owner only, and only when billing is not ok; otherwise empty.'

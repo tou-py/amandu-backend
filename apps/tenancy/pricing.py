@@ -56,6 +56,12 @@ def billing_state(tenant, today: date) -> str:
     return OK
 
 
+def on_trial(tenant) -> bool:
+    """Derived, never stored: a registered payment moves paid_until, and that
+    alone ends the trial."""
+    return tenant.trial_until is not None and tenant.paid_until == tenant.trial_until
+
+
 def suspends_after(tenant) -> date | None:
     """The last day of the read-only window; the sweep suspends the day after."""
     if tenant.paid_until is None:

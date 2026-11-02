@@ -175,3 +175,74 @@ def test_the_subscription_stays_readable_in_the_read_only_window(studio, member)
     assert res.status_code == 200
     assert res.data['billing'] == 'read_only'
     assert res.data['suspends_after'] == str(studio.paid_until + timedelta(days=3))
+
+
+def patch_addons(membership, tenant, addons):
+    return api(membership.user, tenant).patch(
+        reverse('tenancy:tenant-subscription'), {'addons': addons}, format='json'
+    )
+
+
+def test_the_owner_switches_addons_and_the_month_follows(studio, member):
+    owner = member(studio)
+
+    res = patch_addons(owner, studio, ['cobros', 'reservas'])
+
+    assert res.status_code == 200
+    assert res.data['addons'] == ['cobros', 'reservas']
+    assert res.data['total'] == 230_000
+
+    res = patch_addons(owner, studio, ['reservas'])
+
+    assert res.data['addons'] == ['reservas']
+    assert res.data['total'] == 150_000
+    studio.refresh_from_db()
+    assert (studio.addon_cobros, studio.addon_reservas) == (False, True)
+
+
+def test_only_the_owner_switches_addons(studio, member):
+    admin = member(studio, role=Membership.Role.ADMIN, name='admin')
+
+    assert patch_addons(admin, studio, ['cobros']).status_code == 403
+
+
+def test_invoicing_is_not_switched_by_the_owner(studio, member):
+    owner = member(studio)
+    studio.addon_facturacion = True
+    studio.save()
+
+    assert patch_addons(owner, studio, ['facturacion']).status_code == 400
+
+    res = patch_addons(owner, studio, [])
+
+    assert res.data['addons'] == ['facturacion']
+
+
+def test_read_only_may_drop_an_addon_but_not_add_one(studio, member):
+    owner = member(studio)
+    studio.addon_cobros = True
+    studio.paid_until = date.today() - timedelta(days=1)
+    studio.save()
+
+    refused = patch_addons(owner, studio, ['cobros', 'reservas'])
+
+    assert refused.status_code == 403
+    assert refused.data['code'] == 'billing_read_only'
+    assert patch_addons(owner, studio, []).status_code == 200
+
+
+def test_on_trial_until_a_payment_moves_paid_until(studio, member):
+    owner = member(studio)
+    studio.start_trial(date.today())
+    subscription = reverse('tenancy:tenant-subscription')
+
+    res = api(owner.user, studio).get(subscription)
+    assert res.data['trial'] is True
+    assert res.data['trial_until'] == studio.trial_until.isoformat()
+    me = api(owner.user, studio).get(reverse('accounts:me'))
+    assert me.data['memberships'][0]['trial'] is True
+
+    studio.paid_until = studio.trial_until + timedelta(days=30)
+    studio.save()
+
+    assert api(owner.user, studio).get(subscription).data['trial'] is False

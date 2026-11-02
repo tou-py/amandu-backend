@@ -250,6 +250,12 @@ class SubscriptionLineSerializer(serializers.Serializer):
     amount = serializers.IntegerField(help_text='Guaraníes a month.')
 
 
+class AddonsSerializer(serializers.Serializer):
+    """The add-ons an owner wants on; the ones left out go off."""
+
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas')), allow_empty=True)
+
+
 class KyoSubscriptionSerializer(serializers.Serializer):
     """What this business pays Kyo, read-only: everything here is changed by
     Kyo in the admin, on a transfer or a conversation."""
@@ -263,6 +269,8 @@ class KyoSubscriptionSerializer(serializers.Serializer):
     lines = SubscriptionLineSerializer(many=True)
     total = serializers.IntegerField(help_text='Guaraníes a month.')
     paid_until = serializers.DateField(allow_null=True)
+    trial = serializers.BooleanField()
+    trial_until = serializers.DateField(allow_null=True)
     suspends_after = serializers.DateField(
         allow_null=True, help_text='Last day of the read-only window.'
     )

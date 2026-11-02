@@ -1,5 +1,6 @@
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -8,7 +9,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import Membership
 from apps.tenancy import pricing
 from apps.tenancy.permissions import HasActiveMembership, IsTenantOwner
-from apps.tenancy.serializers import KyoSubscriptionSerializer, TenantSerializer
+from apps.tenancy.serializers import AddonsSerializer, KyoSubscriptionSerializer, TenantSerializer
 
 
 class TenantView(RetrieveUpdateAPIView):
@@ -38,22 +39,46 @@ class KyoSubscriptionView(APIView):
     Owner only, like the rest of the business page. The plan is not stored: it
     is Solo with one professional attending appointments and Equipo with more,
     so it can never disagree with the team (pricing.py).
+
+    PATCH switches the add-ons with immediate effect, billed on the next transfer.
+    Facturación stays with Kyo's admin until it ships.
     """
 
     permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantOwner)
+    # Dropping an add-on must work in the read-only window: it is how an owner
+    # lowers the bill they are late on. Adding one is refused below.
+    billing_exempt = True
 
     @extend_schema(responses=KyoSubscriptionSerializer)
     def get(self, request):
+        return Response(self._answer(request.tenant))
+
+    @extend_schema(request=AddonsSerializer, responses=KyoSubscriptionSerializer)
+    def patch(self, request):
+        serializer = AddonsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         tenant = request.tenant
+        wanted = serializer.validated_data['addons']
+        cobros, reservas = 'cobros' in wanted, 'reservas' in wanted
+        adding = (cobros and not tenant.addon_cobros) or (reservas and not tenant.addon_reservas)
+        if adding and pricing.billing_state(tenant, timezone.localdate()) == pricing.READ_ONLY:
+            raise PermissionDenied('The payment period ended; the account is read-only.', code='billing_read_only')
+        tenant.addon_cobros, tenant.addon_reservas = cobros, reservas
+        tenant.save(update_fields=['addon_cobros', 'addon_reservas', 'updated_at'])
+        return Response(self._answer(tenant))
+
+    def _answer(self, tenant):
         names = sorted(m.display_name() for m in Membership.professionals_for(tenant).select_related('user'))
         lines = pricing.monthly_lines(tenant, len(names))
-        return Response(KyoSubscriptionSerializer({
+        return KyoSubscriptionSerializer({
             'plan': pricing.plan_name(len(names)),
             'professionals': names,
             'addons': pricing.addons(tenant),
             'lines': lines,
             'total': sum(line['amount'] for line in lines),
             'paid_until': tenant.paid_until,
+            'trial': pricing.on_trial(tenant),
+            'trial_until': tenant.trial_until,
             'suspends_after': pricing.suspends_after(tenant),
             'billing': pricing.billing_state(tenant, timezone.localdate()),
             'payment_instructions': pricing.payment_instructions(),
@@ -67,4 +92,4 @@ class KyoSubscriptionView(APIView):
                 'facturacion_included': pricing.FACTURACION_INCLUDED,
                 'facturacion_extra': pricing.FACTURACION_EXTRA,
             },
-        }).data)
+        }).data
