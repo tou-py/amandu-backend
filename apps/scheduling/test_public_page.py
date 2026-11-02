@@ -624,15 +624,6 @@ def test_where_the_shop_is_closes_the_list(client, salon, stylist, haircut, open
     assert '"sameAs": ["https://www.instagram.com/iguazu/"]' in body
 
 
-def test_the_map_is_drawn_only_with_a_key(client, salon, stylist, haircut, open_monday, monday_morning,
-                                          settings):
-    settings.GOOGLE_MAPS_EMBED_KEY = 'k'
-    salon.address = 'Av. España 1240'
-    salon.save()
-
-    assert '<iframe class="map" src="https://www.google.com/maps/embed/v1/place?key=k&amp;q=' in html(client, salon)
-
-
 def test_a_shop_that_said_nothing_of_itself_has_no_where_section(client, salon, stylist, haircut,
                                                                  monday_morning):
     assert 'class="info"' not in html(client, salon)

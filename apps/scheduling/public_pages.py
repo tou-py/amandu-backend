@@ -409,7 +409,6 @@ def _render(shop, context):
             'kyo_url': settings.KYO_LANDING_URL,
             'socials': presence.social_links(shop),
             'maps_link': presence.maps_link(shop),
-            'maps_embed': presence.maps_embed_url(shop),
             'contact': _contact(shop),
             **context,
         },

@@ -634,7 +634,6 @@
   /* One panel, its parts ruled apart rather than boxed again. */
   .panel > * { margin: 0; padding: 1rem 1.1rem; }
   .panel > * + * { border-top: 1px solid var(--border); }
-  .panel .map { display: block; padding: 0; width: 100%; aspect-ratio: 16 / 10; border: 0; background: var(--sunken); }
   .place { display: grid; gap: .8rem; }
   .place address { font-style: normal; font-size: 1rem; font-weight: 550; line-height: 1.4; display: flex; gap: .55rem; }
   .place address .icon { margin-top: .1rem; color: var(--ink-subtle); }
@@ -906,7 +905,6 @@
                 </div>
               </div>
             {% endif %}
-            {% if maps_embed %}<iframe class="map" src="{{ maps_embed }}" title="Mapa de {{ shop.name }}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>{% endif %}
             {% if week %}
               <details class="hours">
                 <summary>
