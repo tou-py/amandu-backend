@@ -8,8 +8,13 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from apps.accounts.emails import send_invitation_email
-from apps.accounts.models import Invitation, Membership, Notification
+from apps.accounts import signup
+from apps.accounts.emails import (
+    send_already_registered_email,
+    send_invitation_email,
+    send_verification_email,
+)
+from apps.accounts.models import CustomUser, Invitation, Membership, Notification
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
@@ -20,6 +25,7 @@ from apps.accounts.serializers import (
     MemberSerializer,
     NotificationSerializer,
     PushSubscriptionSerializer,
+    SignupSerializer,
     TenantAwareTokenObtainPairSerializer,
 )
 from apps.commons.mixins import NoHeuristicCacheMixin
@@ -180,6 +186,34 @@ class AcceptInvitationView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SignupView(APIView):
+    """
+    Public. Answers the same whether or not the address has an account; the mail
+    is what differs, so only the owner of the address learns which it was.
+    """
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'signup'
+
+    @extend_schema(
+        request=SignupSerializer,
+        responses={202: OpenApiResponse(description='A mail is on its way; no body.')},
+    )
+    def post(self, request):
+        serializer = SignupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = CustomUser.objects.filter(email=serializer.validated_data['email']).first()
+        if user is None:
+            send_verification_email(signup.create_business(**serializer.validated_data))
+        elif user.email_verified_at is None:
+            send_verification_email(user)
+        else:
+            send_already_registered_email(user)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):

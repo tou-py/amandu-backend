@@ -450,6 +450,28 @@ class AcceptInvitationSerializer(serializers.Serializer):
         return self.validated_data['invitation'].accept(self.validated_data.get('password'))
 
 
+class SignupSerializer(serializers.Serializer):
+    business_name = serializers.CharField(max_length=120)
+    first_name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    # The browser's guess, never asked for: see signup._browser_guess.
+    timezone = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        return value.lower()
+
+    def validate_password(self, value):
+        # Before looking at the address, so a weak password is refused the same
+        # whether or not the account exists.
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+
 class NotificationActorSerializer(serializers.ModelSerializer):
     """Same minimal {id, name} shape ProfessionalSerializer already uses for a
     membership -- a notification row needs no more than that to label who did it."""
