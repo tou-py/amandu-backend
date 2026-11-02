@@ -213,7 +213,7 @@ class SignupView(APIView):
     def post(self, request):
         serializer = SignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = CustomUser.objects.filter(email=serializer.validated_data['email']).first()
+        user = CustomUser.objects.filter(email__iexact=serializer.validated_data['email']).first()
         if user is None:
             send_verification_email(signup.create_business(**serializer.validated_data))
         elif user.email_verified_at is None:
@@ -282,7 +282,7 @@ class PasswordResetView(APIView):
     def post(self, request):
         serializer = EmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = CustomUser.objects.filter(email=serializer.validated_data['email'], is_active=True).first()
+        user = CustomUser.objects.filter(email__iexact=serializer.validated_data['email'], is_active=True).first()
         if user is not None:
             send_password_reset_email(user)
         return Response(status=status.HTTP_204_NO_CONTENT)

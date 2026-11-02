@@ -379,7 +379,8 @@ class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
 
     def validate(self, attrs):
-        data = super().validate(attrs)  # authenticates and sets self.user
+        stored = CustomUser.objects.filter(email__iexact=attrs['email']).values_list('email', flat=True).first()
+        data = super().validate({**attrs, 'email': stored or attrs['email']})  # authenticates and sets self.user
         # After the password check, so the code says nothing to someone who does
         # not own the address.
         if self.user.email_verified_at is None:
