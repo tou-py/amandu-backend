@@ -325,6 +325,8 @@ REST_FRAMEWORK = {
         'login': '5/min',
         # Token guessing on the public accept endpoint.
         'accept-invitation': '10/min',
+        # Each one sends a mail to whatever address was typed.
+        'signup': '5/hour',
         # Guessing the CURRENT password from inside a session someone else
         # opened. Always a deliberate act, so it can be tighter than login.
         'change-password': '5/min',
@@ -393,6 +395,8 @@ EMAIL_TIMEOUT = 10  # seconds
 INVITATION_ACCEPT_URL = env.str(
     'INVITATION_ACCEPT_URL', default='http://localhost:3000/invitations/accept'
 )
+# The frontend's origin, for the links in the account mails.
+APP_URL = env.str('APP_URL', default=INVITATION_ACCEPT_URL.removesuffix('/invitations/accept'))
 
 # How a tenant pays Kyo, shown to its owner when a payment is due or late, and
 # Kyo's WhatsApp for asking to change the team or the add-ons. Payment is a bank
