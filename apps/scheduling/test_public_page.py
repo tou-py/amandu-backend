@@ -550,6 +550,18 @@ def test_the_foot_links_to_kyo_only_once_its_landing_is_set(client, salon, setti
     assert '<a href="https://kyo.example/" target="_blank" rel="noopener">' in html(client, salon)
 
 
+def test_the_page_links_kyo_policies_once_its_landing_is_set(client, salon, stylist, haircut, open_monday,
+                                                            monday_morning, settings):
+    form = {'paso': 'datos', 'day': MONDAY.isoformat(), 'start': local(9).isoformat()}
+    settings.KYO_LANDING_URL = ''
+    assert 'Privacidad' not in html(client, salon, **form)
+
+    settings.KYO_LANDING_URL = 'https://kyo.example'
+    body = html(client, salon, **form)
+    assert 'usa tus datos para gestionar tu turno. <a href="https://kyo.example/privacidad/"' in body
+    assert '<a href="https://kyo.example/terminos/" target="_blank" rel="noopener">Términos</a>' in body
+
+
 def test_the_soonest_bar_names_the_service_it_books_first(client, salon, stylist, haircut, soonest_bar,
                                                          open_monday, monday_morning):
     dock = html(client, salon).split('class="dock"')[1]
