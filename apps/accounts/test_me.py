@@ -5,6 +5,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounts.models.custom_user import TERMS_VERSION
 from apps.accounts.models import Membership
 from apps.tenancy.models import Tenant
 
@@ -266,3 +267,34 @@ def test_a_local_number_is_read_in_the_country_of_their_business(db, django_user
     assert res.status_code == 200
     user.refresh_from_db()
     assert str(user.phone) == '+595981123456'
+
+
+@pytest.mark.django_db
+def test_someone_who_never_accepted_the_terms_is_asked_until_they_do(django_user_model):
+    user = django_user_model.objects.create_user(email='new@example.com', password='pw')
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is True
+
+    assert client.post(reverse('accounts:accept-terms')).status_code == 204
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is False
+    user.refresh_from_db()
+    assert user.terms_version == TERMS_VERSION
+    assert user.terms_accepted_at is not None
+
+
+@pytest.mark.django_db
+def test_a_new_version_of_the_terms_asks_again(django_user_model):
+    user = django_user_model.objects.create_user(email='new@example.com', password='pw')
+    user.terms_version = TERMS_VERSION - 1
+    user.save()
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is True
+
+
+def test_accepting_the_terms_needs_a_session():
+    assert APIClient().post(reverse('accounts:accept-terms')).status_code == 401

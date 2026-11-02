@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenBlacklistView, TokenRefreshView
 
 from apps.accounts.views import (
     AcceptInvitationView,
+    AcceptTermsView,
     ChangePasswordView,
     InvitationViewSet,
     LoginView,
@@ -38,6 +39,7 @@ urlpatterns = [
     path('logout/', TokenBlacklistView.as_view(), name='logout'),
     path('me/', MeView.as_view(), name='me'),
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
+    path('me/terms/', AcceptTermsView.as_view(), name='accept-terms'),
     path('push/subscriptions/', PushSubscriptionView.as_view(), name='push-subscription'),
     # Before the router: 'accept' must not be captured as an invitation pk.
     path('invitations/accept/', AcceptInvitationView.as_view(), name='invitation-accept'),

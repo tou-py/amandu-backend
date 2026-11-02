@@ -233,6 +233,7 @@ class MeSerializer(serializers.ModelSerializer):
     # Where this person gets their turno notices by WhatsApp. Blank turns that
     # off; push is unaffected.
     phone = PhoneNumberField(required=False, allow_blank=True)
+    terms_pending = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = CustomUser
@@ -245,6 +246,7 @@ class MeSerializer(serializers.ModelSerializer):
             'phone',
             'memberships',
             'vapid_public_key',
+            'terms_pending',
         )
         read_only_fields = ('id', 'email', 'vapid_public_key')
 

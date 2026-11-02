@@ -99,6 +99,11 @@ class CustomUser(AbstractUser, TimestampMixin):
                 tenant.start_trial(timezone.localdate())
         return True
 
+    @property
+    def terms_pending(self):
+        """Never accepted, or accepted a text that has changed since."""
+        return self.terms_version != TERMS_VERSION
+
     def accept_terms(self):
         self.terms_accepted_at = timezone.now()
         self.terms_version = TERMS_VERSION

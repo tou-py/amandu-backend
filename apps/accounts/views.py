@@ -90,6 +90,17 @@ class MeView(APIView):
         return Response(serializer.data)
 
 
+class AcceptTermsView(APIView):
+    """The caller accepts the current terms and privacy policy, and that record is the evidence."""
+
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(request=None, responses={204: OpenApiResponse(description='Recorded; no body.')})
+    def post(self, request):
+        request.user.accept_terms()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ChangePasswordView(APIView):
     """
     Separate from the profile PATCH on purpose: this one needs the current
