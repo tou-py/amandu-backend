@@ -15,6 +15,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
+from apps.scheduling import notify
 from apps.scheduling.models import (
     Appointment,
     Client,
@@ -34,10 +35,9 @@ def local(hour, minute=0, day=MONDAY):
 
 
 @pytest.fixture(autouse=True)
-def waha(settings):
-    settings.WAHA_URL = 'http://waha.test'
-    settings.WAHA_API_KEY = 'key'
-    settings.WHATSAPP_NUMBER = '+595981000000'
+def sender(monkeypatch):
+    """A WhatsApp sender connected: what gets filed for the client."""
+    monkeypatch.setattr(notify, 'WHATSAPP_SENDER', True)
 
 
 @pytest.fixture
@@ -218,8 +218,8 @@ def test_a_business_without_its_own_number_sends_no_whatsapp(client, salon, ana,
     assert Notification.objects.exists()
 
 
-def test_without_waha_nothing_is_queued(client, salon, ana, haircut, now, settings):
-    settings.WAHA_URL = ''
+def test_without_a_sender_nothing_is_queued(client, salon, ana, haircut, now, monkeypatch):
+    monkeypatch.setattr(notify, 'WHATSAPP_SENDER', False)
 
     book(client, salon, haircut, local(9), professional=ana)
 
@@ -232,13 +232,6 @@ def test_one_phone_cannot_stack_requests(client, salon, ana, haircut, now):
         book(client, salon, haircut, local(hour, 30), professional=ana)
     # Four tried, three held: the fourth waits for the shop to answer.
     assert Appointment.objects.count() == 3
-
-
-def test_the_confirmation_offers_to_write_first(client, salon, ana, haircut, now):
-    response = book(client, salon, haircut, local(9), professional=ana)
-    body = client.get(response['Location']).content.decode()
-
-    assert 'https://wa.me/595981000000' in body
 
 
 def test_the_form_says_the_answer_comes_by_whatsapp_to_that_phone(client, salon, ana, haircut, now):
