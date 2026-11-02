@@ -250,6 +250,17 @@ class SubscriptionLineSerializer(serializers.Serializer):
     amount = serializers.IntegerField(help_text='Guaraníes a month.')
 
 
+class SetupFactsSerializer(serializers.Serializer):
+    logo = serializers.BooleanField()
+    photo = serializers.BooleanField(help_text="The owner's own photo.")
+    hours = serializers.BooleanField()
+    services = serializers.BooleanField()
+    clients = serializers.BooleanField()
+    plans = serializers.BooleanField()
+    invited = serializers.BooleanField(help_text='Another member, or an invitation pending.')
+    appointments = serializers.BooleanField()
+
+
 class AddonsSerializer(serializers.Serializer):
     """The add-ons an owner wants on; the ones left out go off."""
 

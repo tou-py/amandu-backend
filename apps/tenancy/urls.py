@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.tenancy.views import KyoSubscriptionView, TenantView
+from apps.tenancy.views import KyoSubscriptionView, SetupFactsView, TenantView
 
 app_name = 'tenancy'
 
@@ -9,4 +9,5 @@ urlpatterns = [
     # re-validated against the caller's memberships on every request.
     path('tenant/', TenantView.as_view(), name='tenant'),
     path('tenant/subscription/', KyoSubscriptionView.as_view(), name='tenant-subscription'),
+    path('tenant/setup/', SetupFactsView.as_view(), name='tenant-setup'),
 ]

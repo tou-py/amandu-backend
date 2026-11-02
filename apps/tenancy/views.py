@@ -6,10 +6,16 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import Membership
+from apps.accounts.models import Invitation, Membership
+from apps.scheduling.models import Appointment, Client, Plan, Service, WorkSchedule
 from apps.tenancy import pricing
 from apps.tenancy.permissions import HasActiveMembership, IsTenantOwner
-from apps.tenancy.serializers import AddonsSerializer, KyoSubscriptionSerializer, TenantSerializer
+from apps.tenancy.serializers import (
+    AddonsSerializer,
+    KyoSubscriptionSerializer,
+    SetupFactsSerializer,
+    TenantSerializer,
+)
 
 
 class TenantView(RetrieveUpdateAPIView):
@@ -30,6 +36,33 @@ class TenantView(RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.tenant
+
+
+class SetupFactsView(APIView):
+    """What the owner's "Primeros pasos" checklist reads, in one request instead
+    of six. Only fetched while the checklist is showing."""
+
+    permission_classes = (IsAuthenticated, HasActiveMembership, IsTenantOwner)
+
+    @extend_schema(responses=SetupFactsSerializer)
+    def get(self, request):
+        tenant = request.tenant
+
+        def owned(model):
+            return model.objects.filter(tenant=tenant).exists()
+
+        pending = Invitation.objects.filter(tenant=tenant, status=Invitation.Status.PENDING)
+        others = Membership.objects.filter(tenant=tenant).exclude(pk=request.membership.pk)
+        return Response(SetupFactsSerializer({
+            'logo': bool(tenant.logo_key),
+            'photo': bool(request.membership.photo_key),
+            'hours': owned(WorkSchedule),
+            'services': owned(Service),
+            'clients': owned(Client),
+            'plans': owned(Plan),
+            'invited': pending.exists() or others.exists(),
+            'appointments': owned(Appointment),
+        }).data)
 
 
 class KyoSubscriptionView(APIView):

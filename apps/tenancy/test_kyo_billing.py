@@ -13,6 +13,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.scheduling.models import Client, Service
 from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 
@@ -246,3 +247,46 @@ def test_on_trial_until_a_payment_moves_paid_until(studio, member):
     studio.save()
 
     assert api(owner.user, studio).get(subscription).data['trial'] is False
+
+
+def setup_facts(membership, tenant):
+    return api(membership.user, tenant).get(reverse('tenancy:tenant-setup'))
+
+
+def test_a_new_business_has_nothing_set_up(studio, member):
+    res = setup_facts(member(studio), studio)
+
+    assert res.status_code == 200
+    assert res.data == {
+        'logo': False, 'photo': False, 'hours': False, 'services': False,
+        'clients': False, 'plans': False, 'invited': False, 'appointments': False,
+    }
+
+
+def test_the_setup_facts_follow_what_the_business_did(studio, member):
+    owner = member(studio)
+    owner.photo_key = 'photo/owner.webp'
+    owner.save()
+    studio.logo_key = 'logo/studio.webp'
+    studio.save()
+    Service.objects.create(tenant=studio, name='Corte', duration=timedelta(minutes=30), price=1)
+    Client.objects.create(tenant=studio, name='Bea')
+    member(studio, role=Membership.Role.STAFF, name='bea')
+
+    facts = setup_facts(owner, studio).data
+
+    assert facts['logo'] and facts['photo'] and facts['services'] and facts['clients'] and facts['invited']
+    assert not facts['hours'] and not facts['plans'] and not facts['appointments']
+
+
+def test_another_business_counts_for_nothing_in_the_setup(studio, member):
+    other = Tenant.objects.create(name='Other', slug='other')
+    Client.objects.create(tenant=other, name='Bea')
+
+    assert setup_facts(member(studio), studio).data['clients'] is False
+
+
+def test_only_the_owner_reads_the_setup_facts(studio, member):
+    admin = member(studio, role=Membership.Role.ADMIN, name='admin')
+
+    assert setup_facts(admin, studio).status_code == 403
