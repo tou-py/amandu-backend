@@ -62,6 +62,7 @@ class KyoSubscriptionView(APIView):
                 'base': pricing.BASE,
                 'per_extra_professional': pricing.PER_EXTRA_PROFESSIONAL,
                 'cobros': pricing.COBROS,
+                'reservas': pricing.RESERVAS,
                 'facturacion': pricing.FACTURACION,
                 'facturacion_included': pricing.FACTURACION_INCLUDED,
                 'facturacion_extra': pricing.FACTURACION_EXTRA,

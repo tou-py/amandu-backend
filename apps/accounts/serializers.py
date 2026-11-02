@@ -120,7 +120,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
         'writes refused with billing_read_only); suspended.',
     )
     paid_until = serializers.DateField(allow_null=True)
-    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'facturacion')))
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
     payment_instructions = serializers.CharField(
         help_text='How to pay Kyo. Owner only, and only when billing is not ok; otherwise empty.'
     )

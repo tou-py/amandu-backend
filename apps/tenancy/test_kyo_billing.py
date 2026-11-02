@@ -69,6 +69,13 @@ def test_the_month_is_the_base_plus_each_extra_professional(professionals, expec
     assert total(professionals) == expected
 
 
+def test_reservas_is_a_line_of_its_own():
+    tenant = Tenant(addon_reservas=True)
+
+    assert pricing.addons(tenant) == ['reservas']
+    assert {'concept': 'reservas', 'quantity': 1, 'amount': 50_000} in pricing.monthly_lines(tenant, 1)
+
+
 def test_add_ons_are_added_on_top():
     assert total(3, cobros=True) == 280_000
     assert total(1, cobros=True, facturacion=True) == 305_000

@@ -16,6 +16,7 @@ from django.conf import settings
 BASE = 100_000  # Solo: the agenda with one professional attending.
 PER_EXTRA_PROFESSIONAL = 50_000  # Each professional after the first.
 COBROS = 80_000  # Monthly plans, charges and Por cobrar.
+RESERVAS = 50_000  # The public booking page and its WhatsApp notices.
 FACTURACION = 125_000  # Electronic invoicing, documents included below.
 FACTURACION_INCLUDED = 1_000  # Documents a month inside FACTURACION.
 FACTURACION_EXTRA = 7_000  # Each document past the included ones.
@@ -65,7 +66,11 @@ def suspends_after(tenant) -> date | None:
 def addons(tenant) -> list[str]:
     return [
         name
-        for name, on in (('cobros', tenant.addon_cobros), ('facturacion', tenant.addon_facturacion))
+        for name, on in (
+            ('cobros', tenant.addon_cobros),
+            ('reservas', tenant.addon_reservas),
+            ('facturacion', tenant.addon_facturacion),
+        )
         if on
     ]
 
@@ -91,6 +96,8 @@ def monthly_lines(tenant, professionals: int) -> list[dict]:
         })
     if tenant.addon_cobros:
         lines.append({'concept': 'cobros', 'quantity': 1, 'amount': COBROS})
+    if tenant.addon_reservas:
+        lines.append({'concept': 'reservas', 'quantity': 1, 'amount': RESERVAS})
     if tenant.addon_facturacion:
         # ponytail: the base only. Documents past FACTURACION_INCLUDED are
         # billed once invoicing counts approved documents per month.
