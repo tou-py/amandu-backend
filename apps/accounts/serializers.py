@@ -1,12 +1,16 @@
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils import timezone
+from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import (
@@ -477,6 +481,41 @@ class EmailSerializer(serializers.Serializer):
 
 class TokenSerializer(serializers.Serializer):
     token = serializers.CharField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        try:
+            pk = urlsafe_base64_decode(attrs['uid']).decode()
+            user = CustomUser.objects.filter(pk=pk, is_active=True).first()
+        except (ValueError, DjangoValidationError):
+            user = None
+        # Single use by construction: the token hashes the current password.
+        if user is None or not default_token_generator.check_token(user, attrs['token']):
+            raise Refused('This link is not valid anymore.', 'token_invalid')
+        try:
+            validate_password(attrs['password'], user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'password': list(exc.messages)})
+        attrs['user'] = user
+        return attrs
+
+    @transaction.atomic
+    def save(self):
+        user = self.validated_data['user']
+        user.set_password(self.validated_data['password'])
+        user.save(update_fields=['password', 'updated_at'])
+        # Forgetting a password and losing an account look the same from here, so
+        # whoever was signed in does not stay signed in.
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+        # The link proved the address, the same as the verification one.
+        user.confirm_email()
+        return user
 
 
 class SignupSerializer(serializers.Serializer):

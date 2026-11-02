@@ -10,6 +10,8 @@ from apps.accounts.views import (
     MemberViewSet,
     MeView,
     NotificationViewSet,
+    PasswordResetConfirmView,
+    PasswordResetView,
     PushSubscriptionView,
     ResendVerificationView,
     SignupView,
@@ -27,6 +29,8 @@ urlpatterns = [
     path('signup/', SignupView.as_view(), name='signup'),
     path('verify-email/', VerifyEmailView.as_view(), name='verify-email'),
     path('verify-email/resend/', ResendVerificationView.as_view(), name='verify-email-resend'),
+    path('password-reset/', PasswordResetView.as_view(), name='password-reset'),
+    path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('login/', LoginView.as_view(), name='login'),
     path('refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     # POST {refresh}: blacklists it, so the session cannot be refreshed again.

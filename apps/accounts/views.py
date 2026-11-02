@@ -12,6 +12,7 @@ from apps.accounts import signup
 from apps.accounts.emails import (
     send_already_registered_email,
     send_invitation_email,
+    send_password_reset_email,
     send_verification_email,
 )
 from apps.accounts.models import CustomUser, Invitation, Membership, Notification
@@ -25,6 +26,7 @@ from apps.accounts.serializers import (
     MemberPhotoSerializer,
     MemberSerializer,
     NotificationSerializer,
+    PasswordResetConfirmSerializer,
     PushSubscriptionSerializer,
     SessionSerializer,
     SignupSerializer,
@@ -263,6 +265,42 @@ class ResendVerificationView(APIView):
         if user is not None:
             send_verification_email(user)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PasswordResetView(APIView):
+    """Public, and answers the same for any address."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'signup'
+
+    @extend_schema(
+        request=EmailSerializer,
+        responses={204: OpenApiResponse(description='Sent if the account exists; no body.')},
+    )
+    def post(self, request):
+        serializer = EmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = CustomUser.objects.filter(email=serializer.validated_data['email'], is_active=True).first()
+        if user is not None:
+            send_password_reset_email(user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PasswordResetConfirmView(APIView):
+    """Public: the uid and token are the credential. Signs in, like the verification link."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'accept-invitation'
+
+    @extend_schema(request=PasswordResetConfirmSerializer, responses=SessionSerializer)
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(session_for(serializer.save()))
 
 
 class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):

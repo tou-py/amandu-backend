@@ -1,6 +1,9 @@
 from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 from apps.accounts import signup
 
@@ -38,6 +41,18 @@ def send_already_registered_email(user):
         text=f'Entrá con tu contraseña:\n{login_link}\n\n¿La olvidaste? Elegí una nueva:\n{reset_link}',
         template='already_registered',
         context={'login_link': login_link, 'reset_link': reset_link},
+    )
+
+
+def send_password_reset_email(user):
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    link = f'{settings.APP_URL}/restablecer?uid={uid}&token={default_token_generator.make_token(user)}'
+    _send(
+        to=user.email,
+        subject='Elegí una contraseña nueva para Kyo',
+        text=f'Elegí tu contraseña nueva acá:\n{link}\n\nSi no lo pediste, ignorá este correo.',
+        template='password_reset',
+        context={'link': link},
     )
 
 
