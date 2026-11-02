@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import StringIO
 
 import pytest
 from django.core import mail
@@ -142,3 +143,23 @@ def test_the_sweep_leaves_a_recent_signup_and_anyone_confirmed():
 
     assert CustomUser.objects.count() == 2
     assert Tenant.objects.count() == 2
+
+
+def funnel():
+    out = StringIO()
+    call_command('signup_funnel', stdout=out)
+    return dict(line.rsplit(None, 1) for line in out.getvalue().splitlines()[1:])
+
+
+def test_the_funnel_counts_each_business_at_its_stage():
+    signup(email='a@example.com', business_name='Unverified')
+    signup(email='b@example.com', business_name='Verified')
+    signup(email='c@example.com', business_name='Paying')
+    for email in ('b@example.com', 'c@example.com'):
+        CustomUser.objects.get(email=email).confirm_email()
+    paying = Tenant.objects.get(name='Paying')
+    paying.paid_until = paying.trial_until + timedelta(days=30)
+    paying.save()
+    Tenant.objects.create(name='Set up by hand', slug='by-hand')
+
+    assert funnel() == {'Unverified': '1', 'Verified': '2', 'First turn': '0', 'Paying': '1'}
