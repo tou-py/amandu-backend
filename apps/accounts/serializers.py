@@ -371,6 +371,10 @@ class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
         data = super().validate(attrs)  # authenticates and sets self.user
+        # After the password check, so the code says nothing to someone who does
+        # not own the address.
+        if self.user.email_verified_at is None:
+            raise Refused('Confirm your email first.', 'email_not_verified', status.HTTP_403_FORBIDDEN)
         data['memberships'] = active_memberships(self.user)
         return data
 
@@ -430,7 +434,7 @@ class AcceptInvitationSerializer(serializers.Serializer):
             raise serializers.ValidationError('Invalid or expired invitation.')
 
         user = CustomUser.objects.filter(email=invitation.email).first()
-        if user is None or not user.has_usable_password():
+        if user is None or not user.holds_a_password:
             password = attrs.get('password')
             if not password:
                 raise serializers.ValidationError({'password': 'Set a password to accept.'})

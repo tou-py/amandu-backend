@@ -94,10 +94,12 @@ class Invitation(TenantOwnedMixin, TimestampMixin):
         if user is None:
             # Brand new person: the password they choose here is their first one.
             user = CustomUser.objects.create_user(email=self.email, password=password)
-        elif not user.has_usable_password():
-            # Invited before but never set a password; still theirs to set.
+        elif not user.holds_a_password:
+            # Invited before but never set a password, or signed up and never
+            # proved the address: this link proves it, and the password is theirs to set.
             user.set_password(password)
-            user.save(update_fields=['password'])
+            user.email_verified_at = timezone.now()
+            user.save(update_fields=['password', 'email_verified_at'])
         # An existing user with a usable password (works for another tenant) keeps
         # it: an invite token must never let anyone reset someone else's password.
 

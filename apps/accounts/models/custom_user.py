@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from phonenumber_field.modelfields import PhoneNumberField
 
@@ -45,6 +46,10 @@ class CustomUser(AbstractUser, TimestampMixin):
     # membership: it is their phone, the same in every tenant they work for.
     # Blank is a defined state -- no WhatsApp, push only.
     phone = PhoneNumberField(blank=True)
+    # Null only for someone who signed up and has not opened the link yet; login
+    # refuses them. Every other way in (invitation, admin, seeds) vouches for the
+    # address, so the default is "verified" and signup is the one that passes None.
+    email_verified_at = models.DateTimeField(null=True, blank=True, default=timezone.now)
 
     USERNAME_FIELD = 'email'
     # USERNAME_FIELD and password are always prompted for; listing either here
@@ -60,3 +65,9 @@ class CustomUser(AbstractUser, TimestampMixin):
 
     def __str__(self):
         return self.email
+
+    @property
+    def holds_a_password(self):
+        """A password this person is known to have chosen. An unverified signup's
+        may be a stranger's who typed their address, so it does not count."""
+        return self.has_usable_password() and self.email_verified_at is not None

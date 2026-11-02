@@ -89,3 +89,18 @@ def test_logout_blacklists_the_refresh_token(user):
 
     assert client.post(reverse('accounts:logout'), {'refresh': refresh}, format='json').status_code == 200
     assert client.post(reverse('accounts:token-refresh'), {'refresh': refresh}, format='json').status_code == 401
+
+
+@pytest.mark.django_db
+def test_an_unverified_user_is_told_only_after_the_password_matches(user):
+    user.email_verified_at = None
+    user.save()
+    login = reverse('accounts:login')
+
+    right = APIClient().post(login, {'email': 'u@example.com', 'password': 'pw'}, format='json')
+    wrong = APIClient().post(login, {'email': 'u@example.com', 'password': 'nope'}, format='json')
+
+    assert right.status_code == 403
+    assert right.data['code'] == 'email_not_verified'
+    assert 'access' not in right.data
+    assert wrong.status_code == 401
