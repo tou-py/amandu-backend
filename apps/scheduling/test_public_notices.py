@@ -368,8 +368,7 @@ def test_a_late_kyo_payment_never_stops_telling_a_client(request_for_ana, coordi
     assert act(coordinator, salon, request_for_ana, 'answer-told').status_code == 200
 
 
-def test_a_request_the_sweep_expires_owes_no_answer(request_for_ana, sent, now, settings):
-    settings.WAHA_URL = ''  # about the mark, not the delivery
+def test_a_request_the_sweep_expires_owes_no_answer(request_for_ana, now, settings):
     settings.VAPID_PRIVATE_KEY = 'k'  # else the command raises, as on CI
     settings.VAPID_SUBJECT = 'mailto:x@example.com'
     now(local(9, 1))
@@ -395,32 +394,6 @@ def test_cancelling_a_confirmed_turno_is_unchanged(request_for_ana, coordinator,
 def queue(salon, count):
     for n in range(count):
         OutboundMessage.objects.create(tenant=salon, to=f'+59598100000{n}', body=f'm{n}')
-
-
-def test_the_sweep_sends_a_few_per_run(salon, sent, now, settings):
-    settings.VAPID_PRIVATE_KEY = ''  # WhatsApp does not wait for push
-    now(local(10))
-    queue(salon, whatsapp.PER_TICK + 1)
-
-    with pytest.raises(Exception):  # still loud about push not being set up
-        call_command('send_reminders')
-
-    assert len(sent) == whatsapp.PER_TICK
-    assert OutboundMessage.objects.filter(sent_at__isnull=True).count() == 1
-
-
-def test_the_sweep_stops_at_the_first_failure(salon, sent, now, settings):
-    settings.VAPID_PRIVATE_KEY = 'k'
-    settings.VAPID_SUBJECT = 'mailto:x@example.com'
-    now(local(10))
-    queue(salon, 2)
-    sent.append('fail')
-
-    call_command('send_reminders')
-
-    failed = OutboundMessage.objects.get(attempts=1)
-    assert 'WAHA is down' in failed.last_error and failed.sent_at is None
-    assert OutboundMessage.objects.get(attempts=0)  # never tried this run
 
 
 def test_a_message_is_given_up_after_max_attempts(salon, sent, now):

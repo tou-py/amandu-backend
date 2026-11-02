@@ -1,7 +1,7 @@
 """
 Public requests nobody answered, as the sweep (send_reminders) handles them:
 put to the shop's managers after a while, turned down once their hour passed.
-Driven through the real command; the push service and WAHA are faked.
+Driven through the real command; the push service is faked.
 """
 from datetime import datetime, time, timedelta
 from unittest.mock import patch
@@ -164,8 +164,7 @@ def test_a_request_whose_hour_passed_expires_and_frees_the_slot(daytime, setting
     expired = request_(hours_ago=30, start=daytime - timedelta(hours=1))
 
     settings.WAHA_URL = 'http://waha'
-    with patch('apps.scheduling.whatsapp.send'):
-        call_command('send_reminders')
+    call_command('send_reminders')
 
     expired.refresh_from_db()
     assert expired.status == Appointment.Status.CANCELLED
