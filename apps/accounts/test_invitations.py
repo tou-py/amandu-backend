@@ -154,6 +154,8 @@ def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):
     assert accept.status_code == 204
     user = CustomUser.objects.get(email='new@example.com')
     assert user.has_usable_password()
+    assert user.terms_version == 1
+    assert user.terms_accepted_at is not None
     membership = Membership.objects.get(user=user, tenant=salon)
     assert membership.status == Membership.Status.ACTIVE
     assert membership.role == 'staff'

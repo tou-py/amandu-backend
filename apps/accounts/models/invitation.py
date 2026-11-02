@@ -103,6 +103,7 @@ class Invitation(TenantOwnedMixin, TimestampMixin):
         # An existing user with a usable password (works for another tenant) keeps
         # it: an invite token must never let anyone reset someone else's password.
 
+        user.accept_terms()
         membership, _ = Membership.objects.get_or_create(
             user=user, tenant=self.tenant, defaults={'role': self.role}
         )

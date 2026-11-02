@@ -10,6 +10,11 @@ from apps.accounts.managers import CustomUserManager
 from apps.commons.mixins import TimestampMixin
 
 
+# The version of Kyo's terms and privacy policy a user accepts today. Must match
+# `version` in kyo-landing/src/legal.js.
+TERMS_VERSION = 1
+
+
 class CustomUser(AbstractUser, TimestampMixin):
     """User authenticated by email address instead of a username."""
 
@@ -50,6 +55,10 @@ class CustomUser(AbstractUser, TimestampMixin):
     # refuses them. Every other way in (invitation, admin, seeds) vouches for the
     # address, so the default is "verified" and signup is the one that passes None.
     email_verified_at = models.DateTimeField(null=True, blank=True, default=timezone.now)
+    # The evidence of accepting the terms: when, and which text. Null for whoever
+    # came in before there were any.
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
+    terms_version = models.PositiveSmallIntegerField(null=True, blank=True)
 
     USERNAME_FIELD = 'email'
     # USERNAME_FIELD and password are always prompted for; listing either here
@@ -71,3 +80,8 @@ class CustomUser(AbstractUser, TimestampMixin):
         """A password this person is known to have chosen. An unverified signup's
         may be a stranger's who typed their address, so it does not count."""
         return self.has_usable_password() and self.email_verified_at is not None
+
+    def accept_terms(self):
+        self.terms_accepted_at = timezone.now()
+        self.terms_version = TERMS_VERSION
+        self.save(update_fields=['terms_accepted_at', 'terms_version', 'updated_at'])
