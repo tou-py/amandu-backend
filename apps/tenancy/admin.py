@@ -118,7 +118,7 @@ class TenantAdmin(admin.ModelAdmin):
         'name', 'slug', 'status', 'paid_until', 'monthly_total',
         'member_count', 'client_count', 'timezone',
     )
-    list_filter = ('status', 'addon_cobros', 'addon_facturacion')
+    list_filter = ('status', 'addon_cobros', 'addon_reservas', 'addon_facturacion')
     search_fields = ('name', 'slug')
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = ('created_at', 'updated_at')
@@ -130,7 +130,7 @@ class TenantAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {'fields': ('name', 'slug', 'status')}),
         ('Billing', {
-            'fields': ('paid_until', 'addon_cobros', 'addon_facturacion'),
+            'fields': ('paid_until', 'trial_until', 'addon_cobros', 'addon_reservas', 'addon_facturacion'),
             'description': (
                 'Payment is a bank transfer confirmed by hand. Use the '
                 '"Register a monthly payment" action rather than editing the date: '

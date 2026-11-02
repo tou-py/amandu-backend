@@ -48,7 +48,7 @@ def _shop(slug):
     that is a day late on payment loses its public page -- a product decision
     worth revisiting with a grace period, not a bug.
     """
-    shop = get_object_or_404(Tenant, slug=slug, public_booking=True)
+    shop = get_object_or_404(Tenant, slug=slug, addon_reservas=True)
     if not shop.is_operational:
         # The same 404 as a shop that does not exist. A distinct status would
         # tell an outsider that this business exists and is behind on payment.

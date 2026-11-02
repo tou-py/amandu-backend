@@ -52,7 +52,7 @@ def now(monkeypatch):
 def salon(db):
     return Tenant.objects.create(
         name='Salon', slug='salon', country='PY', timezone='America/Asuncion',
-        public_booking=True, phone='+595211234567',
+        addon_reservas=True, phone='+595211234567',
     )
 
 

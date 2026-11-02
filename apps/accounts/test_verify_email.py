@@ -42,7 +42,7 @@ def test_the_link_signs_in_and_starts_the_trial_with_every_addon():
     assert tenant.trial_until == timezone.localdate() + timedelta(days=14)
     assert tenant.paid_until == tenant.trial_until
     assert tenant.addon_cobros
-    assert tenant.public_booking
+    assert tenant.addon_reservas
     assert not tenant.addon_facturacion
 
 

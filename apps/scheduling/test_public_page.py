@@ -40,7 +40,7 @@ def monday_morning(freeze_to):
 def salon(db):
     return Tenant.objects.create(
         name='Salón Iguazú', slug='iguazu', country='PY',
-        timezone='America/Asuncion', public_booking=True,
+        timezone='America/Asuncion', addon_reservas=True,
     )
 
 
@@ -220,7 +220,7 @@ def test_a_booked_slot_is_simply_absent_never_named(client, salon, stylist, hair
 def test_a_shop_with_nothing_set_up_says_so(client, db):
     empty = Tenant.objects.create(
         name='Nueva', slug='nueva', country='PY',
-        timezone='America/Asuncion', public_booking=True,
+        timezone='America/Asuncion', addon_reservas=True,
     )
 
     assert 'todavía no cargó' in html(client, empty)

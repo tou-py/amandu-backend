@@ -132,14 +132,9 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
     move existing data -- the appointments keep their instants, the numbers keep
     their stored E.164 form -- it changes how the next ones are read.
 
-    So is `public_booking`, which decides whether the business has a public
-    booking page at all. Opening one and closing it again are the owner's calls
-    to make from a settings screen; the alternative is a support request for a
-    checkbox. It defaults to off for the reason on the model field.
-
     `phone` is the business's own number. Setting it is what turns WhatsApp
     notices on for this business: every message gives it as the contact, and a
-    message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
+    message nobody can answer is worse than none (apps/scheduling/notify.py).
 
     So are `request_accepted_message` and `request_rejected_message`, how the
     business answers a public request by WhatsApp. Blank means Kyo's default.
@@ -173,7 +168,7 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
         model = Tenant
         fields = (
             'id', 'name', 'slug', 'status', 'timezone', 'country',
-            'public_booking', 'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url', 'logo_meta',
+            'phone', 'plan_period_start', 'plan_grace_days', 'logo_key', 'logo_url', 'logo_meta',
             'brand_color', 'brand_intensity', 'request_accepted_message', 'request_rejected_message',
             'address', 'maps_url', 'instagram', 'facebook', 'tiktok', 'website', 'created_at',
         )
@@ -264,7 +259,7 @@ class KyoSubscriptionSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text='Names of the members who attend appointments: who the plan counts.',
     )
-    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'facturacion')))
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
     lines = SubscriptionLineSerializer(many=True)
     total = serializers.IntegerField(help_text='Guaraníes a month.')
     paid_until = serializers.DateField(allow_null=True)
