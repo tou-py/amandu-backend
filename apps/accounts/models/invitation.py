@@ -98,8 +98,8 @@ class Invitation(TenantOwnedMixin, TimestampMixin):
             # Invited before but never set a password, or signed up and never
             # proved the address: this link proves it, and the password is theirs to set.
             user.set_password(password)
-            user.email_verified_at = timezone.now()
-            user.save(update_fields=['password', 'email_verified_at'])
+            user.save(update_fields=['password'])
+            user.confirm_email()
         # An existing user with a usable password (works for another tenant) keeps
         # it: an invite token must never let anyone reset someone else's password.
 

@@ -24,6 +24,7 @@ FACTURACION_EXTRA = 7_000  # Each document past the included ones.
 # tenant keeps reading but can no longer write. The sweep suspends after that.
 NOTICE_DAYS = 3
 READ_ONLY_DAYS = 3
+TRIAL_DAYS = 14
 
 OK = 'ok'
 DUE = 'due'

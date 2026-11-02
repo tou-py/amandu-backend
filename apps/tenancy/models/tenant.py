@@ -1,3 +1,4 @@
+from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ValidationError
@@ -6,6 +7,7 @@ from django.db import models
 from phonenumber_field.modelfields import PhoneNumberField
 
 from apps.commons.mixins import TimestampMixin
+from apps.tenancy import pricing
 
 
 def validate_timezone(value):
@@ -84,6 +86,9 @@ class Tenant(TimestampMixin):
     # the system needs to know about that, which is why there is no plan table,
     # no price and no ledger yet.
     paid_until = models.DateField(null=True, blank=True)
+    # Where a self-served trial ends. "On trial" is derived, paid_until still equal
+    # to this, so registering a payment ends the trial with no flag to clear.
+    trial_until = models.DateField(null=True, blank=True)
     # Whether strangers may see this tenant's free slots and book one.
     #
     # Default False, and that is the whole point: the studio already in
@@ -190,6 +195,11 @@ class Tenant(TimestampMixin):
     class Meta:
         db_table = 'tb_tenant'
         ordering = ('name',)
+
+    def start_trial(self, today):
+        self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)
+        self.addon_cobros = self.public_booking = True
+        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'public_booking', 'updated_at'])
 
     def __str__(self):
         return self.name

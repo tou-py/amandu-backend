@@ -11,7 +11,9 @@ from apps.accounts.views import (
     MeView,
     NotificationViewSet,
     PushSubscriptionView,
+    ResendVerificationView,
     SignupView,
+    VerifyEmailView,
 )
 
 app_name = 'accounts'
@@ -23,6 +25,8 @@ router.register('members', MemberViewSet, basename='member')
 
 urlpatterns = [
     path('signup/', SignupView.as_view(), name='signup'),
+    path('verify-email/', VerifyEmailView.as_view(), name='verify-email'),
+    path('verify-email/resend/', ResendVerificationView.as_view(), name='verify-email-resend'),
     path('login/', LoginView.as_view(), name='login'),
     path('refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     # POST {refresh}: blacklists it, so the session cannot be refreshed again.

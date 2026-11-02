@@ -21,6 +21,15 @@ def verify_token(user):
     return signing.dumps(user.pk, salt=VERIFY_SALT)
 
 
+def user_from_token(token):
+    """The user a verification link names, or None if it is bad, old or theirs is gone."""
+    try:
+        pk = signing.loads(token, salt=VERIFY_SALT, max_age=VERIFY_MAX_AGE)
+    except signing.BadSignature:  # SignatureExpired is one
+        return None
+    return CustomUser.objects.filter(pk=pk).first()
+
+
 def _unique_slug(name):
     room = Tenant._meta.get_field('slug').max_length - 4  # for a "-999"
     base = slugify(name)[:room].strip('-') or 'negocio'

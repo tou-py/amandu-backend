@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from phonenumber_field.modelfields import PhoneNumberField
@@ -80,6 +80,24 @@ class CustomUser(AbstractUser, TimestampMixin):
         """A password this person is known to have chosen. An unverified signup's
         may be a stranger's who typed their address, so it does not count."""
         return self.has_usable_password() and self.email_verified_at is not None
+
+    def confirm_email(self):
+        """
+        False if it was confirmed already. The first confirmation is what starts
+        the trial of the business they signed up with: an email opened two days
+        late still gets all its days, and an untouched signup costs nothing.
+        """
+        with transaction.atomic():
+            now = timezone.now()
+            # Conditional on the row, so two tabs on one link cannot both win.
+            if not CustomUser.objects.filter(pk=self.pk, email_verified_at__isnull=True).update(email_verified_at=now):
+                return False
+            self.email_verified_at = now
+            for tenant in self.tenants.filter(
+                memberships__user=self, memberships__role='owner', paid_until__isnull=True,
+            ):
+                tenant.start_trial(timezone.localdate())
+        return True
 
     def accept_terms(self):
         self.terms_accepted_at = timezone.now()

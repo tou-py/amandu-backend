@@ -7,6 +7,7 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import (
     CustomUser,
@@ -448,6 +449,34 @@ class AcceptInvitationSerializer(serializers.Serializer):
 
     def save(self):
         return self.validated_data['invitation'].accept(self.validated_data.get('password'))
+
+
+class SessionSerializer(serializers.Serializer):
+    """What a login answers, for the links that sign in instead of a password."""
+
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    memberships = ActiveMembershipSerializer(many=True)
+
+
+def session_for(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'memberships': active_memberships(user),
+    }
+
+
+class EmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.lower()
+
+
+class TokenSerializer(serializers.Serializer):
+    token = serializers.CharField()
 
 
 class SignupSerializer(serializers.Serializer):

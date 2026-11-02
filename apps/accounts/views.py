@@ -19,15 +19,20 @@ from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
     ChangePasswordSerializer,
+    EmailSerializer,
     InvitationSerializer,
     MeSerializer,
     MemberPhotoSerializer,
     MemberSerializer,
     NotificationSerializer,
     PushSubscriptionSerializer,
+    SessionSerializer,
     SignupSerializer,
     TenantAwareTokenObtainPairSerializer,
+    TokenSerializer,
+    session_for,
 )
+from apps.commons.errors import Refused
 from apps.commons.mixins import NoHeuristicCacheMixin
 from apps.tenancy.permissions import HasActiveMembership, IsTenantAdmin
 from apps.tenancy.viewsets import TenantScopedModelViewSet
@@ -214,6 +219,50 @@ class SignupView(APIView):
         else:
             send_already_registered_email(user)
         return Response(status=status.HTTP_202_ACCEPTED)
+
+
+class VerifyEmailView(APIView):
+    """Public: the signed token is the credential, and using it is the first login."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'accept-invitation'
+
+    @extend_schema(request=TokenSerializer, responses=SessionSerializer)
+    def post(self, request):
+        serializer = TokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = signup.user_from_token(serializer.validated_data['token'])
+        if user is None:
+            raise Refused('This link is not valid anymore.', 'token_invalid')
+        if not user.confirm_email():
+            # A replayed link must not be a login: it may be sitting in an old mail.
+            raise Refused('This email is already confirmed.', 'already_verified', status.HTTP_409_CONFLICT)
+        return Response(session_for(user))
+
+
+class ResendVerificationView(APIView):
+    """Public, and answers the same for any address."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'signup'
+
+    @extend_schema(
+        request=EmailSerializer,
+        responses={204: OpenApiResponse(description='Sent if it was due; no body.')},
+    )
+    def post(self, request):
+        serializer = EmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = CustomUser.objects.filter(
+            email=serializer.validated_data['email'], email_verified_at__isnull=True,
+        ).first()
+        if user is not None:
+            send_verification_email(user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MemberViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
