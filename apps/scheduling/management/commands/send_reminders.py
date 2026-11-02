@@ -1,6 +1,7 @@
 """
-The sweep. Four things come due on the same tick and share one run:
+The sweep. Five things come due on the same tick and share one run:
 
+  * a signup nobody confirmed in a week, which is dropped with its business;
   * a tenant whose paid period ran out, which loses access;
   * a business's morning plan digest -- who owes, what falls due soon -- for
     its owners and admins, once a day from 05:00 in ITS timezone;
@@ -43,10 +44,12 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models import DateTimeField, ExpressionWrapper, F
 from django.utils import timezone
 from pywebpush import WebPushException, webpush
 
+from apps.accounts import signup
 from apps.accounts.models import Membership, Notification
 from apps.scheduling import billing
 from apps.scheduling import notify
@@ -95,6 +98,12 @@ class Command(BaseCommand):
         # idempotent UPDATE has nothing to serialise -- an overlapping tick
         # matches zero rows the second time.
         self._run_billing()
+        try:
+            signup.sweep_unverified()
+        except ProtectedError as exc:
+            # Someone hand-loaded turnos into a signup never confirmed. Not worth
+            # stopping every reminder on this tick for: say so and carry on.
+            self.stderr.write(f'Unverified signups kept: {exc}')
         # Also before the VAPID guard: the digest is a Notification row, and the
         # in-app feed is how a device that never allowed push still sees it. The
         # push half below picks the rows up on this same tick.

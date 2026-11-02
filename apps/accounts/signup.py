@@ -5,9 +5,12 @@ are one fact, so they are created together or not at all.
 The verification token is signed rather than stored: there is nothing to clean
 up, and it dies by age. Replays are stopped by the user already being verified.
 """
+from datetime import timedelta
+
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.accounts.models import CustomUser, Membership
@@ -15,6 +18,10 @@ from apps.tenancy.models import Tenant
 
 VERIFY_SALT = 'verify-email'
 VERIFY_MAX_AGE = 3 * 24 * 60 * 60  # seconds
+
+
+# How long a signup nobody confirmed stays around, holding its address and slug.
+UNVERIFIED_DAYS = 7
 
 
 def verify_token(user):
@@ -48,6 +55,19 @@ def _browser_guess(field_name, value):
         return field.clean(value, None)
     except ValidationError:
         return field.get_default()
+
+
+@transaction.atomic
+def sweep_unverified():
+    """Drop signups never confirmed, with the business they opened: nobody could
+    log in, so nobody worked in it. Accepting an invitation confirms the address,
+    so an unconfirmed user has no other business to lose."""
+    stale = CustomUser.objects.filter(
+        email_verified_at__isnull=True,
+        created_at__lt=timezone.now() - timedelta(days=UNVERIFIED_DAYS),
+    )
+    Tenant.objects.filter(memberships__user__in=stale, memberships__role=Membership.Role.OWNER).delete()
+    return stale.delete()[0]
 
 
 @transaction.atomic

@@ -1,6 +1,10 @@
+from datetime import timedelta
+
 import pytest
 from django.core import mail
+from django.core.management import call_command
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import CustomUser, Membership
@@ -110,3 +114,31 @@ def test_signup_is_throttled():
         assert signup(email=f'a{n}@example.com').status_code == 202
 
     assert signup(email='a5@example.com').status_code == 429
+
+
+def age(user, days):
+    CustomUser.objects.filter(pk=user.pk).update(created_at=timezone.now() - timedelta(days=days))
+
+
+def test_the_sweep_drops_a_signup_unconfirmed_for_a_week_with_its_business():
+    signup()
+    age(CustomUser.objects.get(), days=8)
+
+    call_command('send_reminders')
+
+    assert not CustomUser.objects.exists()
+    assert not Tenant.objects.exists()
+
+
+def test_the_sweep_leaves_a_recent_signup_and_anyone_confirmed():
+    signup()
+    age(CustomUser.objects.get(), days=6)
+    confirmed = CustomUser.objects.create_user(email='old@example.com', password=STRONG_PASSWORD)
+    business = Tenant.objects.create(name='Old', slug='old')
+    Membership.objects.create(user=confirmed, tenant=business, role=Membership.Role.OWNER)
+    age(confirmed, days=400)
+
+    call_command('send_reminders')
+
+    assert CustomUser.objects.count() == 2
+    assert Tenant.objects.count() == 2
