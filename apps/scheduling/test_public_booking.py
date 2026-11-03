@@ -30,7 +30,7 @@ def local(hour, minute=0, day=MONDAY):
 def salon(db):
     return Tenant.objects.create(
         name='Salon', slug='salon', country='PY',
-        timezone='America/Asuncion', public_booking=True,
+        timezone='America/Asuncion', addon_reservas=True,
     )
 
 

@@ -40,7 +40,7 @@ def monday_morning(freeze_to):
 def salon(db):
     return Tenant.objects.create(
         name='Salón Iguazú', slug='iguazu', country='PY',
-        timezone='America/Asuncion', public_booking=True,
+        timezone='America/Asuncion', addon_reservas=True,
     )
 
 
@@ -220,7 +220,7 @@ def test_a_booked_slot_is_simply_absent_never_named(client, salon, stylist, hair
 def test_a_shop_with_nothing_set_up_says_so(client, db):
     empty = Tenant.objects.create(
         name='Nueva', slug='nueva', country='PY',
-        timezone='America/Asuncion', public_booking=True,
+        timezone='America/Asuncion', addon_reservas=True,
     )
 
     assert 'todavía no cargó' in html(client, empty)
@@ -550,6 +550,18 @@ def test_the_foot_links_to_kyo_only_once_its_landing_is_set(client, salon, setti
     assert '<a href="https://kyo.example/" target="_blank" rel="noopener">' in html(client, salon)
 
 
+def test_the_page_links_kyo_policies_once_its_landing_is_set(client, salon, stylist, haircut, open_monday,
+                                                            monday_morning, settings):
+    form = {'paso': 'datos', 'day': MONDAY.isoformat(), 'start': local(9).isoformat()}
+    settings.KYO_LANDING_URL = ''
+    assert 'Privacidad' not in html(client, salon, **form)
+
+    settings.KYO_LANDING_URL = 'https://kyo.example'
+    body = html(client, salon, **form)
+    assert 'usa tus datos para gestionar tu turno. <a href="https://kyo.example/privacidad/"' in body
+    assert '<a href="https://kyo.example/terminos/" target="_blank" rel="noopener">Términos</a>' in body
+
+
 def test_the_soonest_bar_names_the_service_it_books_first(client, salon, stylist, haircut, soonest_bar,
                                                          open_monday, monday_morning):
     dock = html(client, salon).split('class="dock"')[1]
@@ -622,15 +634,6 @@ def test_where_the_shop_is_closes_the_list(client, salon, stylist, haircut, open
     assert '<iframe' not in info
     assert '"address": "Av. Espa\u00F1a 1240, Asunci\u00F3n"' in body
     assert '"sameAs": ["https://www.instagram.com/iguazu/"]' in body
-
-
-def test_the_map_is_drawn_only_with_a_key(client, salon, stylist, haircut, open_monday, monday_morning,
-                                          settings):
-    settings.GOOGLE_MAPS_EMBED_KEY = 'k'
-    salon.address = 'Av. España 1240'
-    salon.save()
-
-    assert '<iframe class="map" src="https://www.google.com/maps/embed/v1/place?key=k&amp;q=' in html(client, salon)
 
 
 def test_a_shop_that_said_nothing_of_itself_has_no_where_section(client, salon, stylist, haircut,

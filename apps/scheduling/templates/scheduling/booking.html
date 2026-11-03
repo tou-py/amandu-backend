@@ -634,7 +634,6 @@
   /* One panel, its parts ruled apart rather than boxed again. */
   .panel > * { margin: 0; padding: 1rem 1.1rem; }
   .panel > * + * { border-top: 1px solid var(--border); }
-  .panel .map { display: block; padding: 0; width: 100%; aspect-ratio: 16 / 10; border: 0; background: var(--sunken); }
   .place { display: grid; gap: .8rem; }
   .place address { font-style: normal; font-size: 1rem; font-weight: 550; line-height: 1.4; display: flex; gap: .55rem; }
   .place address .icon { margin-top: .1rem; color: var(--ink-subtle); }
@@ -687,6 +686,9 @@
   .foot .by svg { height: 18px; width: auto; color: var(--ink); }
   .foot .cta { display: inline-flex; align-items: center; gap: .25rem; font-weight: 600; color: var(--ink-secondary); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
   .foot .cta .icon { width: 14px; height: 14px; stroke-width: 2; }
+  .foot .legal { margin: .25rem 0 0; }
+  .foot .legal a { display: inline-flex; align-items: center; min-height: 24px; padding: 0 .25rem; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+  .fine a { color: inherit; }
   @media (hover: hover) { .foot a:hover { background: var(--hover); } .foot a:hover .cta { text-decoration-color: currentColor; } }
   .kyo-sol-a { fill: var(--kyo-ambar); }
   .kyo-sol-b { fill: var(--kyo-naranja); }
@@ -906,7 +908,6 @@
                 </div>
               </div>
             {% endif %}
-            {% if maps_embed %}<iframe class="map" src="{{ maps_embed }}" title="Mapa de {{ shop.name }}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>{% endif %}
             {% if week %}
               <details class="hours">
                 <summary>
@@ -1067,6 +1068,7 @@
 
           <button type="submit">Pedir turno</button>
           <p class="fine">No pagás nada ahora. El turno queda firme cuando {{ shop.name }} lo confirma.</p>
+          {% if privacy_url %}<p class="fine">{{ shop.name }} usa tus datos para gestionar tu turno. <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacidad</a></p>{% endif %}
         </section>
       </form>
     {% endif %}
@@ -1086,6 +1088,7 @@
         </g>
       </svg></span>
       {% if kyo_url %}<span class="cta">¿Tenés un negocio? Conocé Kyo <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></span></a>{% endif %}
+      {% if privacy_url %}<p class="legal"><a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacidad</a> · <a href="{{ terms_url }}" target="_blank" rel="noopener">Términos</a></p>{% endif %}
     </footer>
   </main>
 </div>

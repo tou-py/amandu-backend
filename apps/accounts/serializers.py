@@ -1,12 +1,17 @@
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils import timezone
+from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema_field
 from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import (
     CustomUser,
@@ -74,6 +79,8 @@ def active_memberships(user):
             'tenant_status': tenant.status,
             'billing': state,
             'paid_until': tenant.paid_until,
+            'trial': pricing.on_trial(tenant),
+            'trial_until': tenant.trial_until,
             'addons': pricing.addons(tenant),
             'payment_instructions': (
                 pricing.payment_instructions()
@@ -115,7 +122,9 @@ class ActiveMembershipSerializer(serializers.Serializer):
         'writes refused with billing_read_only); suspended.',
     )
     paid_until = serializers.DateField(allow_null=True)
-    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'facturacion')))
+    trial = serializers.BooleanField()
+    trial_until = serializers.DateField(allow_null=True)
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
     payment_instructions = serializers.CharField(
         help_text='How to pay Kyo. Owner only, and only when billing is not ok; otherwise empty.'
     )
@@ -224,6 +233,7 @@ class MeSerializer(serializers.ModelSerializer):
     # Where this person gets their turno notices by WhatsApp. Blank turns that
     # off; push is unaffected.
     phone = PhoneNumberField(required=False, allow_blank=True)
+    terms_pending = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = CustomUser
@@ -236,6 +246,7 @@ class MeSerializer(serializers.ModelSerializer):
             'phone',
             'memberships',
             'vapid_public_key',
+            'terms_pending',
         )
         read_only_fields = ('id', 'email', 'vapid_public_key')
 
@@ -370,7 +381,12 @@ class TenantAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
 
     def validate(self, attrs):
-        data = super().validate(attrs)  # authenticates and sets self.user
+        stored = CustomUser.objects.filter(email__iexact=attrs['email']).values_list('email', flat=True).first()
+        data = super().validate({**attrs, 'email': stored or attrs['email']})  # authenticates and sets self.user
+        # After the password check, so the code says nothing to someone who does
+        # not own the address.
+        if self.user.email_verified_at is None:
+            raise Refused('Confirm your email first.', 'email_not_verified', status.HTTP_403_FORBIDDEN)
         data['memberships'] = active_memberships(self.user)
         return data
 
@@ -430,7 +446,7 @@ class AcceptInvitationSerializer(serializers.Serializer):
             raise serializers.ValidationError('Invalid or expired invitation.')
 
         user = CustomUser.objects.filter(email=invitation.email).first()
-        if user is None or not user.has_usable_password():
+        if user is None or not user.holds_a_password:
             password = attrs.get('password')
             if not password:
                 raise serializers.ValidationError({'password': 'Set a password to accept.'})
@@ -444,6 +460,91 @@ class AcceptInvitationSerializer(serializers.Serializer):
 
     def save(self):
         return self.validated_data['invitation'].accept(self.validated_data.get('password'))
+
+
+class SessionSerializer(serializers.Serializer):
+    """What a login answers, for the links that sign in instead of a password."""
+
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    memberships = ActiveMembershipSerializer(many=True)
+
+
+def session_for(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'memberships': active_memberships(user),
+    }
+
+
+class EmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.lower()
+
+
+class TokenSerializer(serializers.Serializer):
+    token = serializers.CharField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        try:
+            pk = urlsafe_base64_decode(attrs['uid']).decode()
+            user = CustomUser.objects.filter(pk=pk, is_active=True).first()
+        except (ValueError, DjangoValidationError):
+            user = None
+        # Single use by construction: the token hashes the current password.
+        if user is None or not default_token_generator.check_token(user, attrs['token']):
+            raise Refused('This link is not valid anymore.', 'token_invalid')
+        try:
+            validate_password(attrs['password'], user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'password': list(exc.messages)})
+        attrs['user'] = user
+        return attrs
+
+    @transaction.atomic
+    def save(self):
+        user = self.validated_data['user']
+        user.set_password(self.validated_data['password'])
+        user.save(update_fields=['password', 'updated_at'])
+        # Forgetting a password and losing an account look the same from here, so
+        # whoever was signed in does not stay signed in.
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+        # The link proved the address, the same as the verification one.
+        user.confirm_email()
+        return user
+
+
+class SignupSerializer(serializers.Serializer):
+    business_name = serializers.CharField(max_length=120)
+    first_name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    # The browser's guess, never asked for: see signup._browser_guess.
+    timezone = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        return value.lower()
+
+    def validate_password(self, value):
+        # Before looking at the address, so a weak password is refused the same
+        # whether or not the account exists.
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
 
 
 class NotificationActorSerializer(serializers.ModelSerializer):

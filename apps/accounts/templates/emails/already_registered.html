@@ -1,0 +1,16 @@
+{% extends 'emails/base.html' %}
+
+{% block title %}Ya tenés una cuenta en Kyo{% endblock %}
+
+{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;line-height:1.25;font-weight:700;letter-spacing:-0.01em;color:#1c1917;">Ya tenés una cuenta en Kyo</h1>
+<p style="margin:0 0 28px;">Alguien intentó crear una cuenta con este correo. Si fuiste vos, entrá con tu contraseña.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+  <tr>
+    <td style="border-radius:999px;background:#1c1917;">
+      <a href="{{ login_link }}" style="display:inline-block;padding:13px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:999px;">Entrar a Kyo</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:28px 0 0;font-size:13px;color:#78716c;">¿La olvidaste? <a href="{{ reset_link }}" style="color:#44403c;">Elegí una nueva</a>. Si no fuiste vos, ignorá este correo.</p>
+{% endblock %}

@@ -154,6 +154,8 @@ def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):
     assert accept.status_code == 204
     user = CustomUser.objects.get(email='new@example.com')
     assert user.has_usable_password()
+    assert user.terms_version == 1
+    assert user.terms_accepted_at is not None
     membership = Membership.objects.get(user=user, tenant=salon)
     assert membership.status == Membership.Status.ACTIVE
     assert membership.role == 'staff'
@@ -182,6 +184,26 @@ def test_accepting_as_an_existing_user_does_not_reset_their_password(admin_user,
     existing.refresh_from_db()
     assert existing.check_password('original-pw-123')
     assert Membership.objects.filter(user=existing, tenant=salon).exists()
+
+
+def test_accepting_replaces_the_password_of_a_signup_nobody_verified(admin_user, salon, django_user_model):
+    """Someone else may have signed up with this address: the password they typed
+    must not become a way into the business the real owner just joined."""
+    squatted = django_user_model.objects.create_user(
+        email='bob@example.com', password='squatter-pw-123', email_verified_at=None
+    )
+    api(admin_user, salon).post(
+        INVITE_LIST, {'email': 'bob@example.com', 'role': 'staff'}, format='json'
+    )
+    token = pending_token('bob@example.com', salon)
+
+    assert api().post(ACCEPT_URL, {'token': token}, format='json').status_code == 400
+    accept = api().post(ACCEPT_URL, {'token': token, 'password': STRONG_PASSWORD}, format='json')
+
+    assert accept.status_code == 204
+    squatted.refresh_from_db()
+    assert squatted.check_password(STRONG_PASSWORD)
+    assert squatted.email_verified_at is not None
 
 
 def test_accept_requires_a_password_for_a_new_user(admin_user, salon):

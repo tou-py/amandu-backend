@@ -135,16 +135,3 @@ def test_maps_link_prefers_the_owners_pin_then_searches_the_address():
         'https://www.google.com/maps/search/?api=1&query=Av.+Mcal.+L%C3%B3pez+1234+c%2F+Brasil%2C+Asunci%C3%B3n'
     )
     assert presence.maps_link(Tenant()) == ''
-
-
-def test_the_embedded_map_needs_both_a_key_and_an_address(settings):
-    shop = Tenant(address='Brasil 1234, Asunción')
-
-    settings.GOOGLE_MAPS_EMBED_KEY = ''
-    assert presence.maps_embed_url(shop) == ''
-
-    settings.GOOGLE_MAPS_EMBED_KEY = 'k3y'
-    assert presence.maps_embed_url(shop) == (
-        'https://www.google.com/maps/embed/v1/place?key=k3y&q=Brasil+1234%2C+Asunci%C3%B3n'
-    )
-    assert presence.maps_embed_url(Tenant(maps_url='https://maps.app.goo.gl/x')) == ''

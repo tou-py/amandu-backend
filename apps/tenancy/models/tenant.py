@@ -1,3 +1,4 @@
+from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ValidationError
@@ -6,6 +7,7 @@ from django.db import models
 from phonenumber_field.modelfields import PhoneNumberField
 
 from apps.commons.mixins import TimestampMixin
+from apps.tenancy import pricing
 
 
 def validate_timezone(value):
@@ -84,20 +86,12 @@ class Tenant(TimestampMixin):
     # the system needs to know about that, which is why there is no plan table,
     # no price and no ledger yet.
     paid_until = models.DateField(null=True, blank=True)
-    # Whether strangers may see this tenant's free slots and book one.
-    #
-    # Default False, and that is the whole point: the studio already in
-    # production is an INTERNAL diary, and a feature that opened its calendar to
-    # the internet by being deployed would be a breach, not a release. Turning
-    # this on is a deliberate act per tenant.
-    #
-    # A column rather than a settings table because it is one boolean on a model
-    # with six fields; a table earns its place when there are enough of these to
-    # make Tenant unreadable.
-    public_booking = models.BooleanField(default=False)
+    # Where a self-served trial ends. "On trial" is derived, paid_until still equal
+    # to this, so registering a payment ends the trial with no flag to clear.
+    trial_until = models.DateField(null=True, blank=True)
     # The business's own number. It is what every WhatsApp sent on its behalf
     # gives as the contact, and setting it is what turns those messages on:
-    # a message nobody can answer is worse than none (apps/scheduling/whatsapp.py).
+    # a message nobody can answer is worse than none (apps/scheduling/notify.py).
     phone = PhoneNumberField(blank=True)
     # How the business words its answer to a public request, sent from the
     # answerer's own WhatsApp (the turno sheet's "Avisar al cliente" step).
@@ -180,6 +174,11 @@ class Tenant(TimestampMixin):
     # migration that added it turned it on for every tenant already using it,
     # so a pilot does not wake up to its money screens gone.
     addon_cobros = models.BooleanField(default=False)
+    # Reservas: the public booking page, which is what lets strangers see this
+    # tenant's free slots. The add-on IS the page, there is no second switch. Off
+    # for a new tenant on purpose: a feature that opened an internal diary to the
+    # internet by being deployed would be a breach, not a release.
+    addon_reservas = models.BooleanField(default=False)
     # Facturación electrónica. The flag is the purchase; whether the tenant has
     # also configured its provider is a separate question the invoicing app asks.
     addon_facturacion = models.BooleanField(default=False)
@@ -190,6 +189,11 @@ class Tenant(TimestampMixin):
     class Meta:
         db_table = 'tb_tenant'
         ordering = ('name',)
+
+    def start_trial(self, today):
+        self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)
+        self.addon_cobros = self.addon_reservas = True
+        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'addon_reservas', 'updated_at'])
 
     def __str__(self):
         return self.name

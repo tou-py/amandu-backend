@@ -21,7 +21,7 @@ back to.
 
 import re
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 from zoneinfo import ZoneInfo
 
 import phonenumbers
@@ -407,9 +407,11 @@ def _render(shop, context):
             # Kyo's own palette is the stylesheet; only a shop's own colour overrides it.
             'theme': shop.brand_color and derive_theme(shop.brand_color, shop.brand_intensity),
             'kyo_url': settings.KYO_LANDING_URL,
+            # Kyo's policies live on the landing; without it there is nothing to link.
+            'privacy_url': settings.KYO_LANDING_URL and urljoin(settings.KYO_LANDING_URL, 'privacidad/'),
+            'terms_url': settings.KYO_LANDING_URL and urljoin(settings.KYO_LANDING_URL, 'terminos/'),
             'socials': presence.social_links(shop),
             'maps_link': presence.maps_link(shop),
-            'maps_embed': presence.maps_embed_url(shop),
             'contact': _contact(shop),
             **context,
         },
