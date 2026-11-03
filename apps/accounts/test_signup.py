@@ -121,7 +121,9 @@ def age(user, days):
     CustomUser.objects.filter(pk=user.pk).update(created_at=timezone.now() - timedelta(days=days))
 
 
-def test_the_sweep_drops_a_signup_unconfirmed_for_a_week_with_its_business():
+def test_the_sweep_drops_a_signup_unconfirmed_for_a_week_with_its_business(settings):
+    settings.VAPID_PRIVATE_KEY = 'k'  # else the command raises, as on CI
+    settings.VAPID_SUBJECT = 'mailto:x@example.com'
     signup()
     age(CustomUser.objects.get(), days=8)
 
@@ -131,7 +133,9 @@ def test_the_sweep_drops_a_signup_unconfirmed_for_a_week_with_its_business():
     assert not Tenant.objects.exists()
 
 
-def test_the_sweep_leaves_a_recent_signup_and_anyone_confirmed():
+def test_the_sweep_leaves_a_recent_signup_and_anyone_confirmed(settings):
+    settings.VAPID_PRIVATE_KEY = 'k'  # else the command raises, as on CI
+    settings.VAPID_SUBJECT = 'mailto:x@example.com'
     signup()
     age(CustomUser.objects.get(), days=6)
     confirmed = CustomUser.objects.create_user(email='old@example.com', password=STRONG_PASSWORD)
