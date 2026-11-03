@@ -352,6 +352,9 @@ SPECTACULAR_SETTINGS = {
     # the enum gets a hash suffix and the frontend's types churn.
     'ENUM_NAME_OVERRIDES': {
         'AppointmentStatusEnum': 'apps.scheduling.models.Appointment.Status',
+        # Two fields called "addons": what a tenant has, and what its owner may switch.
+        'AddonEnum': ('cobros', 'reservas', 'facturacion'),
+        'SwitchableAddonEnum': ('cobros', 'reservas'),
     },
 }
 
