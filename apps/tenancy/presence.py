@@ -6,7 +6,6 @@ already normalised by TenantSerializer (bare handles, full https URLs).
 
 from urllib.parse import quote_plus, urlsplit
 
-from django.conf import settings
 
 
 def social_links(tenant):
@@ -43,12 +42,3 @@ def maps_link(tenant):
     if tenant.address:
         return f'https://www.google.com/maps/search/?api=1&query={quote_plus(tenant.address)}'
     return ''
-
-
-def maps_embed_url(tenant):
-    """An embeddable map of the address, or '' without an address or a key:
-    the Embed API refuses keyless requests, so there is no map to show then."""
-    key = settings.GOOGLE_MAPS_EMBED_KEY
-    if not (key and tenant.address):
-        return ''
-    return f'https://www.google.com/maps/embed/v1/place?key={quote_plus(key)}&q={quote_plus(tenant.address)}'
