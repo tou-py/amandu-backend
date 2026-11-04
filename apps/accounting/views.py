@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashBookSummarySerializer, CashEntrySerializer, VoidSerializer
 from apps.commons.errors import Refused
+from apps.scheduling.billing import local_today
 from apps.tenancy.permissions import HasCobros, IsTenantAdmin, IsTenantCoordinator
 from apps.tenancy.viewsets import TenantScopedModelViewSet
 
@@ -128,7 +129,8 @@ class CashEntryViewSet(TenantScopedModelViewSet):
         if entry.voided_at is not None:
             raise Refused('This payment is already void.', 'already_voided', status.HTTP_409_CONFLICT)
         entry.voided_at = timezone.now()
+        entry.voided_on = local_today(request.tenant)
         entry.voided_by = request.membership
         entry.void_reason = body.validated_data['reason']
-        entry.save(update_fields=['voided_at', 'voided_by', 'void_reason', 'updated_at'])
+        entry.save(update_fields=['voided_at', 'voided_on', 'voided_by', 'void_reason', 'updated_at'])
         return Response(self.get_serializer(entry).data)

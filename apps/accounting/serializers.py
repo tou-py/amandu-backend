@@ -21,14 +21,14 @@ class CashEntrySerializer(serializers.ModelSerializer):
         fields = (
             'id', 'kind', 'amount', 'occurred_on', 'concept', 'payment_method',
             'appointment', 'client', 'client_name', 'subscription', 'period',
-            'voided_at', 'void_reason', 'recorded_by_name', 'created_at', 'updated_at',
+            'voided_at', 'voided_on', 'void_reason', 'recorded_by_name', 'created_at', 'updated_at',
         )
         # client/subscription/period are read-only HERE: a payment for a turn or
         # a plan period is filed through the charge actions, which work out the
         # amount and hold the one-payment-per-thing constraints. This endpoint
         # stays the plain till entry.
         read_only_fields = (
-            'id', 'client', 'subscription', 'period', 'voided_at', 'void_reason',
+            'id', 'client', 'subscription', 'period', 'voided_at', 'voided_on', 'void_reason',
             'created_at', 'updated_at',
         )
 

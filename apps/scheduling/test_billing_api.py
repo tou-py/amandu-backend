@@ -304,7 +304,7 @@ def test_a_void_needs_a_reason(owner, studio, teacher, ada):
 def test_a_payment_is_voided_once(owner, studio):
     entry = CashEntry.objects.create(
         tenant=studio, kind='income', amount=1, occurred_on='2026-09-30', concept='x',
-        voided_at=timezone.now(),
+        voided_at=timezone.now(), voided_on=local_today(studio),
     )
 
     res = api(owner, studio).post(void_url(entry), {'reason': 'x'}, format='json')
