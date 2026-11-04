@@ -290,3 +290,20 @@ def test_a_day_still_to_come_is_refused_on_the_business_calendar(manager, salon,
 
     refused = http.post(LIST_URL, {**body, 'occurred_on': '2026-11-05'}, format='json')
     assert (refused.status_code, refused.data['code']) == (400, 'future_date')
+
+
+def test_an_entry_of_nothing_is_refused(manager, salon):
+    res = api(manager, salon).post(
+        LIST_URL,
+        {'kind': 'income', 'amount': 0, 'occurred_on': '2026-03-02', 'concept': 'x', 'payment_method': 'cash'},
+        format='json',
+    )
+    assert res.status_code == 400
+    assert 'amount' in res.data
+
+
+def test_the_database_refuses_an_entry_of_nothing(salon):
+    from django.db import IntegrityError, transaction
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        CashEntry.objects.create(tenant=salon, kind='income', amount=0, occurred_on=date(2026, 3, 2), concept='x')

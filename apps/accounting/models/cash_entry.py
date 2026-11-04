@@ -162,6 +162,8 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
                 ),
                 name='cash_entry_void_has_its_day',
             ),
+            # Nothing moved is not a movement.
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name='cash_entry_amount_above_zero'),
         ]
         verbose_name_plural = 'cash entries'
 

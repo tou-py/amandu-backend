@@ -24,6 +24,7 @@ class CashEntrySerializer(serializers.ModelSerializer):
             'appointment', 'client', 'client_name', 'subscription', 'period',
             'voided_at', 'voided_on', 'void_reason', 'recorded_by_name', 'created_at', 'updated_at',
         )
+        extra_kwargs = {'amount': {'min_value': 1}}
         # client/subscription/period are read-only HERE: a payment for a turn or
         # a plan period is filed through the charge actions, which work out the
         # amount and hold the one-payment-per-thing constraints. This endpoint
