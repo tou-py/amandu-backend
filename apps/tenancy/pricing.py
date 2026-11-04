@@ -16,8 +16,7 @@ from django.conf import settings
 BASE = 100_000  # Solo: the agenda with one professional attending.
 PER_EXTRA_PROFESSIONAL = 50_000  # Each professional after the first.
 COBROS = 80_000  # Monthly plans, charges and Por cobrar.
-# ponytail: not decided yet, and must be before this ships.
-CAJA = 0  # Cajas, salidas and saldos.
+CAJA = 50_000  # Cajas, salidas and saldos.
 RESERVAS = 50_000  # The public booking page and its WhatsApp notices.
 FACTURACION = 125_000  # Electronic invoicing, documents included below.
 FACTURACION_INCLUDED = 1_000  # Documents a month inside FACTURACION.
