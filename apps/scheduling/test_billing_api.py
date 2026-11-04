@@ -793,6 +793,7 @@ def test_unpaid_past_turns_since_go_live_are_owed(owner, studio, teacher, ada, l
 
     assert [t['appointment'] for t in summary['unpaid_turns']] == [str(owed.pk)]
     assert summary['unpaid_turns'][0]['amount'] == 80000
+    assert summary['unpaid_turns'][0]['professional'] == owed.professional_id
     assert summary['total'] == 80000
 
 

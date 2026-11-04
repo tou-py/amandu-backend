@@ -659,7 +659,7 @@ def test_the_digest_push_says_who_owes_and_opens_clients_who_owe(salon, team, ow
         call_command('send_reminders')
 
     payload = json.loads(sent.call_args.kwargs['data'])
-    assert payload['url'] == '/clientes?estado=vencido'
+    assert payload['url'] == '/cobros?estado=vencido'
     # August, September and October started; Oct 1 + 9 days of grace is not
     # past yet, so two periods are overdue.
     assert payload['body'] == '1 cliente debe Gs. 500.000.'

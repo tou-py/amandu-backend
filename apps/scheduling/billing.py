@@ -411,6 +411,7 @@ def _unpaid_turns(client, tenant):
         if state['state'] in (State.CHARGE, State.EXTRA):
             turns.append({
                 'appointment': appointment.pk,
+                'professional': appointment.professional_id,
                 'start': appointment.start,
                 'service_name': appointment.service.name,
                 'amount': state['amount'],
