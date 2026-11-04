@@ -1132,3 +1132,47 @@ def test_staff_do_not_read_the_business_receivables(staff, studio):
     res = api(staff, studio).get(RECEIVABLES)
 
     assert (res.status_code, res.data['code']) == (403, 'coordinator_required')
+
+
+# --- money is recorded for a day that has happened ----------------------------
+
+
+def tomorrow(tenant):
+    return (local_today(tenant) + timedelta(days=1)).isoformat()
+
+
+def test_a_turn_cannot_be_charged_for_a_day_still_to_come(owner, studio, teacher, ada):
+    appointment = turn(studio, teacher, [ada])
+    res = api(owner, studio).post(
+        charge_url(appointment),
+        {'client': str(ada.pk), 'payment_method': 'cash', 'occurred_on': tomorrow(studio)},
+        format='json',
+    )
+    assert (res.status_code, res.data['code']) == (400, 'future_date')
+    assert not CashEntry.objects.exists()
+
+
+def test_charging_everything_refuses_a_day_still_to_come(owner, studio, teacher, ada):
+    turn(studio, teacher, [ada])
+    res = api(owner, studio).post(
+        client_url(ada, 'charge-all'),
+        {'payment_method': 'cash', 'occurred_on': tomorrow(studio)},
+        format='json',
+    )
+    assert (res.status_code, res.data['code']) == (400, 'future_date')
+    assert not CashEntry.objects.exists()
+
+
+def test_paying_months_ahead_is_still_dated_on_a_day_that_happened(owner, studio, ada):
+    plan = Plan.objects.create(tenant=studio, name='Yoga', price=200000)
+    Subscription.objects.create(tenant=studio, client=ada, plan=plan, start_date=local_today(studio))
+    http = api(owner, studio)
+    url = client_url(ada, 'charge-periods')
+
+    refused = http.post(url, {'count': 2, 'payment_method': 'cash', 'occurred_on': tomorrow(studio)}, format='json')
+    assert (refused.status_code, refused.data['code']) == (400, 'future_date')
+    assert not CashEntry.objects.exists()
+
+    today = local_today(studio).isoformat()
+    paid = http.post(url, {'count': 2, 'payment_method': 'cash', 'occurred_on': today}, format='json')
+    assert paid.status_code == 201

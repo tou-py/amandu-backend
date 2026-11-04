@@ -109,6 +109,8 @@ class AlreadyPaid(APIException):
 
 def _file_payments(entries):
     """Insert payments as one fact, turning a lost race into AlreadyPaid."""
+    for entry in entries:
+        billing.refuse_future_day(entry.occurred_on, entry.tenant)
     try:
         with transaction.atomic():
             for entry in entries:

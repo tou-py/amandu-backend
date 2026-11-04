@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.accounting.models import CashEntry
+from apps.scheduling.billing import refuse_future_day
 from apps.scheduling.models import Appointment
 
 
@@ -42,6 +43,10 @@ class CashEntrySerializer(serializers.ModelSerializer):
             # turns a foreign id into a 400 instead of a cross-tenant link.
             self.fields['appointment'].queryset = Appointment.objects.for_tenant(tenant)
 
+
+    def validate_occurred_on(self, day):
+        refuse_future_day(day, self.context['request'].tenant)
+        return day
 
     def get_recorded_by_name(self, entry) -> str | None:
         user = entry.recorded_by

@@ -269,3 +269,24 @@ def test_a_coordinator_of_another_shop_may_not_file_here(db, django_user_model, 
 
     assert response.status_code == 403
     assert not CashEntry.objects.exists()
+
+
+# --- what the book refuses ---------------------------------------------------
+
+
+def test_a_day_still_to_come_is_refused_on_the_business_calendar(manager, salon, monkeypatch):
+    """01:00 UTC on the 5th is still the 4th in Asunción: the 4th is today, the 5th is not."""
+    from datetime import timezone as utc
+
+    from django.utils import timezone
+
+    salon.timezone = 'America/Asuncion'
+    salon.save(update_fields=['timezone'])
+    monkeypatch.setattr(timezone, 'now', lambda: datetime(2026, 11, 5, 1, 0, tzinfo=utc.utc))
+    http = api(manager, salon)
+    body = {'kind': 'income', 'amount': 100, 'concept': 'x', 'payment_method': 'cash'}
+
+    assert http.post(LIST_URL, {**body, 'occurred_on': '2026-11-04'}, format='json').status_code == 201
+
+    refused = http.post(LIST_URL, {**body, 'occurred_on': '2026-11-05'}, format='json')
+    assert (refused.status_code, refused.data['code']) == (400, 'future_date')
