@@ -488,6 +488,8 @@ class UnpaidTurnSerializer(serializers.Serializer):
     """A past turn nobody paid for, with what its billing state charges."""
 
     appointment = serializers.UUIDField()
+    # Whose turn it is: staff charge only their own, so a screen knows what to offer.
+    professional = serializers.IntegerField()
     start = serializers.DateTimeField()
     service_name = serializers.CharField()
     amount = serializers.IntegerField()

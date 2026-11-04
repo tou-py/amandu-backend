@@ -493,8 +493,8 @@ class Command(BaseCommand):
         return {
             'title': 'Cobros',
             'body': ' '.join(parts),
-            # Clientes, showing who owes (the old /por-cobrar redirects there).
-            'url': '/clientes?estado=vencido',
+            # Cobros, showing who owes (the old /por-cobrar redirects there).
+            'url': '/cobros?estado=vencido',
             'tag': f'notification-{notification.pk}',
         }
 

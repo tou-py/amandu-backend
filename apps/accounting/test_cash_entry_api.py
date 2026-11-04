@@ -50,7 +50,7 @@ def stylist(db, django_user_model, salon):
 
 @pytest.fixture
 def receptionist(db, django_user_model, salon):
-    """The front desk: takes the money all day, does not read the book."""
+    """The front desk: takes the money all day and reads what came in."""
     user = django_user_model.objects.create_user(email='c@example.com', password='pw')
     Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
     return user
@@ -199,7 +199,7 @@ def test_deleting_the_appointment_leaves_the_money_behind(manager, salon):
 
 # --- who may touch the money -------------------------------------------------
 
-def test_the_book_cannot_be_read_back_by_anyone(manager, salon):
+def test_the_book_cannot_be_corrected_by_anyone(manager, salon):
     """
     Write-only on purpose: nothing in the front end reads entries back, so no
     role -- not even an admin -- gets a route to list, read, correct or
@@ -212,7 +212,6 @@ def test_the_book_cannot_be_read_back_by_anyone(manager, salon):
     http = api(manager, salon)
     detail = reverse('accounting:cashentry-detail', args=[money.pk])
 
-    assert http.get(LIST_URL).status_code == 405
     assert http.get(detail).status_code == 405
     assert http.patch(detail, {'amount': 1}, format='json').status_code == 405
     assert http.delete(detail).status_code == 405
