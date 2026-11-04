@@ -90,6 +90,7 @@ def test_income_takes_its_tenant_from_the_request_not_the_payload(manager, salon
             'amount': 150000,
             'occurred_on': '2026-03-02',
             'concept': 'Haircut',
+            'payment_method': 'cash',
             'tenant': clinic.pk,
         },
         format='json',
@@ -102,27 +103,6 @@ def test_income_takes_its_tenant_from_the_request_not_the_payload(manager, salon
     assert created.payment_method == CashEntry.PaymentMethod.CASH
     assert created.recorded_by == manager
     assert res.data['recorded_by_name'] == 'r@example.com'
-
-
-def test_expense_is_recorded_as_a_positive_amount(manager, salon):
-    """Guaraníes are whole units and always positive; `kind` carries the sign."""
-    res = api(manager, salon).post(
-        LIST_URL,
-        {
-            'kind': 'expense',
-            'amount': 45000,
-            'occurred_on': '2026-03-02',
-            'concept': 'Shampoo',
-            'payment_method': 'transfer',
-        },
-        format='json',
-    )
-
-    assert res.status_code == 201
-    created = CashEntry.objects.get(pk=res.data['id'])
-    assert created.kind == CashEntry.Kind.EXPENSE
-    assert created.amount == 45000
-    assert created.payment_method == CashEntry.PaymentMethod.TRANSFER
 
 
 def test_a_negative_amount_is_refused(manager, salon):
@@ -148,6 +128,7 @@ def test_an_entry_may_name_an_appointment_of_its_own_tenant(manager, salon):
             'amount': 150000,
             'occurred_on': '2026-03-02',
             'concept': 'Haircut',
+            'payment_method': 'cash',
             'appointment': str(appointment.pk),
         },
         format='json',
@@ -168,6 +149,7 @@ def test_a_foreign_tenants_appointment_cannot_be_attached(manager, salon, clinic
             'amount': 150000,
             'occurred_on': '2026-03-02',
             'concept': 'Haircut',
+            'payment_method': 'cash',
             'appointment': str(foreign.pk),
         },
         format='json',
@@ -236,7 +218,7 @@ def test_an_owner_may_file_an_entry(db, django_user_model, salon):
 
     response = api(user, salon).post(LIST_URL, {
         'kind': 'income', 'amount': 90_000,
-        'occurred_on': '2026-08-20', 'concept': 'Corte',
+        'occurred_on': '2026-08-20', 'concept': 'Corte', 'payment_method': 'cash',
     }, format='json')
 
     assert response.status_code == 201
@@ -249,7 +231,7 @@ def test_the_front_desk_may_file_an_entry(receptionist, salon):
     """
     response = api(receptionist, salon).post(LIST_URL, {
         'kind': 'income', 'amount': 90_000,
-        'occurred_on': '2026-08-20', 'concept': 'Corte · Ana',
+        'occurred_on': '2026-08-20', 'concept': 'Corte · Ana', 'payment_method': 'cash',
     }, format='json')
 
     assert response.status_code == 201

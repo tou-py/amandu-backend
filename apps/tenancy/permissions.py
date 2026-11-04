@@ -176,3 +176,17 @@ class HasCobros(BasePermission):
     def has_permission(self, request, view):
         tenant = getattr(request, 'tenant', None)
         return tenant is not None and tenant.addon_cobros
+
+
+class HasCaja(BasePermission):
+    """
+    The tenant has Caja. Layered AFTER HasActiveMembership, like HasCobros. Its
+    data stays while it is off; only the screens built on it go away.
+    """
+
+    message = 'This business does not have Caja.'
+    code = 'addon_required'
+
+    def has_permission(self, request, view):
+        tenant = getattr(request, 'tenant', None)
+        return tenant is not None and tenant.addon_caja

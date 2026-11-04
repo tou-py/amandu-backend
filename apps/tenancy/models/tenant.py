@@ -182,6 +182,9 @@ class Tenant(TimestampMixin):
     # Facturación electrónica. The flag is the purchase; whether the tenant has
     # also configured its provider is a separate question the invoicing app asks.
     addon_facturacion = models.BooleanField(default=False)
+    # Caja: cajas, salidas and saldos. Needs Cobros, since a caja that misses the
+    # charges is wrong. Turned on by POST /api/cajas/setup/, which counts the money.
+    addon_caja = models.BooleanField(default=False)
     # Same claim pattern as plan_digest_date, for the daily "pay Kyo" notice:
     # the last LOCAL date it was claimed, so overlapping runs send it once.
     billing_notice_date = models.DateField(null=True, blank=True, editable=False)
@@ -189,6 +192,12 @@ class Tenant(TimestampMixin):
     class Meta:
         db_table = 'tb_tenant'
         ordering = ('name',)
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(addon_caja=False) | models.Q(addon_cobros=True),
+                name='tenant_caja_needs_cobros',
+            ),
+        ]
 
     def start_trial(self, today):
         self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)

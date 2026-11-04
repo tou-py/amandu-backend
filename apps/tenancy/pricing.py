@@ -16,6 +16,7 @@ from django.conf import settings
 BASE = 100_000  # Solo: the agenda with one professional attending.
 PER_EXTRA_PROFESSIONAL = 50_000  # Each professional after the first.
 COBROS = 80_000  # Monthly plans, charges and Por cobrar.
+CAJA = 50_000  # Cajas, salidas and saldos.
 RESERVAS = 50_000  # The public booking page and its WhatsApp notices.
 FACTURACION = 125_000  # Electronic invoicing, documents included below.
 FACTURACION_INCLUDED = 1_000  # Documents a month inside FACTURACION.
@@ -74,6 +75,7 @@ def addons(tenant) -> list[str]:
         name
         for name, on in (
             ('cobros', tenant.addon_cobros),
+            ('caja', tenant.addon_caja),
             ('reservas', tenant.addon_reservas),
             ('facturacion', tenant.addon_facturacion),
         )
@@ -102,6 +104,8 @@ def monthly_lines(tenant, professionals: int) -> list[dict]:
         })
     if tenant.addon_cobros:
         lines.append({'concept': 'cobros', 'quantity': 1, 'amount': COBROS})
+    if tenant.addon_caja:
+        lines.append({'concept': 'caja', 'quantity': 1, 'amount': CAJA})
     if tenant.addon_reservas:
         lines.append({'concept': 'reservas', 'quantity': 1, 'amount': RESERVAS})
     if tenant.addon_facturacion:

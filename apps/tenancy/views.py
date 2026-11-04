@@ -97,7 +97,11 @@ class KyoSubscriptionView(APIView):
         if adding and pricing.billing_state(tenant, timezone.localdate()) == pricing.READ_ONLY:
             raise PermissionDenied('The payment period ended; the account is read-only.', code='billing_read_only')
         tenant.addon_cobros, tenant.addon_reservas = cobros, reservas
-        tenant.save(update_fields=['addon_cobros', 'addon_reservas', 'updated_at'])
+        # Caja is turned on by counting the money (POST /api/cajas/setup/), so it
+        # is not in this list, and leaving it out does not turn it off. Dropping
+        # Cobros does: a caja that misses the charges would be wrong.
+        tenant.addon_caja = tenant.addon_caja and cobros
+        tenant.save(update_fields=['addon_cobros', 'addon_caja', 'addon_reservas', 'updated_at'])
         return Response(self._answer(tenant))
 
     def _answer(self, tenant):
@@ -120,6 +124,7 @@ class KyoSubscriptionView(APIView):
                 'base': pricing.BASE,
                 'per_extra_professional': pricing.PER_EXTRA_PROFESSIONAL,
                 'cobros': pricing.COBROS,
+                'caja': pricing.CAJA,
                 'reservas': pricing.RESERVAS,
                 'facturacion': pricing.FACTURACION,
                 'facturacion_included': pricing.FACTURACION_INCLUDED,
