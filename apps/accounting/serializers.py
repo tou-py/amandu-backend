@@ -73,6 +73,19 @@ def refuse_unless_each_method_once(methods):
         )
 
 
+class MethodAssignmentSerializer(serializers.Serializer):
+    payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
+    caja = OwnCajaField()
+
+
+class MethodMapSerializer(serializers.Serializer):
+    assignments = MethodAssignmentSerializer(many=True)
+
+    def validate_assignments(self, assignments):
+        refuse_unless_each_method_once([one['payment_method'] for one in assignments])
+        return assignments
+
+
 class SetupCajaSerializer(serializers.Serializer):
     # Named when counting a caja that already exists, which is how Caja comes back
     # on: what happened while it was off cannot be known, so it is counted again.

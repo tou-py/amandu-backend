@@ -14,6 +14,7 @@ from apps.accounting.serializers import (
     CajaNameSerializer,
     CajaSerializer,
     CajaSetupSerializer,
+    MethodMapSerializer,
 )
 from apps.commons.errors import Refused
 from apps.scheduling.billing import local_today
@@ -21,6 +22,55 @@ from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
 from apps.tenancy.permissions import HasActiveMembership, HasCaja, IsTenantAdmin, IsTenantOwner
 from apps.tenancy.viewsets import TenantScopedModelViewSet
+
+
+class CajaViewSet(TenantScopedModelViewSet):
+    """
+    Where the business keeps money. Archived cajas are gone from here; they live on
+    in the movements that name them. Nothing is ever deleted.
+    """
+
+    queryset = Caja.objects.filter(archived=False).prefetch_related('methods')
+    serializer_class = CajaSerializer
+    http_method_names = ('get', 'head', 'post', 'patch', 'put', 'options')
+    pagination_class = None
+    permission_classes = (*TenantScopedModelViewSet.permission_classes, HasCaja)
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.action not in ('list', 'retrieve'):
+            permissions.append(IsTenantAdmin())
+        return permissions
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.tenant, opened_on=local_today(self.request.tenant))
+
+    @extend_schema(request=None, responses={204: None})
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None):
+        """Only an empty caja, with no medio de pago landing in it."""
+        caja = self.get_object()
+        if caja.methods.exists():
+            raise Refused('A medio de pago still lands in this caja.', 'caja_in_use', status.HTTP_409_CONFLICT)
+        if saldo(caja, local_today(request.tenant)) != 0:
+            raise Refused('This caja still holds money.', 'caja_not_empty', status.HTTP_409_CONFLICT)
+        caja.archived = True
+        caja.save(update_fields=['archived', 'updated_at'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(request=MethodMapSerializer, responses=CajaSerializer(many=True))
+    @action(detail=False, methods=['put'], url_path='methods')
+    def assign_methods(self, request):
+        """Replace the whole map, so a medio de pago can never be left with no caja."""
+        body = MethodMapSerializer(data=request.data, context=self.get_serializer_context())
+        body.is_valid(raise_exception=True)
+        with transaction.atomic():
+            MethodCaja.objects.for_tenant(request.tenant).delete()
+            MethodCaja.objects.bulk_create([
+                MethodCaja(tenant=request.tenant, payment_method=one['payment_method'], caja=one['caja'])
+                for one in body.validated_data['assignments']
+            ])
+        return Response(self.get_serializer(self.get_queryset(), many=True).data)
 
 
 class CajaSetupView(APIView):
