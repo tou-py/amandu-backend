@@ -47,6 +47,7 @@ from django.db.models import (
 from django.db.models.functions import Least
 from django.utils import timezone
 
+from apps.commons.errors import Refused
 from apps.commons.dates import add_months
 from apps.scheduling.models import Appointment, AppointmentClient, Client, Subscription
 from apps.tenancy.models import Tenant
@@ -101,6 +102,15 @@ def local_today(tenant):
     sweep makes.
     """
     return timezone.localdate(timezone=ZoneInfo(tenant.timezone))
+
+
+def refuse_future_day(day, tenant):
+    """
+    Money is recorded for a day that has happened. A date ahead would sit outside
+    every period read up to today, then surface unannounced when its day came.
+    """
+    if day > local_today(tenant):
+        raise Refused('That day has not happened yet.', 'future_date')
 
 
 def _day(moment, tenant):

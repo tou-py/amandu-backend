@@ -106,6 +106,10 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
     # that money was taken and given back and who decided it; everything that
     # reads payments -- coverage, debt, totals -- filters on voided_at IS NULL.
     voided_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # The business day of the void, the same way `occurred_on` is for the payment.
+    # An entry still counts on its own day and is reversed on this one, so voiding
+    # never rewrites a past period's figure (docs/adr/0001 in amandu-frontend).
+    voided_on = models.DateField(null=True, blank=True, editable=False)
     voided_by = models.ForeignKey(
         'accounts.Membership',
         on_delete=models.SET_NULL,
@@ -150,6 +154,16 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
                 ),
                 name='one_live_payment_per_attendee',
             ),
+            # A void with no day would stay counted in any figure built on the day.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(voided_at__isnull=True, voided_on__isnull=True)
+                    | models.Q(voided_at__isnull=False, voided_on__isnull=False)
+                ),
+                name='cash_entry_void_has_its_day',
+            ),
+            # Nothing moved is not a movement.
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name='cash_entry_amount_above_zero'),
         ]
         verbose_name_plural = 'cash entries'
 
