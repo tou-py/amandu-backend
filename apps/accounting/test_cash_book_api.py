@@ -108,12 +108,15 @@ def test_a_void_stays_listed_and_counts_for_nothing(desk, salon):
 
 
 def test_an_empty_book_adds_up_to_zero(desk):
-    assert desk.get(SUMMARY_URL).data == {'total': 0, 'count': 0, 'by_method': []}
+    assert desk.get(SUMMARY_URL).data == {
+        'total': 0, 'count': 0, 'by_method': [], 'expenses': None, 'by_category': None, 'difference': None,
+    }
 
 
 def test_expenses_are_not_money_collected(desk, salon):
     CashEntry.objects.create(
-        tenant=salon, kind=CashEntry.Kind.EXPENSE, amount=999, occurred_on=date(2026, 11, 2), concept='Luz', category='utilities',
+        tenant=salon, kind=CashEntry.Kind.EXPENSE, amount=999, occurred_on=date(2026, 11, 2), concept='Luz',
+        category='utilities',
         caja=Caja.objects.create(tenant=salon, name='Principal', opened_on=date(2026, 11, 1), opening_balance=0),
     )
     assert desk.get(LIST_URL).data['results'] == []
