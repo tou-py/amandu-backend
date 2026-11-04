@@ -13,12 +13,14 @@ class CashEntrySerializer(serializers.ModelSerializer):
 
     # The name the team list shows (Membership.display_name); null when unknown.
     recorded_by_name = serializers.SerializerMethodField()
+    # Who paid, for the book; null once the client file is erased.
+    client_name = serializers.CharField(source='client.name', read_only=True, default=None, allow_null=True)
 
     class Meta:
         model = CashEntry
         fields = (
             'id', 'kind', 'amount', 'occurred_on', 'concept', 'payment_method',
-            'appointment', 'client', 'subscription', 'period',
+            'appointment', 'client', 'client_name', 'subscription', 'period',
             'voided_at', 'void_reason', 'recorded_by_name', 'created_at', 'updated_at',
         )
         # client/subscription/period are read-only HERE: a payment for a turn or
@@ -44,6 +46,20 @@ class CashEntrySerializer(serializers.ModelSerializer):
     def get_recorded_by_name(self, entry) -> str | None:
         user = entry.recorded_by
         return user and (user.get_full_name().strip() or user.email)
+
+
+class MethodTotalSerializer(serializers.Serializer):
+    payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
+    total = serializers.IntegerField()
+    count = serializers.IntegerField()
+
+
+class CashBookSummarySerializer(serializers.Serializer):
+    """What came in, for the same filters as the list. Voided entries count for nothing."""
+
+    total = serializers.IntegerField()
+    count = serializers.IntegerField()
+    by_method = MethodTotalSerializer(many=True)
 
 
 class VoidSerializer(serializers.Serializer):
