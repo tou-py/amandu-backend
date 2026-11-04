@@ -16,7 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.accounting.models import CashEntry
+from apps.accounting.models import Caja, CashEntry, MethodCaja
 from apps.accounts.models import Membership
 from apps.commons.dates import add_months
 from apps.scheduling.billing import local_today
@@ -1193,3 +1193,73 @@ def test_a_charge_must_say_how_the_money_arrived(owner, studio, teacher, ada):
         assert res.status_code == 400
         assert 'payment_method' in res.data
     assert not CashEntry.objects.exists()
+
+
+# -- Where a charge lands, with Caja on ---------------------------------------
+
+
+@pytest.fixture
+def drawers(studio):
+    Tenant.objects.filter(pk=studio.pk).update(addon_caja=True)
+    studio.refresh_from_db()
+    today = local_today(studio)
+    main = Caja.objects.create(tenant=studio, name='Principal', opened_on=today, opening_balance=0)
+    bank = Caja.objects.create(tenant=studio, name='Banco', opened_on=today, opening_balance=0)
+    for method in CashEntry.PaymentMethod.values:
+        MethodCaja.objects.create(tenant=studio, payment_method=method, caja=bank if method == 'card' else main)
+    return main, bank
+
+
+def charge_body(ada, **changes):
+    return {'client': ada.pk, 'payment_method': 'cash', **changes}
+
+
+def test_a_charge_lands_where_its_method_maps(owner, studio, teacher, ada, drawers):
+    main, bank = drawers
+    http = api(owner, studio)
+    res = http.post(charge_url(turn(studio, teacher, [ada])), charge_body(ada, payment_method='card'), format='json')
+    assert (res.status_code, res.data['caja'], res.data['caja_name']) == (201, bank.pk, 'Banco')
+
+
+def test_the_counter_may_send_a_charge_to_another_caja(owner, studio, teacher, ada, drawers):
+    main, bank = drawers
+    http = api(owner, studio)
+    res = http.post(charge_url(turn(studio, teacher, [ada])), charge_body(ada, caja=bank.pk), format='json')
+    assert res.data['caja'] == bank.pk
+
+
+def test_a_charge_cannot_land_in_another_business_or_an_archived_caja(owner, studio, gym, teacher, ada, drawers):
+    foreign = Caja.objects.create(tenant=gym, name='Suya', opened_on=date(2026, 1, 1), opening_balance=0)
+    gone = Caja.objects.create(tenant=studio, name='Vieja', opened_on=date(2026, 1, 1), opening_balance=0, archived=True)
+    http = api(owner, studio)
+    appointment = turn(studio, teacher, [ada])
+    for caja in (foreign, gone):
+        res = http.post(charge_url(appointment), charge_body(ada, caja=caja.pk), format='json')
+        assert (res.status_code, res.data['code']) == (400, 'unknown_caja')
+    assert not CashEntry.objects.exists()
+
+
+def test_a_charge_cannot_be_dated_before_its_caja_opened(owner, studio, teacher, ada, drawers):
+    day = local_today(studio) - timedelta(days=1)
+    res = api(owner, studio).post(
+        charge_url(turn(studio, teacher, [ada])), charge_body(ada, occurred_on=day.isoformat()), format='json'
+    )
+    assert (res.status_code, res.data['code']) == (400, 'before_caja_opened')
+    assert not CashEntry.objects.exists()
+
+
+def test_charge_all_lands_every_row_or_none(owner, studio, teacher, ada, drawers):
+    main, bank = drawers
+    turn(studio, teacher, [ada])
+    http = api(owner, studio)
+    day = local_today(studio) - timedelta(days=1)
+    res = http.post(client_url(ada, 'charge-all'), {'payment_method': 'cash', 'occurred_on': day}, format='json')
+    assert res.data['code'] == 'before_caja_opened'
+    assert not CashEntry.objects.exists()
+    res = http.post(client_url(ada, 'charge-all'), {'payment_method': 'cash', 'caja': bank.pk}, format='json')
+    assert [row['caja'] for row in res.data['entries']] == [bank.pk]
+
+
+def test_with_caja_off_a_charge_carries_none_whatever_it_asks(owner, studio, teacher, ada):
+    res = api(owner, studio).post(charge_url(turn(studio, teacher, [ada])), charge_body(ada, caja=999), format='json')
+    assert (res.status_code, res.data['caja']) == (201, None)

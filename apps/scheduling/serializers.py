@@ -1335,6 +1335,9 @@ class ChargeAllSerializer(serializers.Serializer):
     payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
     # The day the money arrived. Omitted, today in the business's calendar.
     occurred_on = serializers.DateField(required=False)
+    # Where it lands while Caja is on. Omitted, the caja its method maps to, so an
+    # installed PWA keeps working. With Caja off it is ignored.
+    caja = serializers.IntegerField(required=False)
 
 
 class ChargeAllResultSerializer(serializers.Serializer):
@@ -1367,3 +1370,4 @@ class ChargeTurnSerializer(serializers.Serializer):
     amount = serializers.IntegerField(min_value=1, required=False)
     payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
     occurred_on = serializers.DateField(required=False)
+    caja = serializers.IntegerField(required=False)

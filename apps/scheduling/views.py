@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 # imports its views, so there is no cycle to make here. Imported at all because
 # charging a turn or a plan period IS filing a cash entry: the payment and the
 # book are one row, so they cannot disagree.
+from apps.accounting.cajas import caja_for_income
 from apps.accounting.models import CashEntry
 from apps.accounting.serializers import CashEntrySerializer
 from apps.accounts.models import Membership
@@ -107,10 +108,14 @@ class AlreadyPaid(APIException):
     default_code = 'already_paid'
 
 
-def _file_payments(entries):
-    """Insert payments as one fact, turning a lost race into AlreadyPaid."""
+def _file_payments(entries, caja=None):
+    """
+    Insert payments as one fact, turning a lost race into AlreadyPaid. Every path
+    that takes money comes through here, so all of them land in a caja.
+    """
     for entry in entries:
         billing.refuse_future_day(entry.occurred_on, entry.tenant)
+        entry.caja = caja_for_income(entry.tenant, entry.payment_method, entry.occurred_on, caja)
     try:
         with transaction.atomic():
             for entry in entries:
@@ -229,7 +234,7 @@ class ClientViewSet(TenantScopedModelViewSet):
                 )
             entries = _file_payments([
                 _period_payment(request, client, period, body.validated_data) for period in periods
-            ])
+            ], body.validated_data.get('caja'))
         return Response(CashEntrySerializer(entries, many=True).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(request=ChargeAllSerializer, responses={201: ChargeAllResultSerializer})
@@ -263,7 +268,7 @@ class ClientViewSet(TenantScopedModelViewSet):
             ]
             if not entries:
                 raise Refused('This client owes nothing.', 'nothing_to_charge', status.HTTP_409_CONFLICT)
-            _file_payments(entries)
+            _file_payments(entries, body.validated_data.get('caja'))
         return Response(
             ChargeAllResultSerializer({'entries': entries, 'total': summary['total']}).data,
             status=status.HTTP_201_CREATED,
@@ -1349,7 +1354,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
 
         (entry,) = _file_payments([
             _turn_payment(request, link.client, appointment, amount, body.validated_data)
-        ])
+        ], body.validated_data.get('caja'))
         return Response(CashEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(request=AttendanceSerializer, responses=AppointmentSerializer)
