@@ -170,7 +170,7 @@ def test_the_counter_can_edit_the_amount_and_the_day(owner, studio, teacher, ada
 
     res = api(owner, studio).post(
         charge_url(appointment),
-        {'client': str(ada.pk), 'amount': 70000, 'occurred_on': '2026-09-30'},
+        {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 70000, 'occurred_on': '2026-09-30'},
         format='json',
     )
 
@@ -183,7 +183,7 @@ def test_staff_do_not_charge_a_colleagues_turn(staff, studio, teacher, ada):
     """Staff write only their own appointments, and a charge is one of those writes."""
     appointment = turn(studio, teacher, [ada])
 
-    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = api(staff, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert res.status_code == 403
     assert not CashEntry.objects.exists()
@@ -194,11 +194,11 @@ def test_staff_charge_the_price_but_do_not_edit_it(staff, studio, teacher, ada, 
     unpriced = turn(studio, teacher, [ada], price=None, start=YESTERDAY - timedelta(hours=2))
     http = api(teacher.user, studio)
 
-    edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 70000}, format='json')
+    edited = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 70000}, format='json')
     # The amount the form prefilled, sent back unchanged, is not an edit.
-    same = http.post(charge_url(appointment), {'client': str(bob.pk), 'amount': 80000}, format='json')
+    same = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(bob.pk), 'amount': 80000}, format='json')
     # A turn with no price has nothing to edit: whoever charges says how much.
-    typed = http.post(charge_url(unpriced), {'client': str(ada.pk), 'amount': 50000}, format='json')
+    typed = http.post(charge_url(unpriced), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 50000}, format='json')
 
     assert (edited.status_code, edited.data['code']) == (403, 'amount_edit_forbidden')
     assert same.status_code == 201
@@ -209,19 +209,19 @@ def test_an_unpriced_turn_needs_an_amount(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada], price=None)
     http = api(owner, studio)
 
-    res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
     assert (res.status_code, res.data['code']) == (400, 'amount_required')
     assert http.post(
-        charge_url(appointment), {'client': str(ada.pk), 'amount': 50000}, format='json'
+        charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 50000}, format='json'
     ).status_code == 201
 
 
 def test_a_paid_attendee_cannot_be_charged_twice(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada])
     http = api(owner, studio)
-    http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
-    res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert (res.status_code, res.data['code']) == (409, 'already_paid')
     assert CashEntry.objects.count() == 1
@@ -230,7 +230,7 @@ def test_a_paid_attendee_cannot_be_charged_twice(owner, studio, teacher, ada):
 def test_only_someone_on_the_roster_is_charged(owner, studio, teacher, ada, bob):
     appointment = turn(studio, teacher, [ada])
 
-    res = api(owner, studio).post(charge_url(appointment), {'client': str(bob.pk)}, format='json')
+    res = api(owner, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(bob.pk)}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'not_an_attendee')
 
@@ -241,7 +241,7 @@ def test_a_cancelled_or_pending_turn_cannot_be_charged(owner, studio, teacher, a
     appointment = turn(studio, teacher, [ada])
     Appointment.objects.filter(pk=appointment.pk).update(status=status)
 
-    res = api(owner, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = api(owner, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert (res.status_code, res.data['code']) == (409, 'turn_not_chargeable')
     assert not CashEntry.objects.exists()
@@ -251,7 +251,7 @@ def test_another_tenants_turn_cannot_be_charged(django_user_model, studio, gym, 
     appointment = turn(studio, teacher, [ada])
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
 
-    res = api(outsider, gym).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = api(outsider, gym).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert res.status_code == 404
     assert not CashEntry.objects.exists()
@@ -263,7 +263,7 @@ def test_another_tenants_turn_cannot_be_charged(django_user_model, studio, gym, 
 def test_an_owner_voids_a_payment_and_the_attendee_owes_again(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada])
     http = api(owner, studio)
-    paid = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json').data
+    paid = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json').data
 
     res = http.post(void_url(CashEntry.objects.get(pk=paid['id'])), {'reason': 'Cobro duplicado'}, format='json')
 
@@ -272,7 +272,7 @@ def test_an_owner_voids_a_payment_and_the_attendee_owes_again(owner, studio, tea
     assert res.data['void_reason'] == 'Cobro duplicado'
     assert billing_of(http, appointment)['Ada']['state'] == 'charge'
     # The void is the undo: the same turn can be charged again.
-    assert http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json').status_code == 201
+    assert http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json').status_code == 201
 
 
 @pytest.mark.parametrize('role', [Membership.Role.COORDINATOR, Membership.Role.STAFF])
@@ -281,7 +281,7 @@ def test_front_desk_charges_but_cannot_void(django_user_model, studio, teacher, 
     caller = teacher.user if role == Membership.Role.STAFF else member(django_user_model, studio, role, 'x@example.com')[0]
     appointment = turn(studio, teacher, [ada])
     http = api(caller, studio)
-    paid = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    paid = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     res = http.post(void_url(CashEntry.objects.get(pk=paid.data['id'])), {'reason': 'x'}, format='json')
 
@@ -354,9 +354,9 @@ def test_the_next_charge_skips_what_is_paid(owner, studio, pilates, ada):
     start = add_months(local_today(studio), -2)
     Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date=start)
     http = api(owner, studio)
-    http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
-    res = http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    res = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     assert [e['period'] for e in res.data] == [add_months(start, 1).isoformat()]
 
@@ -365,10 +365,10 @@ def test_a_voided_period_is_owed_again(owner, studio, pilates, ada):
     start = add_months(local_today(studio), -1)
     Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date=start)
     http = api(owner, studio)
-    first = http.post(client_url(ada, 'charge-periods'), {}, format='json').data[0]
+    first = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json').data[0]
     http.post(void_url(CashEntry.objects.get(pk=first['id'])), {'reason': 'x'}, format='json')
 
-    res = http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    res = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     assert res.data[0]['period'] == start.isoformat()
 
@@ -378,7 +378,7 @@ def test_an_ended_subscription_has_only_so_many_periods(owner, studio, pilates, 
         tenant=studio, client=ada, plan=pilates, start_date='2026-01-14', end_date='2026-03-13'
     )
 
-    res = api(owner, studio).post(client_url(ada, 'charge-periods'), {'count': 3}, format='json')
+    res = api(owner, studio).post(client_url(ada, 'charge-periods'), {'payment_method': 'cash', 'count': 3}, format='json')
 
     assert res.status_code == 400
     assert res.data['code'] == 'not_enough_periods'
@@ -386,7 +386,7 @@ def test_an_ended_subscription_has_only_so_many_periods(owner, studio, pilates, 
 
 
 def test_a_client_without_a_plan_has_no_periods_to_charge(owner, studio, ada):
-    res = api(owner, studio).post(client_url(ada, 'charge-periods'), {}, format='json')
+    res = api(owner, studio).post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     assert res.status_code == 400
     assert res.data['code'] == 'not_enough_periods'
@@ -396,7 +396,7 @@ def test_another_tenants_client_cannot_be_charged_periods(django_user_model, stu
     Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
 
-    res = api(outsider, gym).post(client_url(ada, 'charge-periods'), {}, format='json')
+    res = api(outsider, gym).post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     assert res.status_code == 404
 
@@ -436,9 +436,9 @@ def test_a_client_without_a_plan_owes_nothing(owner, studio, ada):
 def test_the_payment_history_keeps_voided_payments(owner, studio, teacher, ada):
     appointment = turn(studio, teacher, [ada])
     http = api(owner, studio)
-    paid = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json').data
+    paid = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json').data
     http.post(void_url(CashEntry.objects.get(pk=paid['id'])), {'reason': 'x'}, format='json')
-    http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     res = http.get(client_url(ada, 'payments'))
 
@@ -456,7 +456,7 @@ def test_deleting_a_client_keeps_the_money_they_paid(owner, studio, pilates, ada
     """The cash book records what the shop took; erasing the payer does not un-take it."""
     Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
     http = api(owner, studio)
-    http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     res = http.delete(client_url(ada))
 
@@ -500,7 +500,7 @@ def pay_owed(http, client):
     """Settle every started period through the API, so a plan state shows."""
     owed = http.get(client_url(client)).data['billing_summary']['owed_periods']
     if owed:
-        http.post(client_url(client, 'charge-periods'), {'count': len(owed)}, format='json')
+        http.post(client_url(client, 'charge-periods'), {'payment_method': 'cash', 'count': len(owed)}, format='json')
 
 
 def test_a_subscribed_attendee_inside_the_quota_is_covered(owner, studio, teacher, pilates, ada):
@@ -520,7 +520,7 @@ def test_a_covered_attendee_has_nothing_to_charge(owner, studio, teacher, pilate
     subscribe(ada, pilates, today)
     appointment = turn(studio, teacher, [ada], start=at(studio, today + timedelta(days=1)))
 
-    res = api(owner, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = api(owner, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
     assert not CashEntry.objects.exists()
@@ -559,7 +559,7 @@ def test_a_paid_turn_wins_over_a_plan_debt(owner, studio, teacher, pilates, ada)
     appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
     http = api(owner, studio)
 
-    res = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 80000}, format='json')
+    res = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 80000}, format='json')
 
     assert res.status_code == 201
     assert billing_of(http, appointment)['Ada']['state'] == 'paid'
@@ -570,7 +570,7 @@ def test_a_covered_turn_is_not_charged_while_the_month_is_owed(staff, studio, te
     subscribe(ada, pilates, add_months(local_today(studio), -1))
     appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
 
-    res = api(teacher.user, studio).post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
+    res = api(teacher.user, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 1}, format='json')
 
     assert (res.status_code, res.data['code']) == (400, 'covered_by_plan')
     assert not CashEntry.objects.exists()
@@ -582,8 +582,8 @@ def test_a_turn_charged_while_the_month_is_owed_defaults_to_its_price(staff, stu
     appointment = turn(studio, teacher, [ada], start=at(studio, start - timedelta(days=1)))
     http = api(teacher.user, studio)
 
-    edited = http.post(charge_url(appointment), {'client': str(ada.pk), 'amount': 1}, format='json')
-    priced = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    edited = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk), 'amount': 1}, format='json')
+    priced = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert (edited.status_code, edited.data['code']) == (403, 'amount_edit_forbidden')
     assert (priced.status_code, priced.data['amount']) == (201, 80000)
@@ -593,7 +593,7 @@ def test_voiding_a_period_payment_brings_the_debt_back(owner, studio, teacher, p
     subscribe(ada, pilates, add_months(local_today(studio), -1))
     appointment = turn(studio, teacher, [ada], start=at(studio, local_today(studio) + timedelta(days=1)))
     http = api(owner, studio)
-    paid = http.post(client_url(ada, 'charge-periods'), {}, format='json').data[0]
+    paid = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json').data[0]
     assert billing_of(http, appointment)['Ada']['state'] == 'covered'
 
     http.post(void_url(CashEntry.objects.get(pk=paid['id'])), {'reason': 'x'}, format='json')
@@ -787,7 +787,7 @@ def test_unpaid_past_turns_since_go_live_are_owed(owner, studio, teacher, ada, l
     cancelled = turn(studio, teacher, [ada], start=at(studio, today - timedelta(days=4)))
     Appointment.objects.filter(pk=cancelled.pk).update(status='cancelled')
     http = api(owner, studio)
-    http.post(charge_url(paid), {'client': str(ada.pk)}, format='json')
+    http.post(charge_url(paid), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     summary = http.get(client_url(ada)).data['billing_summary']
 
@@ -1000,8 +1000,8 @@ def test_charge_all_twice_charges_once(owner, studio, pilates, ada):
     subscribe(ada, pilates, local_today(studio))
     http = api(owner, studio)
 
-    first = http.post(client_url(ada, 'charge-all'), {}, format='json')
-    second = http.post(client_url(ada, 'charge-all'), {}, format='json')
+    first = http.post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json')
+    second = http.post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json')
 
     assert first.status_code == 201
     assert (second.status_code, second.data['code']) == (409, 'nothing_to_charge')
@@ -1031,14 +1031,14 @@ def test_charge_all_files_everything_or_nothing(
 
     monkeypatch.setattr(billing, 'billing_summary', raced)
 
-    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json')
 
     assert (res.status_code, res.data['code']) == (409, 'already_paid')
     assert not CashEntry.objects.filter(period__isnull=False).exists()
 
 
 def test_charge_all_with_nothing_owed(owner, studio, ada):
-    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json')
 
     assert (res.status_code, res.data['code']) == (409, 'nothing_to_charge')
 
@@ -1047,7 +1047,7 @@ def test_another_tenants_client_cannot_be_charged_all(django_user_model, studio,
     subscribe(ada, pilates, local_today(studio))
     outsider = member(django_user_model, gym, Membership.Role.OWNER, 'g@example.com')[0]
 
-    assert api(outsider, gym).post(client_url(ada, 'charge-all'), {}, format='json').status_code == 404
+    assert api(outsider, gym).post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json').status_code == 404
     assert not CashEntry.objects.exists()
 
 
@@ -1068,7 +1068,7 @@ def test_a_turn_charge_names_the_turn_and_who_charged_it(django_user_model, stud
     appointment = turn(studio, teacher, [ada], start=at(studio, date(2026, 10, 5), 13))
     Service.objects.filter(pk=appointment.service_id).update(name='Corte y peinado')
 
-    res = api(staff, studio).post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = api(staff, studio).post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
 
     assert res.data['concept'] == 'Turno · Corte y peinado · Ada · lun 5/10 13:00 · con Julián Ferreyra'
     assert res.data['recorded_by_name'] == 'Lucía Gómez'
@@ -1078,7 +1078,7 @@ def test_a_period_charge_names_the_plan_and_the_range(staff, studio, ada):
     plan = Plan.objects.create(tenant=studio, name='Corte mensual · 4', price=250000, sessions_per_period=4)
     subscribe(ada, plan, date(2026, 10, 5))
 
-    res = api(staff, studio).post(client_url(ada, 'charge-periods'), {'count': 1}, format='json')
+    res = api(staff, studio).post(client_url(ada, 'charge-periods'), {'payment_method': 'cash', 'count': 1}, format='json')
 
     assert res.data[0]['concept'] == 'Mensualidad · Corte mensual · 4 · Ada · octubre (5/10 al 4/11)'
     # No name on the account: the email stands in, as on the team list.
@@ -1088,7 +1088,7 @@ def test_a_period_charge_names_the_plan_and_the_range(staff, studio, ada):
 def test_charge_all_records_who_charged(owner, studio, pilates, ada):
     subscribe(ada, pilates, local_today(studio))
 
-    res = api(owner, studio).post(client_url(ada, 'charge-all'), {}, format='json')
+    res = api(owner, studio).post(client_url(ada, 'charge-all'), {'payment_method': 'cash'}, format='json')
 
     assert [e['recorded_by_name'] for e in res.data['entries']] == ['o@example.com']
 
@@ -1110,7 +1110,7 @@ def test_a_no_show_owes_nothing_but_can_still_be_charged(owner, studio, teacher,
     assert billing_of(http, appointment)['Ada']['state'] == 'no_show'
 
     # A business that bills absences charges it on purpose, at the turn's price.
-    res = http.post(charge_url(appointment), {'client': str(ada.pk)}, format='json')
+    res = http.post(charge_url(appointment), {'payment_method': 'cash', 'client': str(ada.pk)}, format='json')
     assert (res.status_code, res.data['amount']) == (201, 80000)
     assert billing_of(http, appointment)['Ada']['state'] == 'paid'
 
@@ -1119,7 +1119,7 @@ def test_a_no_show_past_the_quota_owes_nothing(owner, studio, teacher, ada):
     plan = Plan.objects.create(tenant=studio, name='Uno', price=100000, sessions_per_period=1)
     subscribe(ada, plan, add_months(local_today(studio), -1))
     http = api(owner, studio)
-    http.post(client_url(ada, 'charge-periods'), {'count': 2}, format='json')
+    http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash', 'count': 2}, format='json')
     turn(studio, teacher, [ada], start=YESTERDAY - timedelta(hours=3))
     absent = turn(studio, teacher, [ada])
     AppointmentClient.objects.filter(appointment=absent).update(attendance='no_show')
@@ -1176,3 +1176,20 @@ def test_paying_months_ahead_is_still_dated_on_a_day_that_happened(owner, studio
     today = local_today(studio).isoformat()
     paid = http.post(url, {'count': 2, 'payment_method': 'cash', 'occurred_on': today}, format='json')
     assert paid.status_code == 201
+
+
+# --- nobody's money is assumed to be cash -------------------------------------
+
+
+def test_a_charge_must_say_how_the_money_arrived(owner, studio, teacher, ada):
+    appointment = turn(studio, teacher, [ada])
+    http = api(owner, studio)
+    for url, body in (
+        (charge_url(appointment), {'client': str(ada.pk)}),
+        (client_url(ada, 'charge-all'), {}),
+        (client_url(ada, 'charge-periods'), {}),
+    ):
+        res = http.post(url, body, format='json')
+        assert res.status_code == 400
+        assert 'payment_method' in res.data
+    assert not CashEntry.objects.exists()

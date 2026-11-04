@@ -1331,9 +1331,8 @@ class DefaultStartSerializer(serializers.Serializer):
 class ChargeAllSerializer(serializers.Serializer):
     """Body of "Cobrar todo": only how the money arrived and when."""
 
-    payment_method = serializers.ChoiceField(
-        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
-    )
+    # Required: assuming cash would write a figure nobody said.
+    payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
     # The day the money arrived. Omitted, today in the business's calendar.
     occurred_on = serializers.DateField(required=False)
 
@@ -1366,7 +1365,5 @@ class ChargeTurnSerializer(serializers.Serializer):
 
     client = serializers.UUIDField()
     amount = serializers.IntegerField(min_value=1, required=False)
-    payment_method = serializers.ChoiceField(
-        choices=CashEntry.PaymentMethod.choices, default=CashEntry.PaymentMethod.CASH
-    )
+    payment_method = serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices)
     occurred_on = serializers.DateField(required=False)

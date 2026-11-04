@@ -461,10 +461,10 @@ def test_changing_plan_starts_the_new_plan_at_the_first_unpaid_period(desk, stud
     sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date=start)
     http = api(desk, studio)
     paid = months_ago + 3 if months_ago > 0 else 2
-    http.post(client_url(ada, 'charge-periods'), {'count': paid}, format='json')
+    http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash', 'count': paid}, format='json')
 
     res = http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk}, format='json')
-    next_charge = http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    next_charge = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     sub.refresh_from_db()
     assert sub.end_date == add_months(start, paid) - timedelta(days=1)
