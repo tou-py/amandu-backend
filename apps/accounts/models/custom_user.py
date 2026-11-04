@@ -12,7 +12,7 @@ from apps.commons.mixins import TimestampMixin
 
 # The version of Kyo's terms and privacy policy a user accepts today. Must match
 # `version` in kyo-landing/src/legal.js.
-TERMS_VERSION = 1
+TERMS_VERSION = 2
 
 
 class CustomUser(AbstractUser, TimestampMixin):

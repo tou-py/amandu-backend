@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounts.models.custom_user import TERMS_VERSION
 from apps.accounts.models import CustomUser, Membership
 from apps.tenancy.models import Tenant
 
@@ -38,7 +39,7 @@ def test_signup_creates_a_business_with_its_owner_and_mails_the_link():
     tenant = Tenant.objects.get()
     assert (user.email, user.first_name) == ('ana@example.com', 'Ana')
     assert user.email_verified_at is None
-    assert user.terms_version == 1
+    assert user.terms_version == TERMS_VERSION
     assert user.terms_accepted_at is not None
     assert (tenant.name, tenant.slug) == ('Peluquería Iguazú', 'peluqueria-iguazu')
     assert (tenant.timezone, tenant.country) == ('America/Asuncion', 'PY')
