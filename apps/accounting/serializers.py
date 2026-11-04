@@ -3,10 +3,12 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
-from apps.accounting.cajas import caja_for_income, refuse_before_opening
+from apps.accounting.cajas import caja_for_income, refuse_before_opening, saldo
 from apps.accounting.models import Caja, CashEntry
-from apps.scheduling.billing import refuse_future_day
+from apps.commons.errors import Refused
+from apps.scheduling.billing import local_today, refuse_future_day
 from apps.scheduling.models import Appointment
+from apps.tenancy.permissions import IsTenantAdmin
 
 
 @extend_schema_field(OpenApiTypes.INT)
@@ -15,6 +17,94 @@ class OwnCajaField(serializers.PrimaryKeyRelatedField):
 
     def get_queryset(self):
         return Caja.objects.for_tenant(self.context['request'].tenant).filter(archived=False)
+
+
+class CajaSerializer(serializers.ModelSerializer):
+    """
+    Anyone who charges reads the names and the map, to say where money lands. The
+    figures are for owner and admin: for anyone else they come back null.
+    """
+
+    saldo = serializers.SerializerMethodField(help_text="Today's, in the business's calendar.")
+    methods = serializers.SerializerMethodField(help_text='The medios de pago that land here.')
+
+    class Meta:
+        model = Caja
+        fields = ('id', 'name', 'opened_on', 'opening_balance', 'saldo', 'methods')
+        extra_kwargs = {'opening_balance': {'allow_null': True}}
+
+    def validate_opening_balance(self, value):
+        if value is None:
+            raise serializers.ValidationError('Say how much was counted.')
+        if self.instance is not None and self.instance.entries.exists():
+            raise Refused('This caja has movements, so its count stands.', 'caja_has_movements', 409)
+        return value
+
+    def validate_name(self, value):
+        taken = Caja.objects.for_tenant(self.context['request'].tenant).filter(archived=False, name=value)
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise Refused('There is already a caja with that name.', 'caja_name_taken', 409)
+        return value
+
+    def _sees_figures(self):
+        return IsTenantAdmin().has_permission(self.context['request'], None)
+
+    def to_representation(self, caja):
+        data = super().to_representation(caja)
+        if not self._sees_figures():
+            data['opening_balance'] = None
+        return data
+
+    def get_saldo(self, caja) -> int | None:
+        if not self._sees_figures():
+            return None
+        return saldo(caja, local_today(self.context['request'].tenant))
+
+    def get_methods(self, caja) -> list[str]:
+        return [one.payment_method for one in caja.methods.all()]
+
+
+def refuse_unless_each_method_once(methods):
+    if sorted(methods) != sorted(CashEntry.PaymentMethod.values):
+        raise serializers.ValidationError(
+            {'methods': 'Every medio de pago needs exactly one caja.'}, code='methods_incomplete'
+        )
+
+
+class SetupCajaSerializer(serializers.Serializer):
+    # Named when counting a caja that already exists, which is how Caja comes back
+    # on: what happened while it was off cannot be known, so it is counted again.
+    id = OwnCajaField(required=False)
+    name = serializers.CharField(max_length=60)
+    opening_balance = serializers.IntegerField(min_value=0, max_value=2**63 - 1)
+    methods = serializers.ListField(
+        child=serializers.ChoiceField(choices=CashEntry.PaymentMethod.choices), allow_empty=True
+    )
+
+
+class CajaSetupSerializer(serializers.Serializer):
+    """Puesta en marcha, whole: the cajas, what each holds, and where each medio lands."""
+
+    cajas = SetupCajaSerializer(many=True, allow_empty=False)
+
+    def validate_cajas(self, cajas):
+        refuse_unless_each_method_once([method for caja in cajas for method in caja['methods']])
+        names = [caja['name'] for caja in cajas]
+        if len(set(names)) != len(names):
+            raise Refused('There is already a caja with that name.', 'caja_name_taken', 409)
+        tenant = self.context['request'].tenant
+        counted = {caja['id'].pk for caja in cajas if 'id' in caja}
+        if counted != set(Caja.objects.for_tenant(tenant).filter(archived=False).values_list('pk', flat=True)):
+            raise Refused('Every caja has to be counted.', 'caja_not_counted')
+        return cajas
+
+
+class CajaNameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Caja
+        fields = ('id', 'name')
 
 
 class CashEntrySerializer(serializers.ModelSerializer):
