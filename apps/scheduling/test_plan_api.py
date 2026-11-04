@@ -349,7 +349,7 @@ def test_a_voided_payment_does_not_extend_the_default_end(desk, studio, pilates,
     )
     sub.cash_entries.create(
         tenant=studio, kind='income', amount=1, occurred_on='2026-02-14', concept='x',
-        client=ada, period='2026-02-14', voided_at='2026-02-15T10:00Z',
+        client=ada, period='2026-02-14', voided_at='2026-02-15T10:00Z', voided_on='2026-02-15',
     )
 
     res = api(desk, studio).post(sub_url(sub, 'end'), {}, format='json')
@@ -461,10 +461,10 @@ def test_changing_plan_starts_the_new_plan_at_the_first_unpaid_period(desk, stud
     sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date=start)
     http = api(desk, studio)
     paid = months_ago + 3 if months_ago > 0 else 2
-    http.post(client_url(ada, 'charge-periods'), {'count': paid}, format='json')
+    http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash', 'count': paid}, format='json')
 
     res = http.post(sub_url(sub, 'change-plan'), {'plan': libre.pk}, format='json')
-    next_charge = http.post(client_url(ada, 'charge-periods'), {}, format='json')
+    next_charge = http.post(client_url(ada, 'charge-periods'), {'payment_method': 'cash'}, format='json')
 
     sub.refresh_from_db()
     assert sub.end_date == add_months(start, paid) - timedelta(days=1)
@@ -526,7 +526,7 @@ def test_a_plan_given_by_mistake_is_deleted_while_nothing_was_paid(desk, studio,
     sub = Subscription.objects.create(tenant=studio, client=ada, plan=pilates, start_date='2026-01-14')
     sub.cash_entries.create(
         tenant=studio, kind='income', amount=1, occurred_on='2026-01-14', concept='x',
-        client=ada, period='2026-01-14', voided_at='2026-01-15T10:00Z',
+        client=ada, period='2026-01-14', voided_at='2026-01-15T10:00Z', voided_on='2026-01-15',
     )
 
     res = api(desk, studio).delete(reverse('scheduling:subscription-detail', args=[sub.pk]))

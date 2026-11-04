@@ -100,7 +100,7 @@ def test_the_summary_answers_the_same_filters_as_the_list(desk, salon):
 def test_a_void_stays_listed_and_counts_for_nothing(desk, salon):
     from django.utils import timezone
 
-    entry(salon, 100, voided_at=timezone.now(), void_reason='error')
+    entry(salon, 100, voided_at=timezone.now(), voided_on=date(2026, 11, 2), void_reason='error')
     entry(salon, 200)
     assert len(desk.get(LIST_URL).data['results']) == 2
     summary = desk.get(SUMMARY_URL).data
@@ -148,3 +148,55 @@ def test_a_turn_can_be_recorded_as_paid_by_qr(desk):
     )
     assert res.status_code == 201
     assert res.data['payment_method'] == 'qr'
+
+
+def test_an_undo_is_dated_on_the_business_day_it_happened(django_user_model, salon, monkeypatch):
+    """Past midnight in UTC, still the evening before on the business's wall."""
+    from datetime import datetime, timezone as utc
+
+    from django.utils import timezone
+
+    salon.timezone = 'America/Asuncion'
+    salon.save(update_fields=['timezone'])
+    paid = entry(salon, 100, day=date(2026, 10, 1))
+    monkeypatch.setattr(timezone, 'now', lambda: datetime(2026, 11, 5, 1, 0, tzinfo=utc.utc))
+
+    http = api(member(django_user_model, salon, Membership.Role.OWNER), salon)
+    res = http.post(reverse('accounting:cashentry-void', args=[paid.pk]), {'reason': 'error'}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['voided_on'] == '2026-11-04'
+    # The day it was paid is a fact of its own, and stays.
+    assert res.data['occurred_on'] == '2026-10-01'
+
+
+def test_past_voids_get_the_business_day_they_happened_on(salon):
+    """The data half of 0005, on a row from before the day was recorded."""
+    import importlib
+    from datetime import datetime, timezone as utc
+
+    from django.apps import apps as django_apps
+    from django.db import connection
+
+    migration = importlib.import_module('apps.accounting.migrations.0005_cashentry_voided_on')
+    salon.timezone = 'America/Asuncion'
+    salon.save(update_fields=['timezone'])
+    with connection.cursor() as cursor:
+        cursor.execute('ALTER TABLE tb_cash_entry DROP CONSTRAINT cash_entry_void_has_its_day')
+    old = entry(salon, 100, voided_at=datetime(2026, 11, 5, 1, 0, tzinfo=utc.utc))
+    live = entry(salon, 200)
+
+    migration.date_past_voids(django_apps, None)
+
+    old.refresh_from_db()
+    live.refresh_from_db()
+    assert old.voided_on == date(2026, 11, 4)
+    assert live.voided_on is None
+
+
+def test_the_database_refuses_a_void_with_no_day(salon):
+    from django.db import IntegrityError, transaction
+    from django.utils import timezone
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        entry(salon, 100, voided_at=timezone.now())
