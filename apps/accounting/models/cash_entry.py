@@ -24,6 +24,7 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
         CASH = 'cash', 'Cash'
         CARD = 'card', 'Card'
         TRANSFER = 'transfer', 'Transfer'
+        QR = 'qr', 'QR or wallet'
         OTHER = 'other', 'Other'
 
     kind = models.CharField(max_length=20, choices=Kind.choices)  # type: ignore
