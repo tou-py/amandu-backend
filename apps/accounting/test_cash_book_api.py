@@ -4,7 +4,7 @@ import pytest
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from apps.accounting.models import CashEntry
+from apps.accounting.models import Caja, CashEntry
 from apps.accounts.models import Membership
 from apps.scheduling.models import Client
 from apps.tenancy.models import Tenant
@@ -113,7 +113,8 @@ def test_an_empty_book_adds_up_to_zero(desk):
 
 def test_expenses_are_not_money_collected(desk, salon):
     CashEntry.objects.create(
-        tenant=salon, kind=CashEntry.Kind.EXPENSE, amount=999, occurred_on=date(2026, 11, 2), concept='Luz',
+        tenant=salon, kind=CashEntry.Kind.EXPENSE, amount=999, occurred_on=date(2026, 11, 2), concept='Luz', category='utilities',
+        caja=Caja.objects.create(tenant=salon, name='Principal', opened_on=date(2026, 11, 1), opening_balance=0),
     )
     assert desk.get(LIST_URL).data['results'] == []
     assert desk.get(SUMMARY_URL).data['total'] == 0
