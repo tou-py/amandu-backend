@@ -15,8 +15,7 @@ from django.conf import settings
 
 BASE = 100_000  # Solo: the agenda with one professional attending.
 PER_EXTRA_PROFESSIONAL = 50_000  # Each professional after the first.
-COBROS = 80_000  # Monthly plans, charges and Por cobrar.
-RESERVAS = 50_000  # The public booking page and its WhatsApp notices.
+COBROS = 50_000  # Monthly plans, charges and Por cobrar, with Caja inside.
 FACTURACION = 125_000  # Electronic invoicing, documents included below.
 FACTURACION_INCLUDED = 1_000  # Documents a month inside FACTURACION.
 FACTURACION_EXTRA = 7_000  # Each document past the included ones.
@@ -74,6 +73,7 @@ def addons(tenant) -> list[str]:
         name
         for name, on in (
             ('cobros', tenant.addon_cobros),
+            ('caja', tenant.addon_caja),
             ('reservas', tenant.addon_reservas),
             ('facturacion', tenant.addon_facturacion),
         )
@@ -91,6 +91,8 @@ def monthly_lines(tenant, professionals: int) -> list[dict]:
 
     A tenant whose only member does not attend appointments still pays the
     base: the base is the agenda, and the first professional comes inside it.
+    Reservas and Caja are switches an owner turns on, but they cost nothing more:
+    Reservas comes with the base and Caja with Cobros.
     """
     extra = max(professionals - 1, 0)
     lines = [{'concept': 'base', 'quantity': 1, 'amount': BASE}]
@@ -102,8 +104,6 @@ def monthly_lines(tenant, professionals: int) -> list[dict]:
         })
     if tenant.addon_cobros:
         lines.append({'concept': 'cobros', 'quantity': 1, 'amount': COBROS})
-    if tenant.addon_reservas:
-        lines.append({'concept': 'reservas', 'quantity': 1, 'amount': RESERVAS})
     if tenant.addon_facturacion:
         # ponytail: the base only. Documents past FACTURACION_INCLUDED are
         # billed once invoicing counts approved documents per month.

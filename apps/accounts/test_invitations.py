@@ -3,6 +3,7 @@ from django.core import mail
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from apps.accounts.models.custom_user import TERMS_VERSION
 from apps.accounts.models import CustomUser, Invitation, Membership
 from apps.tenancy.models import Tenant
 
@@ -154,7 +155,7 @@ def test_accept_creates_the_user_and_an_active_membership(admin_user, salon):
     assert accept.status_code == 204
     user = CustomUser.objects.get(email='new@example.com')
     assert user.has_usable_password()
-    assert user.terms_version == 1
+    assert user.terms_version == TERMS_VERSION
     assert user.terms_accepted_at is not None
     membership = Membership.objects.get(user=user, tenant=salon)
     assert membership.status == Membership.Status.ACTIVE

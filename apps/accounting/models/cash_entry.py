@@ -10,10 +10,8 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
     One movement of money in the shop's daily cash book: what came in, what went
     out, on which business day.
 
-    Deliberately a book and not an accounting system. There is no double entry,
-    no chart of accounts, no closing of periods and no reconciliation -- the
-    question this table exists to answer is "how did today go", and the owner
-    asks it from a phone between two clients.
+    Deliberately treasury and not an accounting system: no double entry and no
+    chart of accounts (docs/adr/0001 in amandu-frontend).
     """
 
     class Kind(models.TextChoices):
@@ -25,6 +23,15 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
         CARD = 'card', 'Card'
         TRANSFER = 'transfer', 'Transfer'
         QR = 'qr', 'QR or wallet'
+        OTHER = 'other', 'Other'
+
+    class Category(models.TextChoices):
+        SUPPLIES = 'supplies', 'Supplies'
+        RENT = 'rent', 'Rent'
+        UTILITIES = 'utilities', 'Utilities'
+        PAYROLL = 'payroll', 'Wages and commissions'
+        TAXES = 'taxes', 'Taxes'
+        OWNER_DRAW = 'owner_draw', "Owner's withdrawal"
         OTHER = 'other', 'Other'
 
     kind = models.CharField(max_length=20, choices=Kind.choices)  # type: ignore
@@ -51,6 +58,13 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
         choices=PaymentMethod.choices,  # type: ignore
         default=PaymentMethod.CASH,
     )
+    # Where the money is. Null on income from before Caja or while it is off, and
+    # that money is outside every saldo. PROTECT: a caja with movements stays.
+    caja = models.ForeignKey(
+        'accounting.Caja', on_delete=models.PROTECT, null=True, blank=True, related_name='entries'
+    )
+    # Why money went out. Only an expense has one.
+    category = models.CharField(max_length=20, choices=Category.choices, blank=True)  # type: ignore
     # Optional, and optional in both directions: money moves for reasons that
     # were never booked (a walk-in, a supplier, the till float), and a booking
     # may never be paid at all.
@@ -164,6 +178,20 @@ class CashEntry(TenantOwnedMixin, TimestampMixin):
             ),
             # Nothing moved is not a movement.
             models.CheckConstraint(condition=models.Q(amount__gt=0), name='cash_entry_amount_above_zero'),
+            # An expense says why and from where, and is never a client's payment.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(kind='income', category='')
+                    | (
+                        models.Q(
+                            kind='expense', caja__isnull=False, client__isnull=True, appointment__isnull=True,
+                            subscription__isnull=True, period__isnull=True,
+                        )
+                        & ~models.Q(category='')
+                    )
+                ),
+                name='cash_entry_expense_is_complete',
+            ),
         ]
         verbose_name_plural = 'cash entries'
 

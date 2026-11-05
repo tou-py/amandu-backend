@@ -70,16 +70,24 @@ def test_the_month_is_the_base_plus_each_extra_professional(professionals, expec
     assert total(professionals) == expected
 
 
-def test_reservas_is_a_line_of_its_own():
+def test_reservas_is_switched_but_never_billed():
     tenant = Tenant(addon_reservas=True)
 
     assert pricing.addons(tenant) == ['reservas']
-    assert {'concept': 'reservas', 'quantity': 1, 'amount': 50_000} in pricing.monthly_lines(tenant, 1)
+    assert pricing.monthly_lines(tenant, 1) == [{'concept': 'base', 'quantity': 1, 'amount': 100_000}]
+
+
+def test_caja_comes_with_cobros_at_no_extra_cost():
+    tenant = Tenant(addon_cobros=True, addon_caja=True)
+
+    assert pricing.addons(tenant) == ['cobros', 'caja']
+    assert [line['concept'] for line in pricing.monthly_lines(tenant, 1)] == ['base', 'cobros']
+    assert sum(line['amount'] for line in pricing.monthly_lines(tenant, 1)) == 150_000
 
 
 def test_add_ons_are_added_on_top():
-    assert total(3, cobros=True) == 280_000
-    assert total(1, cobros=True, facturacion=True) == 305_000
+    assert total(3, cobros=True) == 250_000
+    assert total(1, cobros=True, facturacion=True) == 275_000
 
 
 @pytest.mark.parametrize('professionals, plan', [(0, 'solo'), (1, 'solo'), (2, 'equipo')])
@@ -152,10 +160,12 @@ def test_the_owner_reads_what_the_month_costs(studio, member, settings):
     assert res.data['professionals'] == ['Ana', 'Bea']
     assert res.data['addons'] == ['cobros']
     assert [line['concept'] for line in res.data['lines']] == ['base', 'extra_professionals', 'cobros']
-    assert res.data['total'] == 230_000
+    assert res.data['total'] == 200_000
     assert res.data['billing'] == 'ok'
     assert res.data['contact_whatsapp'] == '595981000000'
     assert res.data['prices']['per_extra_professional'] == 50_000
+    assert res.data['prices']['cobros'] == 50_000
+    assert res.data['prices']['reservas'] == 0
 
 
 @pytest.mark.parametrize('role', [Membership.Role.ADMIN, Membership.Role.STAFF])
@@ -191,12 +201,12 @@ def test_the_owner_switches_addons_and_the_month_follows(studio, member):
 
     assert res.status_code == 200
     assert res.data['addons'] == ['cobros', 'reservas']
-    assert res.data['total'] == 230_000
+    assert res.data['total'] == 150_000
 
     res = patch_addons(owner, studio, ['reservas'])
 
     assert res.data['addons'] == ['reservas']
-    assert res.data['total'] == 150_000
+    assert res.data['total'] == 100_000
     studio.refresh_from_db()
     assert (studio.addon_cobros, studio.addon_reservas) == (False, True)
 

@@ -276,7 +276,7 @@ class KyoSubscriptionSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text='Names of the members who attend appointments: who the plan counts.',
     )
-    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'caja', 'reservas', 'facturacion')))
     lines = SubscriptionLineSerializer(many=True)
     total = serializers.IntegerField(help_text='Guaraníes a month.')
     paid_until = serializers.DateField(allow_null=True)

@@ -165,23 +165,26 @@ class Tenant(TimestampMixin):
     # "never claimed".
     plan_digest_date = models.DateField(null=True, blank=True, editable=False)
 
-    # What this tenant pays Kyo for beyond the agenda itself. Flags and not a
-    # plan table: the price is the same for everyone and lives in
-    # apps/tenancy/pricing.py, so the only fact that varies per tenant is
-    # whether they bought it. Switched by a human in the admin, like paid_until.
+    # What this tenant has on beyond the agenda itself. Flags and not a plan
+    # table: prices are the same for everyone and live in apps/tenancy/pricing.py,
+    # so the only fact that varies per tenant is whether it is on. Not all of them
+    # cost extra: Reservas comes with the base and Caja with Cobros.
     #
     # Cobros: monthly plans, charges and Por cobrar. Off for a new tenant; the
     # migration that added it turned it on for every tenant already using it,
     # so a pilot does not wake up to its money screens gone.
     addon_cobros = models.BooleanField(default=False)
     # Reservas: the public booking page, which is what lets strangers see this
-    # tenant's free slots. The add-on IS the page, there is no second switch. Off
+    # tenant's free slots. The flag IS the page, there is no second switch. Off
     # for a new tenant on purpose: a feature that opened an internal diary to the
     # internet by being deployed would be a breach, not a release.
     addon_reservas = models.BooleanField(default=False)
     # Facturación electrónica. The flag is the purchase; whether the tenant has
     # also configured its provider is a separate question the invoicing app asks.
     addon_facturacion = models.BooleanField(default=False)
+    # Caja: cajas, salidas and saldos. Needs Cobros, since a caja that misses the
+    # charges is wrong. Turned on by POST /api/cajas/setup/, which counts the money.
+    addon_caja = models.BooleanField(default=False)
     # Same claim pattern as plan_digest_date, for the daily "pay Kyo" notice:
     # the last LOCAL date it was claimed, so overlapping runs send it once.
     billing_notice_date = models.DateField(null=True, blank=True, editable=False)
@@ -189,11 +192,18 @@ class Tenant(TimestampMixin):
     class Meta:
         db_table = 'tb_tenant'
         ordering = ('name',)
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(addon_caja=False) | models.Q(addon_cobros=True),
+                name='tenant_caja_needs_cobros',
+            ),
+        ]
 
     def start_trial(self, today):
         self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)
-        self.addon_cobros = self.addon_reservas = True
-        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'addon_reservas', 'updated_at'])
+        # Never Reservas: it comes with the base, but only the owner opens the diary.
+        self.addon_cobros = True
+        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'updated_at'])
 
     def __str__(self):
         return self.name

@@ -124,7 +124,7 @@ class ActiveMembershipSerializer(serializers.Serializer):
     paid_until = serializers.DateField(allow_null=True)
     trial = serializers.BooleanField()
     trial_until = serializers.DateField(allow_null=True)
-    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'reservas', 'facturacion')))
+    addons = serializers.ListField(child=serializers.ChoiceField(choices=('cobros', 'caja', 'reservas', 'facturacion')))
     payment_instructions = serializers.CharField(
         help_text='How to pay Kyo. Owner only, and only when billing is not ok; otherwise empty.'
     )
