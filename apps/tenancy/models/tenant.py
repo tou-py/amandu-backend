@@ -201,8 +201,9 @@ class Tenant(TimestampMixin):
 
     def start_trial(self, today):
         self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)
-        self.addon_cobros = self.addon_reservas = True
-        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'addon_reservas', 'updated_at'])
+        # Never Reservas: it comes with the base, but only the owner opens the diary.
+        self.addon_cobros = True
+        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'updated_at'])
 
     def __str__(self):
         return self.name
