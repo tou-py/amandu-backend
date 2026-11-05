@@ -124,8 +124,8 @@ class KyoSubscriptionView(APIView):
                 'base': pricing.BASE,
                 'per_extra_professional': pricing.PER_EXTRA_PROFESSIONAL,
                 'cobros': pricing.COBROS,
-                'caja': pricing.CAJA,
-                'reservas': pricing.RESERVAS,
+                # ponytail: only for PWAs that still read this price; drop once none do.
+                'reservas': 0,
                 'facturacion': pricing.FACTURACION,
                 'facturacion_included': pricing.FACTURACION_INCLUDED,
                 'facturacion_extra': pricing.FACTURACION_EXTRA,

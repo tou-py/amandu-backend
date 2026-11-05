@@ -245,7 +245,7 @@ class TenantSerializer(images.ImageKeysMixin, serializers.ModelSerializer):
 
 
 class SubscriptionLineSerializer(serializers.Serializer):
-    concept = serializers.ChoiceField(choices=('base', 'extra_professionals', 'cobros', 'caja', 'reservas', 'facturacion'))
+    concept = serializers.ChoiceField(choices=('base', 'extra_professionals', 'cobros', 'facturacion'))
     quantity = serializers.IntegerField()
     amount = serializers.IntegerField(help_text='Guaraníes a month.')
 

@@ -165,17 +165,17 @@ class Tenant(TimestampMixin):
     # "never claimed".
     plan_digest_date = models.DateField(null=True, blank=True, editable=False)
 
-    # What this tenant pays Kyo for beyond the agenda itself. Flags and not a
-    # plan table: the price is the same for everyone and lives in
-    # apps/tenancy/pricing.py, so the only fact that varies per tenant is
-    # whether they bought it. Switched by a human in the admin, like paid_until.
+    # What this tenant has on beyond the agenda itself. Flags and not a plan
+    # table: prices are the same for everyone and live in apps/tenancy/pricing.py,
+    # so the only fact that varies per tenant is whether it is on. Not all of them
+    # cost extra: Reservas comes with the base and Caja with Cobros.
     #
     # Cobros: monthly plans, charges and Por cobrar. Off for a new tenant; the
     # migration that added it turned it on for every tenant already using it,
     # so a pilot does not wake up to its money screens gone.
     addon_cobros = models.BooleanField(default=False)
     # Reservas: the public booking page, which is what lets strangers see this
-    # tenant's free slots. The add-on IS the page, there is no second switch. Off
+    # tenant's free slots. The flag IS the page, there is no second switch. Off
     # for a new tenant on purpose: a feature that opened an internal diary to the
     # internet by being deployed would be a breach, not a release.
     addon_reservas = models.BooleanField(default=False)
@@ -201,8 +201,9 @@ class Tenant(TimestampMixin):
 
     def start_trial(self, today):
         self.paid_until = self.trial_until = today + timedelta(days=pricing.TRIAL_DAYS)
-        self.addon_cobros = self.addon_reservas = True
-        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'addon_reservas', 'updated_at'])
+        # Never Reservas: it comes with the base, but only the owner opens the diary.
+        self.addon_cobros = True
+        self.save(update_fields=['paid_until', 'trial_until', 'addon_cobros', 'updated_at'])
 
     def __str__(self):
         return self.name
