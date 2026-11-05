@@ -353,8 +353,10 @@ SPECTACULAR_SETTINGS = {
     'ENUM_NAME_OVERRIDES': {
         'AppointmentStatusEnum': 'apps.scheduling.models.Appointment.Status',
         # Two fields called "addons": what a tenant has, and what its owner may switch.
-        'AddonEnum': ('cobros', 'reservas', 'facturacion'),
+        'AddonEnum': ('cobros', 'caja', 'reservas', 'facturacion'),
         'SwitchableAddonEnum': ('cobros', 'reservas'),
+        # Also a list child in the method map, which would otherwise name it MethodsEnum.
+        'PaymentMethodEnum': 'apps.accounting.models.CashEntry.PaymentMethod',
     },
 }
 
