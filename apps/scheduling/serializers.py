@@ -686,6 +686,27 @@ class AppointmentCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
+class JoinSerializer(serializers.Serializer):
+    """
+    Body of the join action: which of this turn's clients go to `into`, a turn
+    of the same professional, and the reason the emptied turn is cancelled
+    with (unused when somebody stays). The view checks the two turns against
+    each other; this only scopes the ids to the request's tenant.
+    """
+
+    into = serializers.PrimaryKeyRelatedField(queryset=Appointment.objects.none())
+    clients = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), many=True, allow_empty=False)
+    reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # No request while the schema is generated; the querysets stay empty then.
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['into'].queryset = Appointment.objects.for_tenant(tenant)
+            self.fields['clients'].child_relation.queryset = Client.objects.for_tenant(tenant)
+
+
 def refuse_if_closed(tenant, professional, start, end, field='start'):
     """
     The clock's rule for a hand-made booking: inside the professional's working
