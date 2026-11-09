@@ -151,3 +151,116 @@ def test_a_voided_payment_stays_behind(desk, salon, lorena, consulta, sesion, pe
     assert res.status_code == 200
     entry.refresh_from_db()
     assert entry.appointment_id == source.pk
+
+
+def test_a_full_turn_takes_nobody_and_nothing_moves(desk, salon, lorena, consulta, people):
+    ana, belen, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana, belen])
+    into = turn(salon, lorena, consulta, FIVE, [carolina], capacity=2)
+
+    res = join(desk, salon, source, into, [ana, belen])
+
+    assert (res.status_code, res.data['code']) == (409, 'join_full')
+    assert roster(source) == {'Ana', 'Belén'}
+    assert roster(into) == {'Carolina'}
+
+
+def test_a_client_already_there_is_refused(desk, salon, lorena, consulta, people):
+    ana, belen, _ = people
+    source = turn(salon, lorena, consulta, THREE, [ana, belen])
+    into = turn(salon, lorena, consulta, FIVE, [ana])
+
+    res = join(desk, salon, source, into, [ana])
+
+    assert (res.status_code, res.data['code']) == (409, 'join_already_there')
+
+
+def test_a_client_outside_the_turn_is_refused(desk, salon, lorena, consulta, people):
+    ana, belen, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, lorena, consulta, FIVE, [carolina])
+
+    res = join(desk, salon, source, into, [belen])
+
+    assert (res.status_code, res.data['code']) == (400, 'join_not_in_turn')
+
+
+def test_two_professionals_cannot_be_joined(desk, salon, lorena, consulta, people, django_user_model):
+    ana, _, carolina = people
+    diego = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='diego@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, diego, consulta, FIVE, [carolina])
+
+    res = join(desk, salon, source, into, [ana])
+
+    assert (res.status_code, res.data['code']) == (400, 'join_other_professional')
+
+
+def test_a_turn_cannot_join_itself(desk, salon, lorena, consulta, people):
+    source = turn(salon, lorena, consulta, THREE, people[:1])
+
+    res = join(desk, salon, source, source, people[:1])
+
+    assert (res.status_code, res.data['code']) == (400, 'join_same')
+
+
+def test_a_request_still_waiting_cannot_take_clients(desk, salon, lorena, consulta, people):
+    ana, _, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, lorena, consulta, FIVE, [carolina], status=Appointment.Status.PENDING)
+
+    res = join(desk, salon, source, into, [ana])
+
+    assert (res.status_code, res.data['code']) == (409, 'join_not_scheduled')
+
+
+def test_a_turn_with_attendance_marked_is_left_alone(desk, salon, lorena, consulta, people):
+    ana, _, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, lorena, consulta, FIVE, [carolina])
+    into.client_links.update(attendance=AppointmentClient.Attendance.ATTENDED)
+
+    res = join(desk, salon, source, into, [ana])
+
+    assert (res.status_code, res.data['code']) == (409, 'attendance_marked')
+    assert roster(source) == {'Ana'}
+
+
+def test_the_professional_hears_of_it_once(desk, salon, lorena, consulta, people):
+    ana, _, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, lorena, consulta, FIVE, [carolina])
+
+    join(desk, salon, source, into, [ana], reason='Reagendado')
+
+    notices = Notification.objects.filter(recipient=lorena)
+    assert [(n.verb, n.appointment_id) for n in notices] == [(Notification.Verb.APPOINTMENT_UPDATED, into.pk)]
+
+
+def test_staff_may_join_within_their_own_day(salon, lorena, consulta, people):
+    ana, _, carolina = people
+    source = turn(salon, lorena, consulta, THREE, [ana])
+    into = turn(salon, lorena, consulta, FIVE, [carolina])
+
+    res = join(lorena.user, salon, source, into, [ana])
+
+    assert res.status_code == 200
+    assert not Notification.objects.exists()  # nobody is told what they did themselves
+
+
+def test_staff_may_not_join_a_colleagues_turns(salon, lorena, consulta, people, django_user_model):
+    ana, _, carolina = people
+    diego = Membership.objects.create(
+        user=django_user_model.objects.create_user(email='diego@example.com', password='pw'),
+        tenant=salon, attends_appointments=True,
+    )
+    source = turn(salon, diego, consulta, THREE, [ana])
+    into = turn(salon, diego, consulta, FIVE, [carolina])
+
+    res = join(lorena.user, salon, source, into, [ana])
+
+    assert res.status_code == 403
+    assert roster(source) == {'Ana'}
