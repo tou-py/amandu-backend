@@ -58,6 +58,7 @@ from apps.scheduling.serializers import (
     ClientSerializer,
     DayLoadSerializer,
     DefaultStartSerializer,
+    JoinSerializer,
     MovedFollowingSerializer,
     PlanSerializer,
     ProfessionalSerializer,
@@ -1083,6 +1084,83 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
                 appointment=appointment, actor=request.membership,
             )
         return response
+
+    @extend_schema(request=JoinSerializer, responses=AppointmentSerializer)
+    @action(detail=True, methods=['post'])
+    def join(self, request, pk=None):
+        """
+        Move some of this turn's clients into `into`, another turn of the same
+        professional: what a reschedule onto an hour that is already taken
+        becomes, since two turns can never share it. All or nothing.
+
+        A client who already paid this turn goes with the payment, re-linked to
+        `into`: the same service is the same price, so nothing is owed or paid
+        twice, and the money's amount, caja and day do not change. Across two
+        services the price differs, so that client is refused. A turn left
+        empty is cancelled with `reason`, never deleted, so the client's
+        history still says it was moved.
+
+        Answers `into` as it now stands.
+        """
+        source = self.get_object()
+        body = JoinSerializer(data=request.data, context={'request': request})
+        body.is_valid(raise_exception=True)
+        into_pk = body.validated_data['into'].pk
+        clients = body.validated_data['clients']
+        if into_pk == source.pk:
+            raise Refused('A turn cannot be joined into itself.', 'join_same')
+
+        with transaction.atomic():
+            # Both rows locked, in a fixed order so two joins crossing the same
+            # pair cannot deadlock: the rosters and payments below are read and
+            # written with nobody else changing them.
+            locked = {
+                one.pk: one
+                for one in Appointment.objects.select_for_update().filter(pk__in=(source.pk, into_pk)).order_by('pk')
+            }
+            source, into = locked[source.pk], locked[into_pk]
+            self.check_object_permissions(request, into)
+            self._refuse_join(source, into, clients)
+
+            moved = [client.pk for client in clients]
+            # Off the series too: the rule that put them on this slot did not
+            # put them on that one.
+            source.client_links.filter(client__in=moved).update(appointment=into, series=None)
+            CashEntry.objects.filter(
+                appointment=source, client__in=moved, voided_at__isnull=True,
+            ).update(appointment=into)
+            if not source.client_links.exists():
+                source.cancel(body.validated_data.get('reason', ''))
+            # One notice for one gesture, about the turn the clients are in now.
+            notify.notify(notify.CHANGED, appointment=into, actor=request.membership)
+
+        return Response(self.get_serializer(self.get_queryset().get(pk=into.pk)).data)
+
+    def _refuse_join(self, source, into, clients):
+        if into.professional_id != source.professional_id:
+            raise Refused('Both turns must be with the same professional.', 'join_other_professional')
+        scheduled = Appointment.Status.SCHEDULED
+        if source.status != scheduled or into.status != scheduled:
+            raise Refused('Only two scheduled turns can be joined.', 'join_not_scheduled', status.HTTP_409_CONFLICT)
+        self._refuse_if_marked(source)
+        self._refuse_if_marked(into)
+
+        here = set(source.client_links.values_list('client_id', flat=True))
+        there = set(into.client_links.values_list('client_id', flat=True))
+        moved = {client.pk for client in clients}
+        if not moved <= here:
+            raise Refused('Every client must be in this turn.', 'join_not_in_turn')
+        if moved & there:
+            raise Refused('A client is already in that turn.', 'join_already_there', status.HTTP_409_CONFLICT)
+        if len(there) + len(moved) > into.capacity:
+            raise Refused('That turn has no room for them.', 'join_full', status.HTTP_409_CONFLICT)
+        paid = CashEntry.objects.filter(appointment=source, client__in=moved, voided_at__isnull=True)
+        if source.service_id != into.service_id and paid.exists():
+            raise Refused(
+                'A client paid this turn, and that one is another service.',
+                'join_paid_other_service',
+                status.HTTP_409_CONFLICT,
+            )
 
     # No body: the URL already names the transition.
     @extend_schema(request=None, responses=AppointmentSerializer)
