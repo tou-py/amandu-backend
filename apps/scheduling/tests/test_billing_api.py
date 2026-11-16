@@ -1254,3 +1254,20 @@ def test_charge_all_lands_every_row_or_none(owner, studio, teacher, ada, drawers
 def test_with_caja_off_a_charge_carries_none_whatever_it_asks(owner, studio, teacher, ada):
     res = api(owner, studio).post(charge_url(turn(studio, teacher, [ada])), charge_body(ada, caja=999), format='json')
     assert (res.status_code, res.data['caja']) == (201, None)
+
+
+def test_a_prefetched_client_is_not_loaded_again(monkeypatch, ada, pilates, django_assert_num_queries):
+    """The agenda prefetches every attendee up front; billing must not redo it
+    per row, which cost no query but 40% of the week's time rebuilding querysets."""
+    from apps.scheduling import billing
+
+    subscribe(ada, pilates, date(2026, 9, 1))
+    bare = Client.objects.get(pk=ada.pk)
+    billing._load(bare)
+    with django_assert_num_queries(0):  # a bare client is loaded, once
+        assert [s.plan for s in bare.subscriptions.all()] == [pilates]
+
+    prefetched = Client.objects.prefetch_related(*billing.client_prefetches()).get(pk=ada.pk)
+    monkeypatch.setattr(billing, 'client_prefetches', lambda path='': pytest.fail('loaded twice'))
+    with django_assert_num_queries(0):
+        billing._load(prefetched)
