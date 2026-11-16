@@ -1,0 +1,410 @@
+"""
+A service's image, from the outside: signing an upload, attaching the key, and
+what the bucket is told to delete. Driven through the HTTP API with one fake,
+the `bucket` fixture (storage.head and storage.delete); signing runs for real.
+"""
+
+from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+from django.urls import reverse
+
+from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
+from apps.scheduling.models import Service
+
+UPLOADS = '/api/uploads/'
+WEBP = 'image/webp'
+
+
+def member(django_user_model, tenant, email, role=Membership.Role.STAFF):
+    user = django_user_model.objects.create_user(email=email, password='pw')
+    Membership.objects.create(user=user, tenant=tenant, role=role)
+    return user
+
+
+def detail(service):
+    return reverse('scheduling:service-detail', args=[service.pk])
+
+
+@pytest.fixture
+def owner(django_user_model, salon):
+    return member(django_user_model, salon, 'owner@example.com', Membership.Role.OWNER)
+
+
+@pytest.fixture
+def haircut(salon):
+    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
+
+
+def test_signing_a_service_upload_returns_a_key_in_the_tenants_space_and_a_signed_put(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000, 'thumb_size': 1000}, format='json')
+
+    assert res.status_code == 200
+    key = res.data['key']
+    assert key.startswith(f'{salon.pk}/service/') and key.endswith('.webp')
+    url = urlparse(res.data['upload_url'])
+    assert url.path.endswith(key)
+    assert 'X-Amz-Signature' in parse_qs(url.query)
+    assert res.data['headers'] == {
+        'Content-Type': WEBP,
+        'Content-Length': '50000',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+    }
+
+
+def test_a_service_upload_signs_a_thumbnail_next_to_the_image(owner, salon, haircut):
+    res = api(owner, salon).post(
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 50_000, 'thumb_size': 8_000},
+        format='json',
+    )
+
+    assert res.status_code == 200
+    thumb = urlparse(res.data['thumb']['upload_url'])
+    assert thumb.path.endswith(res.data['key'].removesuffix('.webp') + '.thumb.webp')
+    assert 'X-Amz-Signature' in parse_qs(thumb.query)
+    assert res.data['thumb']['headers']['Content-Length'] == '8000'
+
+
+def test_a_service_upload_without_a_thumb_size_is_a_400(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000}, format='json')
+
+    assert res.status_code == 400
+    assert 'thumb_size' in res.data
+
+
+def test_a_thumb_over_its_cap_is_a_400(owner, salon, haircut):
+    sign = lambda thumb_size: api(owner, salon).post(
+        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': thumb_size},
+        format='json',
+    )
+
+    assert sign(40 * 1024 + 1).status_code == 400
+    assert sign(40 * 1024).status_code == 200
+
+
+def test_signing_for_another_tenants_service_is_a_404(owner, salon, clinic):
+    theirs = Service.objects.create(tenant=clinic, name='Botox', duration=timedelta(minutes=30))
+
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
+
+    assert res.status_code == 404
+
+
+def test_staff_cannot_sign_for_a_colleagues_service_but_can_for_their_own(django_user_model, salon, haircut):
+    stylist = member(django_user_model, salon, 'stylist@example.com')
+    mine = Service.objects.create(
+        tenant=salon, name='Color', duration=timedelta(minutes=30), created_by=stylist.memberships.get(),
+    )
+
+    other = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
+    own = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': mine.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
+
+    assert other.status_code == 403
+    assert own.status_code == 200
+
+
+def test_an_admin_cannot_sign_for_the_owners_photo(django_user_model, owner, salon):
+    admin = member(django_user_model, salon, 'admin@example.com', Membership.Role.ADMIN)
+
+    res = api(admin, salon).post(
+        UPLOADS, {'content_type': WEBP, 'kind': 'photo', 'target_id': owner.memberships.get().pk, 'size': 1000}, format='json',
+    )
+
+    assert res.status_code == 403
+
+
+def test_only_the_owner_signs_for_the_logo(django_user_model, owner, salon):
+    admin = member(django_user_model, salon, 'admin@example.com', Membership.Role.ADMIN)
+
+    assert api(admin, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').status_code == 403
+    assert api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').status_code == 200
+
+
+@pytest.mark.parametrize('kind, cap', [('logo', 300 * 1024), ('photo', 300 * 1024), ('service', 300 * 1024)])
+def test_a_size_over_the_kinds_cap_is_a_400(owner, salon, haircut, kind, cap):
+    target = {'photo': owner.memberships.get().pk, 'service': haircut.pk}.get(kind, '')
+
+    over = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap + 1, 'thumb_size': 1000}, format='json')
+    at = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': kind, 'target_id': target, 'size': cap, 'thumb_size': 1000}, format='json')
+
+    assert over.status_code == 400
+    assert at.status_code == 200
+
+
+def test_signing_answers_404_then_403_before_the_size_cap(django_user_model, owner, salon, clinic, haircut):
+    theirs = Service.objects.create(tenant=clinic, name='Botox', duration=timedelta(minutes=30))
+    stylist = member(django_user_model, salon, 'stylist@example.com')
+    huge = 10 * 1024 * 1024
+
+    foreign = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': theirs.pk, 'size': huge, 'thumb_size': huge}, format='json')
+    forbidden = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': huge, 'thumb_size': huge}, format='json')
+
+    assert foreign.status_code == 404
+    assert forbidden.status_code == 403
+
+
+def test_the_signed_put_pins_type_length_and_cache(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json')
+
+    signed = parse_qs(urlparse(res.data['upload_url']).query)['X-Amz-SignedHeaders'][0].split(';')
+    assert {'content-type', 'content-length', 'cache-control'} <= set(signed)
+
+
+def uploaded(owner, salon, haircut, bucket, size=50_000, content_type=WEBP):
+    """Sign for real, then put what the browser would have PUT in the fake
+    bucket: the image and its thumbnail."""
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': size, 'thumb_size': 1000}, format='json')
+    bucket.objects[res.data['key']] = (size, content_type)
+    bucket.objects[thumb(res.data['key'])] = (1000, content_type)
+    return res.data['key']
+
+
+def thumb(key):
+    stem, ext = key.rsplit('.', 1)
+    return f'{stem}.thumb.{ext}'
+
+
+def test_an_uploaded_key_attaches_and_reads_back_as_a_public_url(owner, salon, haircut, bucket):
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['image_url'] == f'http://localhost:9000/amandu/{key}'
+    assert res.data['image_thumb_url'] == f'http://localhost:9000/amandu/{thumb(key)}'
+    assert 'image_key' not in res.data
+    listed = api(owner, salon).get(reverse('scheduling:service-list')).data['results']
+    assert listed[0]['image_url'] == f'http://localhost:9000/amandu/{key}'
+
+
+def test_a_service_without_an_image_reads_back_a_null_url(owner, salon, haircut):
+    res = api(owner, salon).get(detail(haircut))
+
+    assert res.data['image_url'] is None
+    assert res.data['image_thumb_url'] is None
+
+
+@pytest.mark.parametrize('upload', [None, (40 * 1024 + 1, WEBP), (1000, 'image/jpeg')])
+def test_an_image_whose_thumbnail_is_missing_or_invalid_is_refused(owner, salon, haircut, bucket, upload):
+    key = uploaded(owner, salon, haircut, bucket)
+    if upload is None:
+        del bucket.objects[thumb(key)]
+    else:
+        bucket.objects[thumb(key)] = upload
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+
+
+def test_a_thumbnail_key_cannot_be_attached_as_an_image(owner, salon, haircut, bucket):
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': thumb(key)}, format='json')
+
+    assert res.status_code == 400
+
+
+@pytest.fixture
+def attached(owner, salon, haircut, bucket, django_capture_on_commit_callbacks):
+    key = uploaded(owner, salon, haircut, bucket)
+    with django_capture_on_commit_callbacks(execute=True):
+        api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
+    return key
+
+
+def test_creating_a_service_with_an_image_key_is_a_400(owner, salon, haircut, bucket):
+    # The upload is signed for an existing service; a new one gets its image after.
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).post(
+        reverse('scheduling:service-list'),
+        {'name': 'Color', 'duration': '00:30:00', 'image_key': key}, format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+    assert not Service.objects.filter(name='Color').exists()
+
+
+def test_a_key_attached_to_one_service_is_refused_for_another(owner, salon, haircut, bucket, attached):
+    color = Service.objects.create(tenant=salon, name='Color', duration=timedelta(minutes=30))
+
+    res = api(owner, salon).patch(detail(color), {'image_key': attached}, format='json')
+
+    assert res.status_code == 400
+    assert 'image_key' in res.data
+    assert api(owner, salon).get(detail(color)).data['image_url'] is None
+
+
+def test_replacing_the_image_deletes_the_old_object(
+    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
+):
+    new = uploaded(owner, salon, haircut, bucket)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        res = api(owner, salon).patch(detail(haircut), {'image_key': new}, format='json')
+
+    assert res.status_code == 200
+    assert bucket.deleted == [attached, thumb(attached)]
+
+
+def test_clearing_the_image_deletes_the_object(
+    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
+):
+    with django_capture_on_commit_callbacks(execute=True):
+        res = api(owner, salon).patch(detail(haircut), {'image_key': None}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['image_url'] is None
+    assert bucket.deleted == [attached, thumb(attached)]
+
+
+def test_an_edit_that_leaves_the_image_alone_deletes_nothing(
+    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
+):
+    with django_capture_on_commit_callbacks(execute=True):
+        api(owner, salon).patch(detail(haircut), {'name': 'Corte'}, format='json')
+        api(owner, salon).patch(detail(haircut), {'image_key': attached}, format='json')
+
+    assert bucket.deleted == []
+
+
+def test_deleting_the_service_deletes_its_image(
+    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
+):
+    with django_capture_on_commit_callbacks(execute=True):
+        res = api(owner, salon).delete(detail(haircut))
+
+    assert res.status_code == 204
+    assert bucket.deleted == [attached, thumb(attached)]
+
+
+def test_an_image_attaches_with_the_ratio_it_was_cropped_to(owner, salon, haircut, bucket):
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key, 'image_ratio': '3:4'}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['image_ratio'] == '3:4'
+
+
+def test_an_image_attached_without_a_ratio_is_the_legacy_landscape_crop(owner, salon, haircut, bucket):
+    # What every service image was before the ratio existed, and what a panel
+    # still on the old bundle sends.
+    haircut.image_ratio = '1:1'
+    haircut.save()
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
+
+    assert res.data['image_ratio'] == '4:3'
+
+
+def test_the_ratio_cannot_change_without_a_new_image(owner, salon, haircut, bucket, attached):
+    # The ratio describes the uploaded picture; relabelling it would stretch
+    # or crop what the public page shows.
+    changed = api(owner, salon).patch(detail(haircut), {'image_ratio': '3:4'}, format='json')
+    same = api(owner, salon).patch(detail(haircut), {'image_key': attached, 'image_ratio': '3:4'}, format='json')
+    unchanged = api(owner, salon).patch(detail(haircut), {'image_ratio': '4:3', 'name': 'Corte'}, format='json')
+
+    assert changed.status_code == 400
+    assert 'image_ratio' in changed.data
+    assert same.status_code == 400
+    assert unchanged.status_code == 200
+
+
+def test_a_ratio_outside_the_three_is_refused(owner, salon, haircut, bucket):
+    key = uploaded(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_key': key, 'image_ratio': '16:9'}, format='json')
+
+    assert res.status_code == 400
+    assert 'image_ratio' in res.data
+
+
+def extra(owner, salon, service, bucket, size=50_000):
+    """A second or third picture for the carousel: signed for the service, no thumbnail."""
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'gallery', 'target_id': service.pk, 'size': size}, format='json')
+    bucket.objects[res.data['key']] = (size, WEBP)
+    return res.data['key']
+
+
+def test_a_carousel_picture_is_signed_without_a_thumbnail(owner, salon, haircut):
+    res = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'gallery', 'target_id': haircut.pk, 'size': 1000}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['key'].startswith(f'{salon.pk}/gallery/')
+    assert 'thumb' not in res.data
+
+
+def test_staff_sign_carousel_pictures_only_for_their_own_services(django_user_model, salon, haircut):
+    stylist = member(django_user_model, salon, 'stylist@example.com')
+
+    res = api(stylist, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'gallery', 'target_id': haircut.pk, 'size': 1000}, format='json')
+
+    assert res.status_code == 403
+
+
+def test_two_more_pictures_attach_and_read_back(owner, salon, haircut, bucket):
+    second, third = extra(owner, salon, haircut, bucket), extra(owner, salon, haircut, bucket)
+
+    res = api(owner, salon).patch(detail(haircut), {'image_2_key': second, 'image_3_key': third}, format='json')
+
+    assert res.status_code == 200
+    assert res.data['image_2_url'] == f'http://localhost:9000/amandu/{second}'
+    assert res.data['image_3_url'] == f'http://localhost:9000/amandu/{third}'
+
+
+def test_a_cover_and_a_carousel_picture_do_not_stand_in_for_each_other(owner, salon, haircut, bucket):
+    cover, more = uploaded(owner, salon, haircut, bucket), extra(owner, salon, haircut, bucket)
+
+    as_cover = api(owner, salon).patch(detail(haircut), {'image_key': more}, format='json')
+    as_extra = api(owner, salon).patch(detail(haircut), {'image_2_key': cover}, format='json')
+
+    assert as_cover.status_code == 400
+    assert as_extra.status_code == 400
+
+
+def test_one_picture_fills_one_slot_only(owner, salon, haircut, bucket):
+    # Replacing a slot deletes its object: a second slot showing it would lose it.
+    color = Service.objects.create(tenant=salon, name='Color', duration=timedelta(minutes=30))
+    key = extra(owner, salon, haircut, bucket)
+
+    twice = api(owner, salon).patch(detail(haircut), {'image_2_key': key, 'image_3_key': key}, format='json')
+    api(owner, salon).patch(detail(haircut), {'image_2_key': key}, format='json')
+    moved = api(owner, salon).patch(detail(haircut), {'image_3_key': key}, format='json')
+    elsewhere = api(owner, salon).patch(detail(color), {'image_2_key': key}, format='json')
+
+    assert twice.status_code == 400
+    assert moved.status_code == 400
+    assert elsewhere.status_code == 400
+
+
+def test_replacing_a_carousel_picture_deletes_only_that_object(
+    owner, salon, haircut, bucket, django_capture_on_commit_callbacks,
+):
+    old = extra(owner, salon, haircut, bucket)
+    api(owner, salon).patch(detail(haircut), {'image_2_key': old}, format='json')
+    new = extra(owner, salon, haircut, bucket)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        res = api(owner, salon).patch(detail(haircut), {'image_2_key': new}, format='json')
+
+    assert res.status_code == 200
+    assert bucket.deleted == [old]
+
+
+def test_deleting_the_service_deletes_every_picture(
+    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
+):
+    second, third = extra(owner, salon, haircut, bucket), extra(owner, salon, haircut, bucket)
+    api(owner, salon).patch(detail(haircut), {'image_2_key': second, 'image_3_key': third}, format='json')
+
+    with django_capture_on_commit_callbacks(execute=True):
+        api(owner, salon).delete(detail(haircut))
+
+    assert bucket.deleted == [attached, thumb(attached), second, third]

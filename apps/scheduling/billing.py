@@ -208,8 +208,13 @@ def client_prefetches(path=''):
 
 
 def _load(client):
-    # A no-op on a client the caller already prefetched; one query per relation
-    # on a bare one (a single charge, a single client file).
+    # One query per relation on a bare client (a single charge, a single client
+    # file). A client the caller already prefetched is skipped outright: Django
+    # would find nothing to fetch, but only after rebuilding client_prefetches()'
+    # querysets -- per attendee, 40% of the weekly agenda's time (loadtest/).
+    cached = getattr(client, '_prefetched_objects_cache', {})
+    if 'subscriptions' in cached and 'appointment_links' in cached:
+        return
     prefetch_related_objects([client], *client_prefetches())
 
 

@@ -1,0 +1,272 @@
+from datetime import timedelta
+
+import pytest
+from django.urls import reverse
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from apps.accounts.models import Membership
+from apps.accounts.models.custom_user import TERMS_VERSION
+from apps.commons.tests.helpers import api
+from apps.tenancy.models import Tenant
+
+ME_URL = reverse('accounts:me')
+PASSWORD_URL = reverse('accounts:change-password')
+STRONG_PASSWORD = 'sup3r-secret-pw'
+
+
+@pytest.fixture
+def salon(db):
+    return Tenant.objects.create(name='Salon', slug='salon')
+
+
+@pytest.fixture
+def clinic(db):
+    return Tenant.objects.create(name='Clinic', slug='clinic')
+
+
+def test_me_returns_identity_and_every_active_tenant(db, django_user_model, salon, clinic):
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.OWNER)
+    Membership.objects.create(user=user, tenant=clinic, role=Membership.Role.STAFF)
+
+    res = api(user).get(ME_URL)
+
+    assert res.status_code == 200
+    assert res.data['email'] == 'u@example.com'
+    assert {m['tenant_slug']: m['role'] for m in res.data['memberships']} == {
+        'salon': 'owner',
+        'clinic': 'staff',
+    }
+
+
+def test_me_carries_the_membership_id_the_agenda_uses(db, django_user_model, salon):
+    """The id must be the Membership's own, because that is what
+    ProfessionalSerializer emits -- a client joins the two to know which of the
+    bookable professionals is the person holding the session."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    membership = Membership.objects.create(user=user, tenant=salon, role=Membership.Role.STAFF)
+
+    res = api(user).get(ME_URL)
+
+    assert res.data['memberships'][0]['membership_id'] == membership.id
+    assert res.data['memberships'][0]['attends_appointments'] is False
+
+
+def test_me_does_not_require_a_selected_tenant(db, django_user_model, salon, clinic):
+    """No X-Tenant-ID header: /me must still answer, because it is how the client
+    learns which tenant to select in the first place."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon)
+    Membership.objects.create(user=user, tenant=clinic)
+
+    assert api(user).get(ME_URL).status_code == 200
+
+
+def test_me_hides_a_suspended_membership(db, django_user_model, salon, clinic):
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon)
+    Membership.objects.create(
+        user=user, tenant=clinic, status=Membership.Status.SUSPENDED
+    )
+
+    res = api(user).get(ME_URL)
+
+    assert [m['tenant_slug'] for m in res.data['memberships']] == ['salon']
+
+
+def test_me_lists_a_suspended_tenant_flagged_and_hides_a_closed_one(db, django_user_model, salon):
+    """A suspended business is listed so the app can say it is suspended --
+    hiding it left its people on an empty app with no reason given. A closed
+    one left the platform and is not listed."""
+    paused = Tenant.objects.create(name='Paused', slug='paused', status=Tenant.Status.SUSPENDED)
+    gone = Tenant.objects.create(name='Gone', slug='gone', status=Tenant.Status.CLOSED)
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    for tenant in (salon, paused, gone):
+        Membership.objects.create(user=user, tenant=tenant)
+
+    res = api(user).get(ME_URL)
+
+    listed = {m['tenant_slug']: m for m in res.data['memberships']}
+    assert set(listed) == {'salon', 'paused'}
+    assert listed['paused']['tenant_status'] == 'suspended'
+    assert listed['paused']['billing'] == 'suspended'
+    assert listed['salon']['billing'] == 'ok'
+
+
+def test_me_says_where_each_tenant_stands_on_paying_kyo(db, django_user_model, settings):
+    settings.KYO_PAYMENT_INSTRUCTIONS = 'Transferí a la cuenta 123.'
+    late = Tenant.objects.create(
+        name='Late', slug='late', addon_cobros=True,
+        paid_until=timezone.localdate() - timedelta(days=1),
+    )
+    owner = django_user_model.objects.create_user(email='o@example.com', password='pw')
+    staff = django_user_model.objects.create_user(email='s@example.com', password='pw')
+    Membership.objects.create(user=owner, tenant=late, role=Membership.Role.OWNER)
+    Membership.objects.create(user=staff, tenant=late, role=Membership.Role.STAFF)
+
+    mine = api(owner).get(ME_URL).data['memberships'][0]
+    theirs = api(staff).get(ME_URL).data['memberships'][0]
+
+    assert mine['billing'] == 'read_only'
+    assert mine['addons'] == ['cobros']
+    assert mine['paid_until'] == late.paid_until
+    # How Kyo gets paid is the owner's business, not the staff's.
+    assert mine['payment_instructions'] == 'Transferí a la cuenta 123.'
+    assert theirs['payment_instructions'] == ''
+
+
+def test_payment_instructions_stay_out_when_nothing_is_owed(db, django_user_model, salon, settings):
+    settings.KYO_PAYMENT_INSTRUCTIONS = 'Transferí a la cuenta 123.'
+    owner = django_user_model.objects.create_user(email='o@example.com', password='pw')
+    Membership.objects.create(user=owner, tenant=salon, role=Membership.Role.OWNER)
+
+    assert api(owner).get(ME_URL).data['memberships'][0]['payment_instructions'] == ''
+
+
+def test_editing_the_name_relabels_the_person_in_every_agenda(
+    db, django_user_model, salon, clinic
+):
+    """
+    `Membership.display_name` reads `get_full_name()`, so the profile name is the
+    label every tenant's agenda shows. Editing it is deliberately not per tenant.
+    """
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    salon_membership = Membership.objects.create(user=user, tenant=salon)
+    clinic_membership = Membership.objects.create(user=user, tenant=clinic)
+
+    res = api(user).patch(
+        ME_URL, {'first_name': 'Ada', 'last_name': 'Lovelace'}, format='json'
+    )
+
+    assert res.status_code == 200
+    assert res.data['first_name'] == 'Ada'
+    assert salon_membership.display_name() == 'Ada Lovelace'
+    assert clinic_membership.display_name() == 'Ada Lovelace'
+
+
+def test_the_profile_cannot_change_its_own_email(db, django_user_model):
+    """email is the USERNAME_FIELD and what invitations were addressed to, so it
+    is read-only: DRF drops it rather than failing, and the address must stand."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+
+    res = api(user).patch(ME_URL, {'email': 'someone.else@example.com'}, format='json')
+
+    assert res.status_code == 200
+    user.refresh_from_db()
+    assert user.email == 'u@example.com'
+
+
+def test_changing_the_password_replaces_the_one_that_logs_in(db, django_user_model):
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'old-pw', 'new_password': STRONG_PASSWORD},
+        format='json',
+    )
+
+    assert res.status_code == 204
+    user.refresh_from_db()
+    assert user.check_password(STRONG_PASSWORD)
+    assert not user.check_password('old-pw')
+
+
+def test_the_current_password_is_required_to_change_it(db, django_user_model):
+    """A valid token proves the session was opened by the owner once; it must not
+    be enough to take the account over."""
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'not-the-password', 'new_password': STRONG_PASSWORD},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'current_password' in res.data
+    user.refresh_from_db()
+    assert user.check_password('old-pw')
+
+
+def test_a_weak_new_password_is_refused(db, django_user_model):
+    user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
+
+    res = api(user).post(
+        PASSWORD_URL,
+        {'current_password': 'old-pw', 'new_password': '123'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'new_password' in res.data
+    user.refresh_from_db()
+    assert user.check_password('old-pw')
+
+
+def test_a_superuser_has_no_memberships(db, django_user_model):
+    superuser = django_user_model.objects.create_superuser(
+        email='su@example.com', password='pw'
+    )
+
+    res = api(superuser).get(ME_URL)
+
+    assert res.status_code == 200
+    assert res.data['memberships'] == []
+
+
+def test_me_carries_the_tenant_country(db, django_user_model):
+    """
+    The country a tenant's phone numbers are normalised against travels with the
+    membership, so a client form can offer the right dialling code rather than
+    reading the browser's clock -- which says where the device is, not where the
+    business is.
+    """
+    peru = Tenant.objects.create(name='Estudio', slug='estudio', country='PE')
+    user = django_user_model.objects.create_user(email='p@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=peru)
+
+    res = api(user).get(ME_URL)
+
+    assert res.data['memberships'][0]['tenant_country'] == 'PE'
+
+
+def test_a_local_number_is_read_in_the_country_of_their_business(db, django_user_model):
+    """A person has no country; the business they work for does. This is the
+    number their WhatsApp notices go to."""
+    shop = Tenant.objects.create(name='Salon', slug='py-salon', country='PY')
+    user = django_user_model.objects.create_user(email='u@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=shop)
+
+    res = api(user).patch(ME_URL, {'phone': '0981 123456'}, format='json')
+
+    assert res.status_code == 200
+    user.refresh_from_db()
+    assert str(user.phone) == '+595981123456'
+
+
+@pytest.mark.django_db
+def test_someone_who_never_accepted_the_terms_is_asked_until_they_do(django_user_model):
+    user = django_user_model.objects.create_user(email='new@example.com', password='pw')
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is True
+
+    assert client.post(reverse('accounts:accept-terms')).status_code == 204
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is False
+    user.refresh_from_db()
+    assert user.terms_version == TERMS_VERSION
+    assert user.terms_accepted_at is not None
+
+
+@pytest.mark.django_db
+def test_a_new_version_of_the_terms_asks_again(django_user_model):
+    user = django_user_model.objects.create_user(email='new@example.com', password='pw')
+    user.terms_version = TERMS_VERSION - 1
+    user.save()
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    assert client.get(reverse('accounts:me')).data['terms_pending'] is True

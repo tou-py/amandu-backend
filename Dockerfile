@@ -83,8 +83,12 @@ USER app
 ENTRYPOINT ["/entrypoint.sh"]
 
 # ASGI through gunicorn's UvicornWorker: gunicorn stays as the process manager
-# for what uvicorn alone lacks -- --timeout kills a hung worker, --max-requests
-# (with jitter) recycles them to bound memory growth.
+# for what uvicorn alone lacks -- --timeout kills a hung worker.
+#
+# No --max-requests: a recycled UvicornWorker drops the keep-alive connections it
+# holds, and a proxy reusing one gets a reset (a 502 behind Traefik). Measured
+# with loadtest/: 0.3% failed with it, none without, and RSS held flat at
+# ~160 MB a worker. Bring it back only against memory that actually grows.
 #
 # Under ASGI the worker count is no longer the concurrency limit: DRF's sync
 # views run on a thread per request, and an async view waiting on I/O holds no
@@ -101,6 +105,4 @@ CMD ["gunicorn", "config.asgi:application", \
      "--worker-class", "uvicorn_worker.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "3", \
-     "--timeout", "60", \
-     "--max-requests", "1000", \
-     "--max-requests-jitter", "100"]
+     "--timeout", "60"]
