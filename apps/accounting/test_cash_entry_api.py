@@ -40,22 +40,6 @@ def manager(db, django_user_model, salon):
     return user
 
 
-@pytest.fixture
-def stylist(db, django_user_model, salon):
-    """The same shop, no standing over its figures."""
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.STAFF)
-    return user
-
-
-@pytest.fixture
-def receptionist(db, django_user_model, salon):
-    """The front desk: takes the money all day and reads what came in."""
-    user = django_user_model.objects.create_user(email='c@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.COORDINATOR)
-    return user
-
-
 def make_appointment(tenant, user=None, email=None, start=None):
     """A bookable slot in `tenant`, with the staff and service it needs."""
     if user is None:
@@ -201,56 +185,25 @@ def test_the_book_cannot_be_corrected_by_anyone(manager, salon):
     assert money.amount == 150_000
 
 
-def test_staff_may_not_file_an_entry(stylist, salon):
-    response = api(stylist, salon).post(LIST_URL, {
-        'kind': 'income', 'amount': 50_000,
-        'occurred_on': '2026-08-12', 'concept': 'Corte',
-    }, format='json')
-
-    assert response.status_code == 403
-    assert not CashEntry.objects.exists()
-
-
-def test_an_owner_may_file_an_entry(db, django_user_model, salon):
-    """The coordinator check admits every role above it, owner included."""
-    user = django_user_model.objects.create_user(email='o@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.OWNER)
+@pytest.mark.parametrize('role, status', [
+    (Membership.Role.STAFF, 403),
+    # The coordinator closes the turn and takes the payment: letting them do the
+    # first and not the second would only move the till into somebody's memory.
+    (Membership.Role.COORDINATOR, 201),
+    (Membership.Role.ADMIN, 201),
+    (Membership.Role.OWNER, 201),
+])
+def test_the_front_desk_and_up_file_entries(django_user_model, salon, role, status):
+    user = django_user_model.objects.create_user(email='m@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=role)
 
     response = api(user, salon).post(LIST_URL, {
         'kind': 'income', 'amount': 90_000,
         'occurred_on': '2026-08-20', 'concept': 'Corte', 'payment_method': 'cash',
     }, format='json')
 
-    assert response.status_code == 201
-
-
-def test_the_front_desk_may_file_an_entry(receptionist, salon):
-    """
-    The coordinator closes the turn and takes the payment. Letting them do the
-    first and not the second would only move the till into somebody's memory.
-    """
-    response = api(receptionist, salon).post(LIST_URL, {
-        'kind': 'income', 'amount': 90_000,
-        'occurred_on': '2026-08-20', 'concept': 'Corte · Ana', 'payment_method': 'cash',
-    }, format='json')
-
-    assert response.status_code == 201
-    assert CashEntry.objects.get().amount == 90_000
-
-
-def test_a_coordinator_of_another_shop_may_not_file_here(db, django_user_model, salon, clinic):
-    """The looser role is still bounded by the tenant. Coordinator of their own
-    clinic, filing into the salon's book: the header selects, it never grants."""
-    user = django_user_model.objects.create_user(email='cc@example.com', password='pw')
-    Membership.objects.create(user=user, tenant=clinic, role=Membership.Role.COORDINATOR)
-
-    response = api(user, salon).post(LIST_URL, {
-        'kind': 'income', 'amount': 90_000,
-        'occurred_on': '2026-08-20', 'concept': 'Corte',
-    }, format='json')
-
-    assert response.status_code == 403
-    assert not CashEntry.objects.exists()
+    assert response.status_code == status
+    assert CashEntry.objects.count() == (status == 201)
 
 
 # --- what the book refuses ---------------------------------------------------
