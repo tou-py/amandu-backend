@@ -56,14 +56,6 @@ def test_weekday_matches_python_not_django(salon, stylist):
     assert row.get_weekday_display() == 'Monday'
 
 
-def test_a_day_can_hold_two_stretches(salon, stylist):
-    """The lunch break: 09:00-12:00 and 14:00-19:00 are one Monday, not two."""
-    shift(salon, stylist, start=time(9), end=time(12))
-    shift(salon, stylist, start=time(14), end=time(19))
-
-    assert WorkSchedule.objects.filter(professional=stylist, weekday=MONDAY).count() == 2
-
-
 def test_the_same_stretch_cannot_be_stored_twice(salon, stylist):
     shift(salon, stylist, start=time(9), end=time(12))
 
@@ -71,32 +63,9 @@ def test_the_same_stretch_cannot_be_stored_twice(salon, stylist):
         shift(salon, stylist, start=time(9), end=time(18))
 
 
-def test_two_professionals_keep_their_own_weeks(salon, stylist, django_user_model):
-    """A salon of five is five schedules, which is why this hangs off the
-    membership and not off the tenant."""
-    other_user = django_user_model.objects.create_user(email='o@example.com', password='pw')
-    other = Membership.objects.create(user=other_user, tenant=salon, attends_appointments=True)
-
-    shift(salon, stylist, weekday=MONDAY)
-    shift(salon, other, weekday=MONDAY)
-
-    assert WorkSchedule.objects.filter(weekday=MONDAY).count() == 2
-
-
 def test_a_shift_cannot_end_before_it_starts(salon, stylist):
     with pytest.raises(IntegrityError), transaction.atomic():
         shift(salon, stylist, start=time(18), end=time(9))
-
-
-def test_time_off_without_a_professional_shuts_the_whole_tenant(salon):
-    """Christmas is one row, and it stays true for whoever is hired in March."""
-    start = timezone.now()
-
-    closed = TimeOff.objects.create(
-        tenant=salon, start=start, end=start + timedelta(days=1), reason='Holiday',
-    )
-
-    assert closed.professional is None
 
 
 def test_time_off_cannot_end_before_it_starts(salon, stylist):

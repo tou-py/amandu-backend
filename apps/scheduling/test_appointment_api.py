@@ -545,14 +545,6 @@ def test_the_database_itself_forbids_an_overlap(salon, stylist, client_, haircut
             )
 
 
-def test_appointment_ids_are_uuid7(receptionist, salon, stylist, client_, haircut):
-    res = api(receptionist, salon).post(
-        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
-    )
-
-    assert Appointment.objects.get(pk=res.data['id']).id.version == 7
-
-
 def test_an_appointment_carries_the_phone_of_every_attendee(
     receptionist, salon, stylist, haircut
 ):

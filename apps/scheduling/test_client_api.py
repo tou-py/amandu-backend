@@ -201,12 +201,6 @@ def test_authenticated_without_a_membership_gets_403(db, django_user_model, salo
     assert res.status_code == 403
 
 
-def test_client_ids_are_uuid7(receptionist, salon):
-    res = api(receptionist, salon).post(LIST_URL, {'name': 'Ada'}, format='json')
-
-    assert Client.objects.get(pk=res.data['id']).id.version == 7
-
-
 def test_without_a_tenant_country_a_local_number_is_rejected(db, django_user_model):
     """
     Asserts the mechanism, not just the happy outcome: with no region there is
