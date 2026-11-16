@@ -1,0 +1,84 @@
+# The prod image under load, beside the dev stack and never touching it: its own
+# project name, database, Redis and ports. Run from the repo root:
+#
+#   docker compose -f loadtest/compose.yaml up -d --build --wait api
+#   docker compose -f loadtest/compose.yaml exec -T api python manage.py shell < loadtest/seed.py
+#   docker compose -f loadtest/compose.yaml up -d locust      # UI on http://localhost:8089
+#   docker compose -f loadtest/compose.yaml down -v           # throw it all away
+name: amandu-load
+
+x-pg: &pg
+  POSTGRES_DB: amandu
+  POSTGRES_USER: amandu
+  POSTGRES_PASSWORD: load
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment: *pg
+    # Prod's own ceiling: 3 workers x a pool of 10 must fit under it.
+    command: ["postgres", "-c", "max_connections=100"]
+    # Throwaway data; disk speed is not what is being measured.
+    tmpfs: /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amandu -d amandu"]
+      interval: 2s
+      retries: 15
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 15
+
+  api:
+    build:
+      context: ..
+      target: prod
+    environment:
+      <<: *pg
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: load-test-only-not-a-secret
+      ALLOWED_HOSTS: localhost,127.0.0.1,api
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      BILLING_GO_LIVE: "2026-01-01"
+      # Uploads are not exercised; the settings only require these to exist.
+      S3_ENDPOINT: http://unused:9000
+      S3_PUBLIC_ENDPOINT: http://unused:9000
+      S3_PUBLIC_URL: http://unused:9000/amandu
+      S3_BUCKET: amandu
+      S3_ACCESS_KEY_ID: unused
+      S3_SECRET_ACCESS_KEY: unused
+    ports:
+      - "127.0.0.1:8001:8000"
+    # A small VPS, not the whole workstation: numbers that mean something for
+    # the box prod runs on. Raise them to match it.
+    cpus: 2
+    mem_limit: 1g
+    healthcheck:
+      # Through the TLS redirect the way Traefik would call it.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/healthz/', headers={'X-Forwarded-Proto': 'https', 'Host': 'localhost'}))"]
+      interval: 3s
+      retries: 20
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  locust:
+    image: locustio/locust:2.37.10
+    profiles: [load]
+    command: -f /mnt/locustfile.py --host http://api:8000
+    environment:
+      LOAD_TENANTS: ${LOAD_TENANTS:-20}
+    volumes:
+      - ./locustfile.py:/mnt/locustfile.py:ro
+    ports:
+      - "127.0.0.1:8089:8089"
+    depends_on:
+      api:
+        condition: service_healthy
