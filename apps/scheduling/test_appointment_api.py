@@ -3,9 +3,8 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -349,16 +348,6 @@ def test_cancelling_a_teammates_appointment_notifies_them(
     assert notification.verb == Notification.Verb.APPOINTMENT_CANCELLED
 
 
-def test_cancelling_your_own_appointment_does_not_notify_you(salon, stylist, client_, haircut):
-    http = api(stylist.user, salon)
-    created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
-    appointment = Appointment.objects.get(pk=created.data['id'])
-
-    http.post(action_url(appointment, 'cancel'))
-
-    assert not Notification.objects.exists()
-
-
 def test_a_future_appointment_cannot_be_completed(receptionist, salon, stylist, client_, haircut):
     http = api(receptionist, salon)
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
@@ -590,38 +579,6 @@ def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, st
     assert covered.data['service_price'] is None
 
 
-def test_listing_appointments_does_not_scale_queries(receptionist, salon, stylist, haircut):
-    """N+1 guard: the query count for the list must not grow with the number of
-    appointments. Fails if `client_links__client` stops being prefetched, and
-    equally if `attendees.billing` or `service_price` ever start resolving
-    through a relation the viewset does not already fetch."""
-    ada = Client.objects.create(tenant=salon, name='Ada')
-    bob = Client.objects.create(tenant=salon, name='Bob')
-    haircut.price = 120000
-    haircut.save(update_fields=['price'])
-
-    def book(offset_minutes):
-        start = TOMORROW + timedelta(minutes=offset_minutes)
-        appointment = Appointment.objects.create(
-            tenant=salon, professional=stylist, service=haircut,
-            start=start, end=start + timedelta(minutes=30),
-        )
-        appointment.clients.add(ada, bob)
-
-    http = api(receptionist, salon)
-
-    book(0)
-    with CaptureQueriesContext(connection) as one_appointment:
-        http.get(LIST_URL)
-
-    book(30)
-    book(60)
-    with CaptureQueriesContext(connection) as three_appointments:
-        http.get(LIST_URL)
-
-    assert len(three_appointments) == len(one_appointment)
-
-
 def test_the_list_is_paginated(receptionist, salon, stylist, haircut):
     Appointment.objects.create(
         tenant=salon, professional=stylist, service=haircut,
@@ -821,23 +778,6 @@ def test_staff_may_book_their_own_day(salon, stylist, client_, haircut):
     assert res.status_code == 201
 
 
-def test_staff_may_not_book_a_colleagues_day(db, django_user_model, salon, stylist, client_, haircut):
-    """
-    Booking for a colleague fills THEIR day, which they answer for. It takes a
-    role that answers for the diary as a whole: owner, admin or coordinator.
-    """
-    user = django_user_model.objects.create_user(email='other@example.com', password='pw')
-    other = Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
-
-    res = api(other.user, salon).post(
-        LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json'
-    )
-
-    assert res.status_code == 400
-    assert 'professional' in res.data
-    assert not Appointment.objects.exists()
-
-
 def test_a_coordinator_may_book_for_the_whole_team(receptionist, salon, stylist, client_, haircut):
     """Coordinator attends clients like staff but keeps the team's diary."""
     res = api(receptionist, salon).post(
@@ -865,33 +805,6 @@ def test_staff_may_not_reassign_an_appointment_to_someone_else(
     assert res.status_code == 400
     appointment.refresh_from_db()
     assert appointment.professional == other
-
-
-def test_staff_may_not_reschedule_a_colleagues_appointment(
-    db, django_user_model, salon, stylist, client_, haircut
-):
-    """
-    validate_professional never runs here: a drag-to-reschedule PATCH sends
-    only `start`, so the old field-level check had nothing to look at. This is
-    the object-level permission's job instead.
-    """
-    other = Membership.objects.create(
-        user=django_user_model.objects.create_user(email='other3@example.com', password='pw'),
-        tenant=salon, attends_appointments=True,
-    )
-    appointment = Appointment.objects.create(
-        tenant=salon, professional=other, service=haircut,
-        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
-    )
-
-    res = api(stylist.user, salon).patch(
-        detail_url(appointment), {'start': (TOMORROW + timedelta(hours=1)).isoformat()},
-        format='json',
-    )
-
-    assert res.status_code == 403
-    appointment.refresh_from_db()
-    assert appointment.start == TOMORROW
 
 
 def test_staff_may_reschedule_their_own_appointment(salon, stylist, client_, haircut):
@@ -922,68 +835,6 @@ def test_a_coordinator_may_reschedule_anyones_appointment(receptionist, salon, s
     )
 
     assert res.status_code == 200
-
-
-def test_staff_may_not_cancel_a_colleagues_appointment(
-    db, django_user_model, salon, stylist, client_, haircut
-):
-    other = Membership.objects.create(
-        user=django_user_model.objects.create_user(email='other4@example.com', password='pw'),
-        tenant=salon, attends_appointments=True,
-    )
-    appointment = Appointment.objects.create(
-        tenant=salon, professional=other, service=haircut,
-        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
-    )
-
-    res = api(stylist.user, salon).post(action_url(appointment, 'cancel'))
-
-    assert res.status_code == 403
-    appointment.refresh_from_db()
-    assert appointment.status == Appointment.Status.SCHEDULED
-
-
-def test_staff_may_not_complete_a_colleagues_appointment(
-    db, django_user_model, salon, stylist, client_, haircut
-):
-    other = Membership.objects.create(
-        user=django_user_model.objects.create_user(email='other5@example.com', password='pw'),
-        tenant=salon, attends_appointments=True,
-    )
-    past = timezone.now() - timedelta(hours=2)
-    appointment = Appointment.objects.create(
-        tenant=salon, professional=other, service=haircut,
-        start=past, end=past + timedelta(minutes=30),
-    )
-
-    res = api(stylist.user, salon).post(action_url(appointment, 'complete'))
-
-    assert res.status_code == 403
-    appointment.refresh_from_db()
-    assert appointment.status == Appointment.Status.SCHEDULED
-
-
-def test_staff_may_not_mark_attendance_for_a_colleagues_appointment(
-    db, django_user_model, salon, stylist, client_, haircut
-):
-    other = Membership.objects.create(
-        user=django_user_model.objects.create_user(email='other6@example.com', password='pw'),
-        tenant=salon, attends_appointments=True,
-    )
-    appointment = Appointment.objects.create(
-        tenant=salon, professional=other, service=haircut,
-        start=TOMORROW, end=TOMORROW + timedelta(minutes=30),
-    )
-    appointment.clients.add(client_)
-
-    res = api(stylist.user, salon).post(
-        action_url(appointment, 'attendance'),
-        {'client': str(client_.pk), 'attendance': 'attended'},
-        format='json',
-    )
-
-    assert res.status_code == 403
-    assert appointment.client_links.get().attendance == 'pending'
 
 
 def test_a_colleague_may_still_read_the_appointment(
@@ -1213,6 +1064,8 @@ def test_the_list_does_not_query_per_row(
     passes against the broken queryset, exactly as the seed data did.
     """
     start = timezone.now() + timedelta(days=1)
+    haircut.price = 120000  # so `service_price` has something to read
+    haircut.save(update_fields=['price'])
     # Subscribed, so every attendee's billing walks the plan, its categories,
     # the periods paid and the quota turns -- the expensive path.
     plan = Plan.objects.create(tenant=salon, name='Libre', price=100, sessions_per_period=8)
@@ -1352,6 +1205,7 @@ def test_your_own_changes_tell_nobody(salon, stylist, client_, haircut):
     created = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
     url = reverse('scheduling:appointment-detail', args=[created.data['id']])
     http.patch(url, {'start': (TOMORROW + timedelta(hours=2)).isoformat()}, format='json')
+    http.post(f'{url}cancel/', format='json')
     http.delete(url)
 
     assert not Notification.objects.exists()
@@ -1368,6 +1222,7 @@ def test_deleting_a_teammates_turn_tells_them(receptionist, salon, stylist, clie
 
 
 def test_staff_cannot_write_a_colleagues_turn(django_user_model, salon, stylist, client_, haircut):
+    """Writes are scoped to one's own day; reading the shared diary is not."""
     colleague = Membership.objects.create(
         user=django_user_model.objects.create_user(email='c@example.com', password='pw'),
         tenant=salon, attends_appointments=True,
@@ -1378,14 +1233,21 @@ def test_staff_cannot_write_a_colleagues_turn(django_user_model, salon, stylist,
     appointment.clients.add(client_)
     http = api(colleague.user, salon)
 
-    assert http.patch(detail_url(appointment), {'notes': 'x'}, format='json').status_code == 403
+    # A drag sends only `start`, so no field check runs: the object permission is the guard.
+    for body in ({'notes': 'x'}, {'start': (TOMORROW + timedelta(hours=1)).isoformat()}):
+        assert http.patch(detail_url(appointment), body, format='json').status_code == 403, body
     assert http.delete(detail_url(appointment)).status_code == 403
     for name, body in (
         ('cancel', {}), ('complete', {}), ('confirm', {}),
         ('attendance', {'client': str(client_.pk), 'attendance': 'attended'}),
     ):
         assert http.post(action_url(appointment, name), body, format='json').status_code == 403, name
-    assert http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW + timedelta(days=1)), format='json').status_code == 400
+    booked = http.post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW + timedelta(days=1)), format='json')
+    assert booked.status_code == 400 and 'professional' in booked.data
+    appointment.refresh_from_db()
+    assert (appointment.start, appointment.status) == (TOMORROW, Appointment.Status.SCHEDULED)
+    assert appointment.client_links.get().attendance == 'pending'
+    assert http.get(detail_url(appointment)).status_code == 200
 
 
 def test_a_teammates_change_is_pushed_with_its_own_title(receptionist, salon, stylist, client_, haircut):
