@@ -4,7 +4,6 @@ what the bucket is told to delete. Driven through the HTTP API with one fake,
 the `bucket` fixture (storage.head and storage.delete); signing runs for real.
 """
 
-import uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
@@ -205,46 +204,6 @@ def test_a_service_without_an_image_reads_back_a_null_url(owner, salon, haircut)
     assert res.data['image_thumb_url'] is None
 
 
-def test_a_key_from_another_tenants_space_is_refused(owner, salon, clinic, haircut, bucket):
-    foreign = f'{clinic.pk}/service/{uuid.uuid4().hex}.webp'
-    bucket.objects[foreign] = (1000, WEBP)
-
-    res = api(owner, salon).patch(detail(haircut), {'image_key': foreign}, format='json')
-
-    assert res.status_code == 400
-    assert 'image_key' in res.data
-
-
-def test_a_key_of_another_kind_is_refused(owner, salon, haircut, bucket):
-    logo = api(owner, salon).post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').data['key']
-    bucket.objects[logo] = (1000, WEBP)
-
-    res = api(owner, salon).patch(detail(haircut), {'image_key': logo}, format='json')
-
-    assert res.status_code == 400
-
-
-def test_a_key_nothing_was_uploaded_to_is_refused(owner, salon, haircut, bucket):
-    key = api(owner, salon).post(
-        UPLOADS, {'content_type': WEBP, 'kind': 'service', 'target_id': haircut.pk, 'size': 1000, 'thumb_size': 1000}, format='json',
-    ).data['key']
-
-    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
-
-    assert res.status_code == 400
-
-
-@pytest.mark.parametrize('size, content_type', [(300 * 1024 + 1, WEBP), (1000, 'image/svg+xml')])
-def test_an_upload_over_the_cap_or_not_webp_is_refused(owner, salon, haircut, bucket, size, content_type):
-    key = uploaded(owner, salon, haircut, bucket, size=1000)
-    bucket.objects[key] = (size, content_type)
-
-    res = api(owner, salon).patch(detail(haircut), {'image_key': key}, format='json')
-
-    assert res.status_code == 400
-    assert api(owner, salon).get(detail(haircut)).data['image_url'] is None
-
-
 @pytest.mark.parametrize('upload', [None, (40 * 1024 + 1, WEBP), (1000, 'image/jpeg')])
 def test_an_image_whose_thumbnail_is_missing_or_invalid_is_refused(owner, salon, haircut, bucket, upload):
     key = uploaded(owner, salon, haircut, bucket)
@@ -340,16 +299,6 @@ def test_deleting_the_service_deletes_its_image(
 
     assert res.status_code == 204
     assert bucket.deleted == [attached, thumb(attached)]
-
-
-def test_a_request_that_fails_validation_deletes_nothing(
-    owner, salon, haircut, bucket, attached, django_capture_on_commit_callbacks,
-):
-    with django_capture_on_commit_callbacks(execute=True):
-        res = api(owner, salon).patch(detail(haircut), {'image_key': f'{salon.pk}/service/{uuid.uuid4().hex}.webp'}, format='json')
-
-    assert res.status_code == 400
-    assert bucket.deleted == []
 
 
 def test_an_image_attaches_with_the_ratio_it_was_cropped_to(owner, salon, haircut, bucket):

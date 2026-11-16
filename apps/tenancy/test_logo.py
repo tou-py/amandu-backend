@@ -62,17 +62,6 @@ def test_a_business_without_a_logo_reads_back_a_null_url(owner):
     assert owner.get(TENANT_URL).data['logo_url'] is None
 
 
-def test_a_logo_from_another_tenants_space_is_refused(owner, bucket):
-    clinic = Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
-    foreign = f'{clinic.pk}/logo/{uuid.uuid4().hex}.webp'
-    bucket.objects[foreign] = (1000, WEBP)
-
-    res = owner.patch(TENANT_URL, {'logo_key': foreign}, format='json')
-
-    assert res.status_code == 400
-    assert 'logo_key' in res.data
-
-
 @pytest.mark.parametrize('shape', [
     '{mine}/logo/../../{theirs}/logo/{uuid}.webp',  # climbs out of this tenant's space
     '{mine}/logo//{uuid}.webp',
@@ -134,30 +123,6 @@ def test_the_stored_type_must_match_the_key_extension(owner, salon, bucket, exte
     assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == status
 
 
-def test_a_key_of_another_kind_is_refused(owner, salon, bucket):
-    photo = f'{salon.pk}/photo/{uuid.uuid4().hex}.webp'
-    bucket.objects[photo] = (1000, WEBP)
-
-    assert owner.patch(TENANT_URL, {'logo_key': photo}, format='json').status_code == 400
-
-
-def test_a_key_nothing_was_uploaded_to_is_refused(owner, bucket):
-    key = owner.post(UPLOADS, {'content_type': WEBP, 'kind': 'logo', 'size': 1000}, format='json').data['key']
-
-    assert owner.patch(TENANT_URL, {'logo_key': key}, format='json').status_code == 400
-
-
-@pytest.mark.parametrize('size, content_type', [(300 * 1024 + 1, WEBP), (1000, 'image/svg+xml')])
-def test_an_upload_over_the_cap_or_not_webp_is_refused(owner, bucket, size, content_type):
-    key = uploaded(owner, bucket, size=1000)
-    bucket.objects[key] = (size, content_type)
-
-    res = owner.patch(TENANT_URL, {'logo_key': key}, format='json')
-
-    assert res.status_code == 400
-    assert owner.get(TENANT_URL).data['logo_url'] is None
-
-
 def test_an_admin_cannot_attach_a_logo(django_user_model, salon, owner, bucket):
     user = django_user_model.objects.create_user(email='admin@example.com', password='pw')
     Membership.objects.create(user=user, tenant=salon, role=Membership.Role.ADMIN)
@@ -204,17 +169,6 @@ def test_an_edit_that_leaves_the_logo_alone_deletes_nothing(
         owner.patch(TENANT_URL, {'logo_key': attached}, format='json')
 
     assert bucket.deleted == []
-
-
-def test_a_request_that_fails_validation_deletes_nothing(
-    owner, salon, bucket, attached, django_capture_on_commit_callbacks,
-):
-    with django_capture_on_commit_callbacks(execute=True):
-        res = owner.patch(TENANT_URL, {'logo_key': f'{salon.pk}/logo/{uuid.uuid4().hex}.webp'}, format='json')
-
-    assert res.status_code == 400
-    assert bucket.deleted == []
-    assert owner.get(TENANT_URL).data['logo_url'].endswith(attached)
 
 
 def test_auth_me_carries_the_logo_to_everyone_in_the_business(owner, salon, django_user_model, bucket):

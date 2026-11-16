@@ -95,6 +95,8 @@ def test_an_admin_cannot_set_the_owners_photo(make, salon, owner, bucket):
     assert api(owner).get(reverse('accounts:member-list')).data[0]['photo_url'] is None
 
 
+# The one home of KeyField's refusals: the logo and service tests cover only
+# what is theirs (key shapes, JPEG, thumbnails), not these again.
 @pytest.mark.parametrize('key, stored', [
     ('{clinic}/photo/{name}.webp', (1000, WEBP)),       # another tenant's space
     ('{salon}/logo/{name}.webp', (1000, WEBP)),         # another kind
