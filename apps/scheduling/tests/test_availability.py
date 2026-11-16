@@ -13,7 +13,7 @@ import pytest
 
 from apps.accounts.models import Membership
 from apps.scheduling.availability import free_slots
-from apps.scheduling.models import Appointment, Client, Service, TimeOff, WorkSchedule
+from apps.scheduling.models import Appointment, Service, TimeOff, WorkSchedule
 from apps.tenancy.models import Tenant
 
 ASUNCION = ZoneInfo('America/Asuncion')
@@ -33,17 +33,6 @@ def salon(db):
     return Tenant.objects.create(
         name='Salon', slug='salon', country='PY', timezone='America/Asuncion',
     )
-
-
-@pytest.fixture
-def stylist(db, django_user_model, salon):
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
-
-
-@pytest.fixture
-def haircut(db, salon):
-    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
 
 
 @pytest.fixture

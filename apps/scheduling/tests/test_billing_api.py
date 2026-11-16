@@ -14,11 +14,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from django.urls import reverse
 from django.utils import timezone
-from rest_framework.test import APIClient
 
 from apps.accounting.models import Caja, CashEntry, MethodCaja
 from apps.accounts.models import Membership
 from apps.commons.dates import add_months
+from apps.commons.tests.helpers import api
 from apps.scheduling.billing import local_today
 from apps.scheduling.models import Appointment, AppointmentClient, Category, Client, Plan, Service, Subscription
 from apps.tenancy.models import Tenant
@@ -26,15 +26,6 @@ from apps.tenancy.models import Tenant
 RECEIVABLES = reverse('scheduling:receivables')
 SUBSCRIPTIONS = reverse('scheduling:subscription-list')
 YESTERDAY = timezone.now().replace(microsecond=0) - timedelta(days=1)
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 def client_url(client, name=None):

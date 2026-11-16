@@ -2,33 +2,13 @@ from datetime import timedelta
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Category, Service
-from apps.tenancy.models import Tenant
 
 CATEGORY_LIST = reverse('scheduling:category-list')
 SERVICE_LIST = reverse('scheduling:service-list')
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
-
-
-@pytest.fixture
-def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
 
 
 @pytest.fixture

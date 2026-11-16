@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
-from apps.scheduling.models import Appointment, AppointmentClient, Client, Service
+from apps.scheduling.models import Appointment, AppointmentClient, Client
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('scheduling:client-list')
@@ -24,16 +24,6 @@ def api(user=None, tenant=None):
     if tenant is not None:
         http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
     return http
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
-
-
-@pytest.fixture
-def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
 
 
 @pytest.fixture
@@ -226,17 +216,6 @@ def test_without_a_tenant_country_a_local_number_is_rejected(db, django_user_mod
 
 def timeline_url(client):
     return reverse('scheduling:client-timeline', args=[client.pk])
-
-
-@pytest.fixture
-def stylist(db, django_user_model, salon):
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
-
-
-@pytest.fixture
-def haircut(db, salon):
-    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
 
 
 def book(salon, stylist, haircut, when, *clients, notes=''):

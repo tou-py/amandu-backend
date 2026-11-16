@@ -7,9 +7,9 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.urls import reverse
 from django.utils import timezone
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
+from apps.commons.tests.helpers import api
 from apps.scheduling.management.commands.send_reminders import Command
 from apps.scheduling.models import Appointment, Client, Plan, Service, Subscription
 from apps.scheduling.serializers import AppointmentSerializer
@@ -28,25 +28,6 @@ def action_url(appointment, name):
     return reverse(f'scheduling:appointment-{name}', args=[appointment.pk])
 
 
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
-
-
-@pytest.fixture
-def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
-
-
 @pytest.fixture
 def receptionist(db, django_user_model, salon):
     """
@@ -60,19 +41,8 @@ def receptionist(db, django_user_model, salon):
 
 
 @pytest.fixture
-def stylist(db, django_user_model, salon):
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
-
-
-@pytest.fixture
 def client_(db, salon):
     return Client.objects.create(tenant=salon, name='Ada')
-
-
-@pytest.fixture
-def haircut(db, salon):
-    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
 
 
 def booking(professional, clients, service, start):

@@ -3,10 +3,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
 from apps.commons.dates import add_months
+from apps.commons.tests.helpers import api
 from apps.scheduling.billing import local_today
 from apps.scheduling.models import Category, Client, Plan, Subscription
 from apps.tenancy.models import Tenant
@@ -22,15 +22,6 @@ def plan_url(plan):
 
 def sub_url(subscription, name):
     return reverse(f'scheduling:subscription-{name}', args=[subscription.pk])
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture
