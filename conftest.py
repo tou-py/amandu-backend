@@ -15,6 +15,42 @@ def _clear_cache():
     cache.clear()
 
 
+# The cast most tests share. A module that needs another country, add-on or role
+# defines its own fixture of the same name, which wins over these.
+
+@pytest.fixture
+def salon(db):
+    from apps.tenancy.models import Tenant
+
+    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
+
+
+@pytest.fixture
+def clinic(db):
+    """A second business, for every "never crosses tenants" test."""
+    from apps.tenancy.models import Tenant
+
+    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
+
+
+@pytest.fixture
+def stylist(db, django_user_model, salon):
+    """A staff membership that is booked: the professional in the agenda."""
+    from apps.accounts.models import Membership
+
+    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
+    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
+
+
+@pytest.fixture
+def haircut(db, salon):
+    from datetime import timedelta
+
+    from apps.scheduling.models import Service
+
+    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
+
+
 @pytest.fixture
 def bucket(monkeypatch):
     """

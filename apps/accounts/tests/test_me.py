@@ -5,20 +5,14 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.accounts.models.custom_user import TERMS_VERSION
 from apps.accounts.models import Membership
+from apps.accounts.models.custom_user import TERMS_VERSION
+from apps.commons.tests.helpers import api
 from apps.tenancy.models import Tenant
 
 ME_URL = reverse('accounts:me')
 PASSWORD_URL = reverse('accounts:change-password')
 STRONG_PASSWORD = 'sup3r-secret-pw'
-
-
-def api(user=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    return http
 
 
 @pytest.fixture

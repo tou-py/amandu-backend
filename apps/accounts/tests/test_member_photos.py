@@ -12,7 +12,6 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
-from apps.tenancy.models import Tenant
 
 UPLOADS = '/api/uploads/'
 ME = reverse('accounts:member-me')
@@ -32,16 +31,6 @@ def detail(member):
 
 def url(key):
     return f'http://localhost:9000/amandu/{key}'
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
-
-
-@pytest.fixture
-def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
 
 
 @pytest.fixture

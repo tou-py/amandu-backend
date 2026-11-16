@@ -2,10 +2,10 @@ from datetime import date
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounting.models import Caja, CashEntry
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Client
 from apps.tenancy.models import Tenant
 
@@ -22,13 +22,6 @@ def member(django_user_model, tenant, role):
     user = django_user_model.objects.create_user(email=f'{role}-{tenant.slug}@example.com', password='pw')
     Membership.objects.create(user=user, tenant=tenant, role=role)
     return user
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture
@@ -156,7 +149,8 @@ def test_a_turn_can_be_recorded_as_paid_by_qr(desk):
 
 def test_an_undo_is_dated_on_the_business_day_it_happened(django_user_model, salon, monkeypatch):
     """Past midnight in UTC, still the evening before on the business's wall."""
-    from datetime import datetime, timezone as utc
+    from datetime import datetime
+    from datetime import timezone as utc
 
     from django.utils import timezone
 
@@ -177,7 +171,8 @@ def test_an_undo_is_dated_on_the_business_day_it_happened(django_user_model, sal
 def test_past_voids_get_the_business_day_they_happened_on(salon):
     """The data half of 0005, on a row from before the day was recorded."""
     import importlib
-    from datetime import datetime, timezone as utc
+    from datetime import datetime
+    from datetime import timezone as utc
 
     from django.apps import apps as django_apps
     from django.db import connection

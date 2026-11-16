@@ -3,23 +3,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounting.models import CashEntry
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Appointment, Service
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('accounting:cashentry-list')
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture

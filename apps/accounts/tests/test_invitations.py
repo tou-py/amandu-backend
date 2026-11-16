@@ -1,10 +1,10 @@
 import pytest
 from django.core import mail
 from django.urls import reverse
-from rest_framework.test import APIClient
 
-from apps.accounts.models.custom_user import TERMS_VERSION
 from apps.accounts.models import CustomUser, Invitation, Membership
+from apps.accounts.models.custom_user import TERMS_VERSION
+from apps.commons.tests.helpers import api
 from apps.tenancy.models import Tenant
 
 INVITE_LIST = reverse('accounts:invitation-list')
@@ -23,15 +23,6 @@ def pending_token(email, tenant):
     return Invitation.objects.get(
         email=email, tenant=tenant, status=Invitation.Status.PENDING
     ).token
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture

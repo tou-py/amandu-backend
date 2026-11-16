@@ -2,9 +2,9 @@ from datetime import timedelta
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import PushSubscription
+from apps.commons.tests.helpers import api
 
 ME_URL = reverse('accounts:me')
 PUSH_URL = reverse('accounts:push-subscription')
@@ -13,13 +13,6 @@ SUBSCRIPTION = {
     'endpoint': 'https://push.example.com/abc',
     'keys': {'p256dh': 'key-material', 'auth': 'auth-secret'},
 }
-
-
-def api(user=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    return http
 
 
 @pytest.fixture
