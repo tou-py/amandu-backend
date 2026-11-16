@@ -16,6 +16,7 @@ The backend keeps only what the frontend calls. Before adding or keeping an endp
 
 - `docker compose up` runs db, redis, seaweedfs and `api`. The `api` container mounts the working tree: an unmigrated model change breaks the live dev API for the frontend at once, so run `docker compose exec api python manage.py migrate` as soon as you add a migration, and roll back branch-only migrations before switching branches. Templates are cached: `docker compose restart api` after editing one, and check with `curl` before trusting a screenshot.
 - Tests from the host: `POSTGRES_HOST=127.0.0.1 .venv/Scripts/python.exe -m pytest` (`localhost` resolves to IPv6 and hangs the pool; the `pytest` entry point fails under uv). Agents or worktrees running tests in parallel each set their own `POSTGRES_DB=amandu_<name>`, or the shared test DB gets destroyed mid-run.
+- Load tests: the prod image beside dev, own project and ports (`loadtest/compose.yaml` header has the steps). Drive compose from PowerShell, not Git Bash (its bake fails there); pipe `seed.py` from Git Bash (PowerShell adds a BOM).
 - `api` crash-looping on "failed to resolve host 'db'" with db healthy: `docker compose up -d --force-recreate api`.
 
 ## Commits

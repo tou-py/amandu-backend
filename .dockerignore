@@ -6,3 +6,8 @@ db.sqlite3
 __pycache__/
 *.pyc
 staticfiles/
+
+# Not part of the runtime: tests and the load-test kit.
+**/tests/
+conftest.py
+loadtest/

@@ -1,0 +1,235 @@
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
+from django.urls import reverse
+
+from apps.accounting.models import CashEntry
+from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
+from apps.scheduling.models import Appointment, Service
+from apps.tenancy.models import Tenant
+
+LIST_URL = reverse('accounting:cashentry-list')
+
+
+@pytest.fixture
+def salon(db):
+    return Tenant.objects.create(name='Salon', slug='salon', country='PY', addon_cobros=True)
+
+
+@pytest.fixture
+def clinic(db):
+    return Tenant.objects.create(name='Clinic', slug='clinic', country='PY', addon_cobros=True)
+
+
+@pytest.fixture
+def manager(db, django_user_model, salon):
+    """Somebody with standing over the money: the book is admin-and-up."""
+    user = django_user_model.objects.create_user(email='r@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=Membership.Role.ADMIN)
+    return user
+
+
+def make_appointment(tenant, user=None, email=None, start=None):
+    """A bookable slot in `tenant`, with the staff and service it needs."""
+    if user is None:
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.create_user(email=email, password='pw')
+    membership = Membership.objects.filter(user=user, tenant=tenant).first()
+    if membership is None:
+        membership = Membership.objects.create(user=user, tenant=tenant)
+    service = Service.objects.create(
+        tenant=tenant, name=f'Haircut {tenant.slug}', duration=timedelta(minutes=30)
+    )
+    start = start or datetime(2026, 3, 2, 10, 0, tzinfo=ZoneInfo('UTC'))
+    return Appointment.objects.create(
+        tenant=tenant,
+        professional=membership,
+        service=service,
+        start=start,
+        end=start + service.duration,
+    )
+
+
+# --- writing the book --------------------------------------------------------
+
+def test_income_takes_its_tenant_from_the_request_not_the_payload(manager, salon, clinic):
+    """`tenant` is editable=False, so a payload naming another shop is ignored,
+    not obeyed -- this is the whole reason it is not a serializer field."""
+    res = api(manager, salon).post(
+        LIST_URL,
+        {
+            'kind': 'income',
+            'amount': 150000,
+            'occurred_on': '2026-03-02',
+            'concept': 'Haircut',
+            'payment_method': 'cash',
+            'tenant': clinic.pk,
+        },
+        format='json',
+    )
+
+    assert res.status_code == 201
+    created = CashEntry.objects.get(pk=res.data['id'])
+    assert created.tenant == salon
+    assert created.amount == 150000
+    assert created.payment_method == CashEntry.PaymentMethod.CASH
+    assert created.recorded_by == manager
+    assert res.data['recorded_by_name'] == 'r@example.com'
+
+
+def test_a_negative_amount_is_refused(manager, salon):
+    res = api(manager, salon).post(
+        LIST_URL,
+        {'kind': 'expense', 'amount': -1000, 'occurred_on': '2026-03-02', 'concept': 'Oops'},
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'amount' in res.data
+
+
+# --- the optional link to a booking ------------------------------------------
+
+def test_an_entry_may_name_an_appointment_of_its_own_tenant(manager, salon):
+    appointment = make_appointment(salon, user=manager)
+
+    res = api(manager, salon).post(
+        LIST_URL,
+        {
+            'kind': 'income',
+            'amount': 150000,
+            'occurred_on': '2026-03-02',
+            'concept': 'Haircut',
+            'payment_method': 'cash',
+            'appointment': str(appointment.pk),
+        },
+        format='json',
+    )
+
+    assert res.status_code == 201
+    assert CashEntry.objects.get(pk=res.data['id']).appointment == appointment
+
+
+def test_a_foreign_tenants_appointment_cannot_be_attached(manager, salon, clinic):
+    """A 400, not a silent cross-tenant link: the database would accept it."""
+    foreign = make_appointment(clinic, email='other@example.com')
+
+    res = api(manager, salon).post(
+        LIST_URL,
+        {
+            'kind': 'income',
+            'amount': 150000,
+            'occurred_on': '2026-03-02',
+            'concept': 'Haircut',
+            'payment_method': 'cash',
+            'appointment': str(foreign.pk),
+        },
+        format='json',
+    )
+
+    assert res.status_code == 400
+    assert 'appointment' in res.data
+    assert not CashEntry.objects.exists()
+
+
+def test_deleting_the_appointment_leaves_the_money_behind(manager, salon):
+    """SET_NULL: the money moved, and that stays true after the slot is gone."""
+    appointment = make_appointment(salon, user=manager)
+    money = CashEntry.objects.create(
+        tenant=salon,
+        kind=CashEntry.Kind.INCOME,
+        amount=150000,
+        occurred_on=date(2026, 3, 2),
+        concept='Haircut',
+        appointment=appointment,
+    )
+
+    appointment.delete()
+
+    money.refresh_from_db()
+    assert money.appointment is None
+    assert money.amount == 150000
+
+
+# --- who may touch the money -------------------------------------------------
+
+def test_the_book_cannot_be_corrected_by_anyone(manager, salon):
+    """
+    Write-only on purpose: nothing in the front end reads entries back, so no
+    role -- not even an admin -- gets a route to list, read, correct or
+    delete them.
+    """
+    money = CashEntry.objects.create(
+        tenant=salon, kind=CashEntry.Kind.INCOME, amount=150_000,
+        occurred_on=date(2026, 8, 12), concept='Corte',
+    )
+    http = api(manager, salon)
+    detail = reverse('accounting:cashentry-detail', args=[money.pk])
+
+    assert http.get(detail).status_code == 405
+    assert http.patch(detail, {'amount': 1}, format='json').status_code == 405
+    assert http.delete(detail).status_code == 405
+    money.refresh_from_db()
+    assert money.amount == 150_000
+
+
+@pytest.mark.parametrize('role, status', [
+    (Membership.Role.STAFF, 403),
+    # The coordinator closes the turn and takes the payment: letting them do the
+    # first and not the second would only move the till into somebody's memory.
+    (Membership.Role.COORDINATOR, 201),
+    (Membership.Role.ADMIN, 201),
+    (Membership.Role.OWNER, 201),
+])
+def test_the_front_desk_and_up_file_entries(django_user_model, salon, role, status):
+    user = django_user_model.objects.create_user(email='m@example.com', password='pw')
+    Membership.objects.create(user=user, tenant=salon, role=role)
+
+    response = api(user, salon).post(LIST_URL, {
+        'kind': 'income', 'amount': 90_000,
+        'occurred_on': '2026-08-20', 'concept': 'Corte', 'payment_method': 'cash',
+    }, format='json')
+
+    assert response.status_code == status
+    assert CashEntry.objects.count() == (status == 201)
+
+
+# --- what the book refuses ---------------------------------------------------
+
+
+def test_a_day_still_to_come_is_refused_on_the_business_calendar(manager, salon, monkeypatch):
+    """01:00 UTC on the 5th is still the 4th in Asunción: the 4th is today, the 5th is not."""
+    from datetime import timezone as utc
+
+    from django.utils import timezone
+
+    salon.timezone = 'America/Asuncion'
+    salon.save(update_fields=['timezone'])
+    monkeypatch.setattr(timezone, 'now', lambda: datetime(2026, 11, 5, 1, 0, tzinfo=utc.utc))
+    http = api(manager, salon)
+    body = {'kind': 'income', 'amount': 100, 'concept': 'x', 'payment_method': 'cash'}
+
+    assert http.post(LIST_URL, {**body, 'occurred_on': '2026-11-04'}, format='json').status_code == 201
+
+    refused = http.post(LIST_URL, {**body, 'occurred_on': '2026-11-05'}, format='json')
+    assert (refused.status_code, refused.data['code']) == (400, 'future_date')
+
+
+def test_an_entry_of_nothing_is_refused(manager, salon):
+    res = api(manager, salon).post(
+        LIST_URL,
+        {'kind': 'income', 'amount': 0, 'occurred_on': '2026-03-02', 'concept': 'x', 'payment_method': 'cash'},
+        format='json',
+    )
+    assert res.status_code == 400
+    assert 'amount' in res.data
+
+
+def test_the_database_refuses_an_entry_of_nothing(salon):
+    from django.db import IntegrityError, transaction
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        CashEntry.objects.create(tenant=salon, kind='income', amount=0, occurred_on=date(2026, 3, 2), concept='x')
