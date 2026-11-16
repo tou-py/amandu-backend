@@ -2,7 +2,7 @@ import pytest
 from django.urls import reverse
 
 from apps.accounting.models import CashEntry, MethodCaja
-from apps.accounting.test_caja_setup_api import (  # noqa: F401
+from apps.accounting.tests.test_caja_setup_api import (  # noqa: F401
     ALL_METHODS,
     SETUP_URL,
     member,
