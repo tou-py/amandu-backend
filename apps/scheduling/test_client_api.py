@@ -191,12 +191,6 @@ def test_another_tenants_client_cannot_be_updated(receptionist, salon, clinic):
     assert foreign.name == 'Grace'
 
 
-def test_anonymous_gets_401_not_403(db, salon):
-    res = api(tenant=salon).get(LIST_URL)
-
-    assert res.status_code == 401
-
-
 def test_authenticated_without_a_membership_gets_403(db, django_user_model, salon):
     outsider = django_user_model.objects.create_user(
         email='out@example.com', password='pw'

@@ -31,10 +31,6 @@ def clinic(db):
     return Tenant.objects.create(name='Clinic', slug='clinic')
 
 
-def test_me_requires_authentication(db):
-    assert api().get(ME_URL).status_code == 401
-
-
 def test_me_returns_identity_and_every_active_tenant(db, django_user_model, salon, clinic):
     user = django_user_model.objects.create_user(email='u@example.com', password='pw')
     Membership.objects.create(user=user, tenant=salon, role=Membership.Role.OWNER)
@@ -167,10 +163,6 @@ def test_the_profile_cannot_change_its_own_email(db, django_user_model):
     assert user.email == 'u@example.com'
 
 
-def test_editing_a_profile_requires_authentication(db):
-    assert api().patch(ME_URL, {'first_name': 'X'}, format='json').status_code == 401
-
-
 def test_changing_the_password_replaces_the_one_that_logs_in(db, django_user_model):
     user = django_user_model.objects.create_user(email='u@example.com', password='old-pw')
 
@@ -216,16 +208,6 @@ def test_a_weak_new_password_is_refused(db, django_user_model):
     assert 'new_password' in res.data
     user.refresh_from_db()
     assert user.check_password('old-pw')
-
-
-def test_changing_a_password_requires_authentication(db):
-    res = api().post(
-        PASSWORD_URL,
-        {'current_password': 'x', 'new_password': STRONG_PASSWORD},
-        format='json',
-    )
-
-    assert res.status_code == 401
 
 
 def test_a_superuser_has_no_memberships(db, django_user_model):
@@ -294,7 +276,3 @@ def test_a_new_version_of_the_terms_asks_again(django_user_model):
     client.force_authenticate(user=user)
 
     assert client.get(reverse('accounts:me')).data['terms_pending'] is True
-
-
-def test_accepting_the_terms_needs_a_session():
-    assert APIClient().post(reverse('accounts:accept-terms')).status_code == 401

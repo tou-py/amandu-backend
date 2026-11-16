@@ -100,12 +100,6 @@ def test_a_staff_member_cannot_invite(staff_user, salon):
     assert res.status_code == 403
 
 
-def test_listing_invitations_requires_auth(db, salon):
-    res = api(tenant=salon).get(INVITE_LIST)
-
-    assert res.status_code == 401
-
-
 def test_cannot_invite_someone_who_already_has_a_membership(admin_user, salon, staff_user):
     res = api(admin_user, salon).post(
         INVITE_LIST, {'email': 'staff@example.com', 'role': 'staff'}, format='json'

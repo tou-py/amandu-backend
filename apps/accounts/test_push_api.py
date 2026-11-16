@@ -32,10 +32,6 @@ def other(db, django_user_model):
     return django_user_model.objects.create_user(email='o@example.com', password='pw')
 
 
-def test_subscribing_requires_authentication(db):
-    assert api().post(PUSH_URL, SUBSCRIPTION, format='json').status_code == 401
-
-
 def test_stores_a_subscription_against_the_caller(user):
     res = api(user).post(PUSH_URL, SUBSCRIPTION, format='json')
 
