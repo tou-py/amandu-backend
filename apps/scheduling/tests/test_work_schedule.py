@@ -1,9 +1,8 @@
 """
 The two tables that say when a professional is open for business.
 
-There is no availability calculation yet -- these lock the shape it will read:
-the weekday convention, the split shift, and the guards that keep a nonsensical
-stretch out of the table in the first place.
+What availability reads, below the API: the weekday convention and the database
+guards that keep a nonsensical stretch out even when the serializer is bypassed.
 """
 
 from datetime import date, time, timedelta
