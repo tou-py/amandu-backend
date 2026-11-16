@@ -11,22 +11,15 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import TimeOff, WorkSchedule
 from apps.tenancy.models import Tenant
 
 ASUNCION = ZoneInfo('America/Asuncion')
 SCHEDULE_URL = reverse('scheduling:workschedule-list')
 TIME_OFF_URL = reverse('scheduling:timeoff-list')
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 def schedule_detail(row):
@@ -54,12 +47,6 @@ def owner(db, django_user_model, salon):
         user=user, tenant=salon, role=Membership.Role.OWNER, attends_appointments=True,
     )
     return user
-
-
-@pytest.fixture
-def stylist(db, django_user_model, salon):
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
 
 
 @pytest.fixture

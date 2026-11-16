@@ -12,7 +12,6 @@ import pytest
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from apps.accounts.models import Membership
 from apps.scheduling.models import TimeOff, WorkSchedule
 from apps.tenancy.models import Tenant
 
@@ -23,12 +22,6 @@ TUESDAY = 1
 @pytest.fixture
 def salon(db):
     return Tenant.objects.create(name='Salon', slug='salon', country='PY')
-
-
-@pytest.fixture
-def stylist(db, django_user_model, salon):
-    user = django_user_model.objects.create_user(email='s@example.com', password='pw')
-    return Membership.objects.create(user=user, tenant=salon, attends_appointments=True)
 
 
 def shift(salon, stylist, weekday=MONDAY, start=time(9), end=time(12)):

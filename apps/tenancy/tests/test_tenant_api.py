@@ -1,21 +1,12 @@
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.tenancy.models import Tenant
 
 TENANT_URL = reverse('tenancy:tenant')
 MEMBERS_URL = reverse('accounts:member-list')
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture

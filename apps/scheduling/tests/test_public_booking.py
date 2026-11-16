@@ -51,11 +51,6 @@ def stylist(db, django_user_model, salon):
 
 
 @pytest.fixture
-def haircut(db, salon):
-    return Service.objects.create(tenant=salon, name='Haircut', duration=timedelta(minutes=30))
-
-
-@pytest.fixture
 def open_monday(db, salon, stylist):
     return WorkSchedule.objects.create(
         tenant=salon, professional=stylist, weekday=0,

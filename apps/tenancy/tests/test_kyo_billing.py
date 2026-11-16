@@ -10,9 +10,9 @@ from datetime import date, timedelta
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Client, Service
 from apps.tenancy import pricing
 from apps.tenancy.models import Tenant
@@ -96,13 +96,6 @@ def test_the_plan_is_named_after_the_team(professionals, plan):
 
 
 # --- Over HTTP ---------------------------------------------------------------
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 @pytest.fixture

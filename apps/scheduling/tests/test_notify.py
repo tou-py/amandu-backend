@@ -18,7 +18,7 @@ def test_only_notify_files_notices():
         f'{path.relative_to(root)}:{number}'
         for path in (root / 'apps').rglob('*.py')
         if path.relative_to(root) not in ALLOWED
-        and not path.name.startswith('test_')
+        and 'tests' not in path.parts
         and 'migrations' not in path.parts
         for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1)
         if PRODUCER.search(line)

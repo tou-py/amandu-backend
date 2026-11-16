@@ -9,21 +9,13 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Service
-from apps.tenancy.models import Tenant
 
 UPLOADS = '/api/uploads/'
 WEBP = 'image/webp'
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 def member(django_user_model, tenant, email, role=Membership.Role.STAFF):
@@ -34,16 +26,6 @@ def member(django_user_model, tenant, email, role=Membership.Role.STAFF):
 
 def detail(service):
     return reverse('scheduling:service-detail', args=[service.pk])
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
-
-
-@pytest.fixture
-def clinic(db):
-    return Tenant.objects.create(name='Clinic', slug='clinic', country='AR')
 
 
 @pytest.fixture

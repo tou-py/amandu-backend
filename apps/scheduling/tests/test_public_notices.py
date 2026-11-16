@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from django.core.management import call_command
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Notification
+from apps.commons.tests.helpers import api
 from apps.scheduling import notify
 from apps.scheduling.models import (
     Appointment,
@@ -106,13 +106,6 @@ def book(client, salon, haircut, start, professional=None, **overrides):
     }
     body.update(overrides)
     return client.post(page(salon), body)
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
 
 
 def act(user, tenant, appointment, name, **body):

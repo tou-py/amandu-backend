@@ -10,27 +10,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.urls import reverse
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.tenancy.models import Tenant
 
 UPLOADS = '/api/uploads/'
 TENANT_URL = reverse('tenancy:tenant')
 WEBP = 'image/webp'
 JPEG = 'image/jpeg'
-
-
-def api(user, tenant):
-    http = APIClient()
-    http.force_authenticate(user=user)
-    http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
 
 
 @pytest.fixture

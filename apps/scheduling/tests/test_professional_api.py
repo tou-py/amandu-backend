@@ -1,32 +1,18 @@
 from datetime import timedelta
 
 import pytest
-from django.test.utils import CaptureQueriesContext
 from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
-from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership
+from apps.commons.tests.helpers import api
 from apps.scheduling.models import Appointment, Client, Service
 from apps.tenancy.models import Tenant
 
 LIST_URL = reverse('scheduling:professional-list')
 TOMORROW = timezone.now().replace(microsecond=0) + timedelta(days=1)
-
-
-def api(user=None, tenant=None):
-    http = APIClient()
-    if user is not None:
-        http.force_authenticate(user=user)
-    if tenant is not None:
-        http.credentials(HTTP_X_TENANT_ID=str(tenant.pk))
-    return http
-
-
-@pytest.fixture
-def salon(db):
-    return Tenant.objects.create(name='Salon', slug='salon', country='AR')
 
 
 @pytest.fixture
