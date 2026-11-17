@@ -1016,8 +1016,11 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         appointment = serializer.instance
         self._refuse_if_marked(appointment)
         was_with, was_at = appointment.professional, appointment.start
+        was_clients = list(appointment.clients.all())
         self._save_or_conflict(super().perform_update, serializer)
-        notify.edited(appointment, actor=self.request.membership, was_with=was_with, was_at=was_at)
+        notify.edited(
+            appointment, actor=self.request.membership, was_with=was_with, was_at=was_at, was_clients=was_clients,
+        )
 
     def perform_destroy(self, instance):
         # Filed first: the FK is SET_NULL, so the row survives the slot it names.
@@ -1145,7 +1148,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             if not source.client_links.exists():
                 source.cancel(body.validated_data.get('reason', ''))
             # One notice for one gesture, about the turn the clients are in now.
-            notify.notify(notify.CHANGED, appointment=into, actor=request.membership)
+            notify.notify(
+                notify.CHANGED, appointment=into, actor=request.membership,
+                detail=notify.roster_detail([], clients),
+            )
 
         return Response(self.get_serializer(self.get_queryset().get(pk=into.pk)).data)
 

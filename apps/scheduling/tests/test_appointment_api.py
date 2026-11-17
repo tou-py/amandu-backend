@@ -1174,6 +1174,44 @@ def test_a_teammate_booking_moving_and_editing_your_turn_tells_you(
     assert set(Notification.objects.values_list('actor', flat=True)) == {caller.pk}
 
 
+def test_a_teammate_changing_the_roster_tells_who_booked_it_and_who_came_in(
+    django_user_model, salon, stylist, haircut
+):
+    """The owner booked a class of three; a coordinator added a fourth. The
+    owner has to hear WHO, or she turns a client away from a class she thinks
+    is full."""
+    owner = django_user_model.objects.create_user(email='nadia@example.com', password='pw')
+    nadia = Membership.objects.create(user=owner, tenant=salon, role=Membership.Role.OWNER)
+    coordinator = django_user_model.objects.create_user(email='carmen@example.com', password='pw')
+    Membership.objects.create(user=coordinator, tenant=salon, role=Membership.Role.COORDINATOR)
+    ada, bob, eve = (Client.objects.create(tenant=salon, name=name) for name in ('Ada', 'Bob', 'Eve'))
+    created = api(owner, salon).post(LIST_URL, booking(stylist, [ada, bob], haircut, TOMORROW), format='json')
+
+    api(coordinator, salon).patch(
+        detail_url(Appointment.objects.get(pk=created.data['id'])),
+        {'clients': [ada.pk, eve.pk]}, format='json',
+    )
+
+    told = Notification.objects.get(recipient=nadia)
+    assert (told.verb, told.detail) == ('appointment_updated', 'agregó a Eve · quitó a Bob')
+    assert _verbs(stylist) == ['appointment_booked', 'appointment_updated']
+    pushed = Command().notification_payload(told)
+    assert pushed['body'].endswith('· agregó a Eve · quitó a Bob.')
+
+
+def test_the_professional_who_booked_the_turn_is_told_once(
+    receptionist, salon, stylist, client_, haircut
+):
+    stylist_user = stylist.user
+    created = api(stylist_user, salon).post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+
+    api(receptionist, salon).patch(
+        reverse('scheduling:appointment-detail', args=[created.data['id']]), {'notes': 'x'}, format='json',
+    )
+
+    assert _verbs(stylist) == ['appointment_updated']
+
+
 def test_handing_a_turn_to_a_colleague_tells_both(
     django_user_model, receptionist, salon, stylist, client_, haircut
 ):
