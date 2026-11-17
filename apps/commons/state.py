@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import Notification
-from apps.scheduling.models import Appointment
+from apps.scheduling.models import AgendaVersion
 from apps.tenancy.permissions import HasActiveMembership
 
 
@@ -31,7 +31,7 @@ class StateView(APIView):
     answer used to cost 5 requests and 21 queries, 10 of them the same user and
     membership resolved five times over.
 
-    This is that answer in one request and two aggregates. The HTTP ETag already
+    This is that answer in one request: a counter and an aggregate. The HTTP ETag already
     on those endpoints cannot do it: `ConditionalGetMiddleware` runs in
     `process_response`, so a 304 has already run the view and every query behind
     it -- it saves bandwidth, and bandwidth is not what runs out. Sync workers
@@ -45,19 +45,12 @@ class StateView(APIView):
 
     @extend_schema(responses=StateSerializer)
     def get(self, request):
-        # COUNT alongside MAX, never MAX alone. A deleted row does not move a
-        # maximum, so `max(updated_at)` on its own reports "nothing changed" for
-        # the one change that removes work from the screen -- which is exactly
-        # the bug apps/commons/mixins/conditional_get.py documents having been
-        # bitten by, in its own words, with a truncated HTTP date.
-        #
-        # Tenant-wide and not limited to the range on screen: a slot moved into
-        # next week has to invalidate this week too, and an aggregate over one
-        # tenant's diary is a single index-backed row either way.
-        diary = Appointment.objects.filter(tenant=request.tenant).aggregate(
-            rows=Count('id'),
-            latest=Max('updated_at'),
-        )
+        # One row, moved by triggers on every table the agenda reads (see
+        # AgendaVersion). It replaced COUNT and MAX(updated_at) over turns, which
+        # missed every change that lives off the turn row: attendance, payments,
+        # plans, client names. Tenant-wide, not per range: a slot moved into next
+        # week has to invalidate this week too.
+        diary = AgendaVersion.objects.filter(tenant=request.tenant).values_list('version', flat=True).first() or 0
 
         # Per membership, not per tenant: this feed is one person's, and the
         # unread count is what the bell draws. `read_at` turning non-null is a
@@ -71,7 +64,7 @@ class StateView(APIView):
 
         return Response(
             {
-                'appointments': f'{diary["rows"]}:{diary["latest"] or ""}',
+                'appointments': f'v{diary}',
                 'notifications': f'{feed["rows"]}:{feed["latest"] or ""}:{feed["unread"]}',
             }
         )
