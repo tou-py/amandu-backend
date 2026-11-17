@@ -907,6 +907,83 @@ class AppointmentSerializer(AppointmentTemplateMixin, serializers.ModelSerialize
         return attrs
 
 
+# --- The agenda's rows, built by hand -----------------------------------------
+#
+# What AppointmentSerializer returns for one turn, built directly instead of
+# through DRF's field machinery: the agenda lists hundreds of turns, and
+# walking 23 fields and two nested serializers per turn took ~90 ms of a
+# week's ~260 against ~17 ms like this (loadtest/). Only the list uses it;
+# writes, the detail and the OpenAPI schema keep AppointmentSerializer, which
+# stays the contract. test_the_hand_built_rows_match_the_serializer pins the
+# two together, so a field added there and not here fails a test, not a screen.
+#
+# ponytail: a plain function so a Ninja schema can wrap it in the planned
+# DRF -> Ninja migration.
+
+_datetime = serializers.DateTimeField().to_representation  # DRF's own format, 'Z' and all
+
+
+def _date(value):
+    return value.isoformat()
+
+
+def _period_row(period):
+    return {
+        'subscription': period.subscription.id, 'start': _date(period.start), 'end': _date(period.end),
+        'name': period.name, 'amount': period.amount, 'due_date': _date(period.due_date),
+        'overdue': period.overdue,
+    }
+
+
+def _attendee_row(link):
+    state = billing.attendee_billing(link)
+    phone = link.client.phone
+    return {
+        'id': str(link.client_id),
+        'name': link.client.name,
+        'phone': None if phone is None else str(phone),
+        'attendance': link.attendance,
+        'billing': {
+            'state': state['state'],
+            'amount': state['amount'],
+            'owed_periods': [_period_row(period) for period in state['owed_periods']],
+            'quota_used': state['quota_used'],
+            'quota_total': state['quota_total'],
+            'payment_method': state['payment_method'],
+            'cash_entry': state['cash_entry'],
+        },
+    }
+
+
+def appointment_row(appointment):
+    """One turn exactly as AppointmentSerializer renders it, for the agenda list."""
+    a = appointment
+    return {
+        'id': str(a.id),
+        'professional': a.professional_id,
+        'professional_name': a.professional.display_name(),
+        'attendees': [_attendee_row(link) for link in a.client_links.all()],
+        'service': a.service_id,
+        'service_name': a.service.name,
+        'service_price': a.service.price,
+        'start': _datetime(a.start),
+        'end': _datetime(a.end),
+        'status': a.status,
+        'capacity': a.capacity,
+        'series': a.series_id,
+        'cancelled_at': _datetime(a.cancelled_at),
+        'cancellation_reason': a.cancellation_reason,
+        'answer_notice': a.answer_notice,
+        'notes': a.notes,
+        'rescheduled_from': _datetime(a.rescheduled_from),
+        'source': a.source,
+        'created_by': a.created_by_id,
+        'created_by_name': a.created_by and a.created_by.display_name(),
+        'created_at': _datetime(a.created_at),
+        'updated_at': _datetime(a.updated_at),
+    }
+
+
 class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSerializer):
     """
     Books a whole arrangement at once: the rule, plus the appointment to repeat.

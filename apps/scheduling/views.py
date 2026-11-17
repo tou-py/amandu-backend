@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -44,6 +45,7 @@ from apps.scheduling.models import (
 )
 from apps.scheduling.permissions import ManagesService, OwnsAppointmentOrActsForTheTeam
 from apps.scheduling.serializers import (
+    appointment_row,
     AppointmentCancelSerializer,
     AppointmentSeriesSerializer,
     AppointmentSerializer,
@@ -863,6 +865,14 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         .prefetch_related('client_links__client', 'cash_entries')
     )
     serializer_class = AppointmentSerializer
+
+    def get_serializer(self, *args, **kwargs):
+        # The list renders its page by hand (serializers.appointment_row): same
+        # bytes, a fraction of the time. Everything else, the schema included,
+        # still goes through AppointmentSerializer.
+        if self.action == 'list' and kwargs.get('many'):
+            return SimpleNamespace(data=[appointment_row(one) for one in args[0]])
+        return super().get_serializer(*args, **kwargs)
 
     # The widest range `summary` will aggregate. A screen asks for a week, or a
     # month at the outside; past a year the request stops being a view of the

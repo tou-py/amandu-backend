@@ -1328,3 +1328,40 @@ def test_the_window_leaves_turns_months_away_out(studio, teacher, ada):
     prefetch_related_objects([ada], *billing.client_prefetches(near=(now, now + timedelta(days=7))))
 
     assert [link.appointment for link in ada.turns_near] == [near]
+
+
+def test_the_hand_built_rows_match_the_serializer(owner, studio, teacher, ada):
+    """
+    The agenda list renders serializers.appointment_row, everything else
+    AppointmentSerializer. Same bytes, through every branch of the shape: paid,
+    absent, owing a plan, no phone, cancelled, moved, part of a series, booked
+    by staff and by nobody.
+    """
+    from rest_framework.renderers import JSONRenderer
+
+    from apps.scheduling.models import AppointmentSeries
+    from apps.scheduling.serializers import AppointmentSerializer, appointment_row
+
+    today = local_today(studio)
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    carla = Client.objects.create(tenant=studio, name='Carla', phone='+595981654321')
+    subscribe(carla, Plan.objects.create(tenant=studio, name='Libre', price=150000), today - timedelta(days=70))
+    paid = turn(studio, teacher, [ada, bob, carla], start=at(studio, today - timedelta(days=2)))
+    CashEntry.objects.create(
+        tenant=studio, kind='income', amount=80000, occurred_on=today, concept='Turno',
+        appointment=paid, client=ada, payment_method='qr',
+    )
+    AppointmentClient.objects.filter(appointment=paid, client=bob).update(attendance='no_show')
+    moved = turn(studio, teacher, [ada], price=None, start=at(studio, today + timedelta(days=3)))
+    moved.series = AppointmentSeries.objects.create(tenant=studio, until=today + timedelta(days=30))
+    moved.rescheduled_from = moved.start - timedelta(hours=2)
+    moved.created_by = Membership.objects.get(user=owner, tenant=studio)
+    moved.save()
+    moved.cancel(reason='Viaje')
+
+    turns = list(Appointment.objects.filter(tenant=studio).select_related(
+        'professional__user', 'service', 'created_by__user', 'series',
+    ).prefetch_related('client_links__client', 'cash_entries').order_by('start'))
+    render = JSONRenderer().render
+
+    assert render([appointment_row(a) for a in turns]) == render(AppointmentSerializer(turns, many=True).data)
