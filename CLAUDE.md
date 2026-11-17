@@ -4,7 +4,7 @@ Django API for **Kyo**, a multi-tenant appointment agenda. Its one client is the
 
 ## Scope
 
-The backend keeps only what the frontend calls. Before adding or keeping an endpoint, find its caller in `../amandu-frontend/src`. Kept on purpose without a frontend caller: Django admin, `/api/schema/` + Swagger/Redoc, `/healthz/`, the `send_reminders` and `vapid_keys` commands, and the server-rendered `/reservar/<slug>/` booking page.
+The backend keeps only what the frontend calls. Before adding or keeping an endpoint, find its caller in `../amandu-frontend/src`. Kept on purpose without a frontend caller: Django admin, `/api/schema/` + Swagger/Redoc, `/healthz/`, `/api/csp-reports/` (browsers post the frontend's CSP violations there), the `send_reminders` and `vapid_keys` commands, and the server-rendered `/reservar/<slug>/` booking page.
 
 ## Rules that own a decision
 

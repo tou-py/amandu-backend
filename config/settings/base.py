@@ -323,6 +323,9 @@ REST_FRAMEWORK = {
         # Password guessing: five tries a minute per IP, counted whether the
         # attempt succeeds or 401s, since throttling runs before the view.
         'login': '5/min',
+        # Browsers' CSP violation reports: anonymous, and a looping page could
+        # otherwise flood the log.
+        'csp-report': '30/min',
         # Token guessing on the public accept endpoint.
         'accept-invitation': '10/min',
         # Each one sends a mail to whatever address was typed.

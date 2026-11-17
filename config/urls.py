@@ -24,6 +24,7 @@ from drf_spectacular.views import (
 )
 from rest_framework.permissions import AllowAny
 
+from apps.commons.csp_reports import CSPReportView
 from apps.commons.health import healthz
 from apps.commons.state import StateView
 from apps.commons.uploads import UploadView
@@ -43,6 +44,8 @@ urlpatterns = [
     path('api/state/', StateView.as_view(), name='state'),
     # Same reason: it signs uploads for the tenant, its members and services.
     path('api/uploads/', UploadView.as_view(), name='uploads'),
+    # Browsers post here what the app's CSP blocked (apps/commons/csp_reports.py).
+    path('api/csp-reports/', CSPReportView.as_view(), name='csp-reports'),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/', include('apps.scheduling.urls')),
     path('api/', include('apps.tenancy.urls')),
