@@ -616,6 +616,9 @@ class AttendeeSerializer(serializers.ModelSerializer):
     # writing to the person about this slot is one tap from the slot. Free of
     # queries because AppointmentViewSet prefetches `client_links__client`.
     phone = serializers.CharField(source='client.phone', read_only=True)
+    # The client file's own notes ("knee injury", "prefers the left bed"),
+    # read in the sheet with the client in the chair. Same prefetch, no query.
+    notes = serializers.CharField(source='client.notes', read_only=True)
     # Per attendee and not per appointment: a group class holds four people and
     # each one owes, or is covered, on their own. Rides on the roster the agenda
     # already has, because fetching a client file per name would be a round
@@ -626,7 +629,7 @@ class AttendeeSerializer(serializers.ModelSerializer):
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'phone', 'attendance', 'billing')
+        fields = ('id', 'name', 'phone', 'notes', 'attendance', 'billing')
         read_only_fields = fields
 
     @extend_schema_field(BillingSerializer)
@@ -942,6 +945,7 @@ def _attendee_row(link):
         'id': str(link.client_id),
         'name': link.client.name,
         'phone': None if phone is None else str(phone),
+        'notes': link.client.notes,
         'attendance': link.attendance,
         'billing': {
             'state': state['state'],

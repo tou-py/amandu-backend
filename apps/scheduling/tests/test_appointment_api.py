@@ -523,6 +523,21 @@ def test_an_appointment_carries_the_phone_of_every_attendee(
     }
 
 
+def test_an_appointment_carries_the_notes_of_every_attendee(
+    receptionist, salon, stylist, haircut
+):
+    """The sheet shows the client file's notes under each name, so a group
+    class does not need a file opened per person to read them."""
+    noted = Client.objects.create(tenant=salon, name='Ada', notes='Lesión de rodilla')
+    plain = Client.objects.create(tenant=salon, name='Bob')
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [noted, plain], haircut, TOMORROW), format='json',
+    )
+
+    assert {a['name']: a['notes'] for a in res.data['attendees']} == {'Ada': 'Lesión de rodilla', 'Bob': ''}
+
+
 def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, stylist, client_):
     """
     Null when the service is not charged per session, the amount when it is. The
