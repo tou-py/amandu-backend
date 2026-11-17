@@ -6,7 +6,8 @@ as a command in the prod image.
 
 Every business is `load-<n>`; its people log in as owner@, pro1@..pro3@ and
 desk@load-<n>.test with PASSWORD. Idempotent: a business already there is left
-alone. LOAD_TENANTS sets how many (default 20).
+alone. LOAD_TENANTS sets how many (default 20), LOAD_HISTORY_DAYS how far
+back their agenda goes (default 21).
 """
 import os
 import random
@@ -24,7 +25,9 @@ from apps.tenancy.models import Tenant
 PASSWORD = 'load12345'
 TENANTS = int(os.environ.get('LOAD_TENANTS', 20))
 CLIENTS = 300
-DAYS = 21  # each side of today
+DAYS = 21  # ahead of today
+# Behind today: a year (365) is what shows the cost of billing's history.
+HISTORY = int(os.environ.get('LOAD_HISTORY_DAYS', 21))
 ZONE = ZoneInfo('America/Asuncion')
 OPEN, CLOSE = time(9), time(18)
 CATALOGUE = (
@@ -72,7 +75,7 @@ def business(n):
     today = now.astimezone(ZONE).date()
     turns, links = [], []
     for pro in pros:
-        for offset in range(-DAYS, DAYS + 1):
+        for offset in range(-HISTORY, DAYS + 1):
             day = today + timedelta(days=offset)
             if day.weekday() == 6:
                 continue
