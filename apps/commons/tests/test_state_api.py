@@ -1,14 +1,15 @@
 from datetime import timedelta
 
 import pytest
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import Membership, Notification
 from apps.commons.tests.helpers import api
-from apps.scheduling.models import Appointment, Client, Service
+from apps.accounting.models import CashEntry
+from apps.scheduling.models import AgendaVersion, Appointment, AppointmentClient, Category, Client, Plan, Service, Subscription
 
 STATE_URL = reverse('state')
 TOMORROW = timezone.now().replace(microsecond=0) + timedelta(days=1)
@@ -45,30 +46,43 @@ def test_a_quiet_diary_answers_the_same_token_twice(receptionist, salon, stylist
     assert token(receptionist, salon) == token(receptionist, salon)
 
 
-def test_every_kind_of_change_moves_the_token(receptionist, salon, stylist, haircut):
+# transaction=True: the counter moves at commit (AgendaVersion), and a plain
+# `db` test never commits.
+@pytest.mark.django_db(transaction=True)
+def test_every_kind_of_change_the_agenda_shows_moves_the_token(receptionist, salon, stylist, haircut):
     """
-    Created, edited, cancelled, deleted. The deletion is the one a bare
-    max(updated_at) cannot see, and the reason the count travels beside it.
+    One write per table the agenda reads. Before the counter, only the first
+    four (a turn's own row) moved the token: a payment, a mark of attendance or
+    a plan changed on one device stayed invisible on every other one.
     """
-    before = token(receptionist, salon)
-
+    plan = Plan.objects.create(tenant=salon, name='Libre', price=100)
+    category = Category.objects.create(tenant=salon, name='Pelo')
     appointment = book(salon, stylist, haircut)
-    created = token(receptionist, salon)
-    assert created != before
+    link = appointment.client_links.get()
+    changes = {
+        'a turn edited': lambda: Appointment.objects.filter(pk=appointment.pk).update(notes='toalla'),
+        'attendance marked': lambda: AppointmentClient.objects.filter(pk=link.pk).update(attendance='attended'),
+        'a payment': lambda: CashEntry.objects.create(
+            tenant=salon, kind='income', amount=100, occurred_on=timezone.localdate(), concept='Corte',
+            appointment=appointment, client=link.client,
+        ),
+        'a subscription': lambda: Subscription.objects.create(
+            tenant=salon, client=link.client, plan=plan, start_date=timezone.localdate(),
+        ),
+        'a plan repriced': lambda: Plan.objects.filter(pk=plan.pk).update(price=200),
+        "a plan's categories": lambda: plan.categories.add(category),
+        'a client renamed': lambda: Client.objects.filter(pk=link.client_id).update(name='Ada L'),
+        'a service repriced': lambda: Service.objects.filter(pk=haircut.pk).update(price=900),
+        'the team changed': lambda: Membership.objects.filter(pk=stylist.pk).update(attends_appointments=False),
+        'a turn deleted': lambda: Appointment.objects.filter(pk=appointment.pk).delete(),
+    }
+    for change, write in changes.items():
+        before = token(receptionist, salon)
+        write()
+        assert token(receptionist, salon) != before, change
 
-    appointment.notes = 'trae su propia toalla'
-    appointment.save(update_fields=['notes', 'updated_at'])
-    edited = token(receptionist, salon)
-    assert edited != created
 
-    appointment.cancel(reason='se enfermó')
-    cancelled = token(receptionist, salon)
-    assert cancelled != edited
-
-    appointment.delete()
-    assert token(receptionist, salon) != cancelled
-
-
+@pytest.mark.django_db(transaction=True)
 def test_another_tenants_diary_does_not_move_this_one(
     receptionist, salon, clinic, stylist, haircut, django_user_model
 ):
@@ -86,6 +100,21 @@ def test_another_tenants_diary_does_not_move_this_one(
     book(clinic, other, other_service)
 
     assert token(receptionist, salon) == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_business_can_still_be_deleted_whole(salon, stylist, haircut):
+    """Turns protect what they point at, so offboarding clears them first; the
+    business then cascades to its team, clients and services. Each fires its
+    trigger at commit, after the business is gone, and the counter must not try
+    to bring it back (a foreign key violation that would block the delete)."""
+    book(salon, stylist, haircut)
+
+    with transaction.atomic():
+        Appointment.objects.filter(tenant=salon).delete()
+        salon.delete()
+
+    assert not AgendaVersion.objects.exists()
 
 
 def test_the_feed_token_moves_when_a_row_is_read(receptionist, salon, stylist, haircut):
@@ -141,9 +170,9 @@ def test_the_probe_does_not_scale_queries(receptionist, salon, stylist, haircut)
         grown = http.get(STATE_URL)
 
     assert len(large) == len(small)
-    # Four: the user, the membership, the diary aggregate and the feed aggregate.
+    # Four: the user, the membership, the diary counter and the feed aggregate.
     assert len(small) <= 4, [q['sql'] for q in small.captured_queries]
     # 25 appointments later, the answer is still two tokens. The tokens
-    # themselves grow by the digits of a count, which is what the slack allows.
+    # themselves grow by the digits of a counter, which is what the slack allows.
     assert len(grown.content) < 200
     assert len(grown.content) - len(one_row.content) <= 2
