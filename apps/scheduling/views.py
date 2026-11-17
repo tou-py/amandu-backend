@@ -857,13 +857,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         # The links, not the clients: the serializer reads attendance off the
         # through row, and prefetching only `clients` would query it per slot.
         # `cash_entries` is what each attendee's billing reads to know whether
-        # they paid (billing.attendee_billing), and client_prefetches() the
-        # plans, payments and quota turns behind the rest of it -- once per page
+        # they paid (billing.attendee_billing). The plans, payments and quota
+        # turns behind the rest of it come from get_queryset, once per page
         # instead of per row.
-        .prefetch_related(
-            'client_links__client', 'cash_entries',
-            *billing.client_prefetches('client_links__client__'),
-        )
+        .prefetch_related('client_links__client', 'cash_entries')
     )
     serializer_class = AppointmentSerializer
 
@@ -902,6 +899,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         if day_to is not None:
             # Inclusive of the whole 'to' day: up to the next local midnight.
             queryset = queryset.filter(start__lt=day_to + timedelta(days=1))
+
+        # A bounded range (the agenda's period) reads each attendee's turns near
+        # it, for the quota, instead of their whole history; anything else (a
+        # single turn, the backlog, the queue) keeps the history.
+        near = (day_from, day_to + timedelta(days=1)) if day_from and day_to else None
+        queryset = queryset.prefetch_related(*billing.client_prefetches('client_links__client__', near=near))
 
         return queryset
 
