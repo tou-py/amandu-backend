@@ -1121,6 +1121,10 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
             'capacity', Appointment._meta.get_field('capacity').default
         )
         booking['notes'] = validated_data.pop('notes', '')
+        # Who booked the term, on every turn it makes: the one-off booking
+        # records it too, and without it whoever booked a class never hears
+        # that a teammate changed it (notify.CREATOR).
+        booking['created_by'] = self.context['request'].membership
 
         series = AppointmentSeries.objects.create(tenant=tenant, **validated_data)
 
@@ -1131,6 +1135,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         zone = ZoneInfo(tenant.timezone)
         local_first = booking['start'].astimezone(zone)
         booked, joined, skipped = [], [], []
+        joined_into = []
         closed = opening_check(
             tenant, booking['professional'], booking['start'],
             datetime.combine(series.until, local_first.time()).replace(tzinfo=zone) + timedelta(days=1),
@@ -1146,6 +1151,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                 appointment = self._join(series, booking, start)
                 if appointment is not None:
                     joined.append(day)
+                    joined_into.append(appointment)
             (booked if appointment is not None else skipped).append(appointment or day)
 
         if not booked:
@@ -1162,6 +1168,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         series.skipped_days = skipped
         series.joined_days = joined
         series.appointments_created = booked
+        series.appointments_joined = joined_into
         return series
 
     @staticmethod
@@ -1178,6 +1185,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                     end=start + booking['service'].duration,
                     capacity=booking['capacity'],
                     notes=booking['notes'],
+                    created_by=booking['created_by'],
                 )
                 AppointmentClient.objects.bulk_create(
                     AppointmentClient(appointment=appointment, client=client, series=series)

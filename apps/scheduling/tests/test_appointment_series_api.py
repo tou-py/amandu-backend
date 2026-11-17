@@ -704,3 +704,26 @@ def test_roster_following_needs_somebody_to_move(receptionist, studio, teacher, 
     first = Appointment.objects.order_by('start')[0]
 
     assert http.post(action_url(first, 'roster-following'), {}, format='json').status_code == 400
+
+
+def test_a_term_that_joins_a_class_tells_who_booked_that_class_who_came_in(
+    django_user_model, studio, teacher, reformer, ada
+):
+    """The owner filled a class; a coordinator books a client's term into it.
+    That is a roster change to the owner's class, not a turn of the teacher's
+    own, and the owner has to hear the name."""
+    owner = django_user_model.objects.create_user(email='nadia@example.com', password='pw')
+    nadia = Membership.objects.create(user=owner, tenant=studio, role=Membership.Role.OWNER)
+    coordinator = django_user_model.objects.create_user(email='carmen@example.com', password='pw')
+    Membership.objects.create(user=coordinator, tenant=studio, role=Membership.Role.COORDINATOR)
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    api(owner, studio).post(LIST_URL, payload(teacher, reformer, ada, capacity=3), format='json')
+
+    res = api(coordinator, studio).post(LIST_URL, payload(teacher, reformer, bob), format='json')
+
+    assert res.status_code == 201 and len(res.data['joined']) == 4
+    assert set(Appointment.objects.values_list('created_by', flat=True)) == {nadia.pk}
+    told = Notification.objects.get(recipient=nadia)
+    assert (told.verb, told.detail) == (Notification.Verb.APPOINTMENT_UPDATED, 'agregó a Bob')
+    verbs = list(Notification.objects.filter(recipient=teacher).order_by('created_at').values_list('verb', flat=True))
+    assert verbs == [Notification.Verb.APPOINTMENT_BOOKED, Notification.Verb.APPOINTMENT_UPDATED]

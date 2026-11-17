@@ -403,8 +403,20 @@ class AppointmentSeriesViewSet(
 
     def perform_create(self, serializer):
         series = serializer.save()
-        # One row for the whole run, pointing at its first occurrence.
-        notify.notify(notify.BOOKED, appointment=series.appointments_created[0], actor=self.request.membership)
+        actor = self.request.membership
+        # One row for the whole run, pointing at its first occurrence -- for the
+        # turns it created and, apart, for the classes it joined: a client added
+        # to somebody else's class is a roster change to that class, and its
+        # professional and whoever booked it must hear who came in.
+        joined = series.appointments_joined
+        created = [one for one in series.appointments_created if one not in joined]
+        if created:
+            notify.notify(notify.BOOKED, appointment=created[0], actor=actor)
+        if joined:
+            notify.notify(
+                notify.CHANGED, appointment=joined[0], actor=actor,
+                detail=notify.roster_detail([], serializer.validated_data['clients']),
+            )
 
 
 class CategoryViewSet(TenantScopedModelViewSet):
