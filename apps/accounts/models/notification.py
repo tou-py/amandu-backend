@@ -84,6 +84,10 @@ class Notification(models.Model):
         max_length=30,
         choices=Verb.choices,  # type: ignore
     )
+    # What changed, in words, when the verb alone does not say it: "agregó a
+    # Ana · quitó a Luis" on a roster edit. Written once, when the change is
+    # made -- by push time the roster may have moved on and the diff is gone.
+    detail = models.CharField(max_length=300, blank=True, default='')
     read_at = models.DateTimeField(null=True, blank=True)
     # When this row was pushed to the recipient's devices. Null means not yet,
     # and that is the whole idempotency mechanism -- the same one
