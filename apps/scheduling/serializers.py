@@ -1310,6 +1310,29 @@ class RescheduleFollowingSerializer(serializers.Serializer):
             self.fields['professional'].queryset = Membership.professionals_for(tenant)
 
 
+class RosterFollowingSerializer(serializers.Serializer):
+    """
+    Body of "this one and the following" for the roster: who joins every later
+    occurrence of the arrangement, and who leaves it. The view decides, per
+    occurrence, whether the change fits.
+    """
+
+    add = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), many=True, required=False)
+    remove = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), many=True, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['add'].child_relation.queryset = Client.objects.for_tenant(tenant)
+            self.fields['remove'].child_relation.queryset = Client.objects.for_tenant(tenant)
+
+    def validate(self, attrs):
+        if not attrs.get('add') and not attrs.get('remove'):
+            raise serializers.ValidationError('Nobody to add or remove.')
+        return attrs
+
+
 class ClientDetailSerializer(ClientSerializer):
     """
     The client file, which is the list row plus its money header.

@@ -655,3 +655,52 @@ def test_cancel_following_leaves_a_marked_occurrence_standing(
     second.refresh_from_db()
     assert first.status == Appointment.Status.SCHEDULED
     assert second.status == Appointment.Status.CANCELLED
+
+
+# --- the roster, this one and the following ----------------------------------
+
+def _rosters():
+    return [sorted(c.name for c in a.clients.all()) for a in Appointment.objects.order_by('start')]
+
+
+def test_roster_following_adds_a_client_to_the_rest_of_the_term(receptionist, studio, teacher, reformer, ada):
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada, capacity=2), format='json')
+    second = Appointment.objects.order_by('start')[1]
+
+    res = http.post(action_url(second, 'roster-following'), {'add': [str(bob.pk)]}, format='json')
+
+    assert res.status_code == 200
+    assert (len(res.data['appointments']), res.data['skipped']) == (3, [])
+    assert _rosters() == [['Ada'], ['Ada', 'Bob'], ['Ada', 'Bob'], ['Ada', 'Bob']]
+    told = Notification.objects.get(verb=Notification.Verb.APPOINTMENT_UPDATED)
+    assert (told.recipient, told.detail) == (teacher, 'agregó a Bob')
+
+
+def test_roster_following_takes_a_client_off_and_skips_what_does_not_fit(
+    receptionist, studio, teacher, reformer, ada
+):
+    """A full class is left as it is, and so is one the client would leave empty:
+    that is a cancellation, with its own button."""
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    eve = Client.objects.create(tenant=studio, name='Eve')
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada, capacity=2), format='json')
+    first, second, third, fourth = Appointment.objects.order_by('start')
+    http.patch(reverse('scheduling:appointment-detail', args=[third.pk]), {'clients': [str(ada.pk), str(eve.pk)]}, format='json')
+
+    added = http.post(action_url(second, 'roster-following'), {'add': [str(bob.pk)]}, format='json')
+    removed = http.post(action_url(first, 'roster-following'), {'remove': [str(ada.pk)]}, format='json')
+
+    assert added.data['skipped'] == ['2026-09-14']
+    assert removed.data['skipped'] == ['2026-08-31']
+    assert _rosters() == [['Ada'], ['Bob'], ['Eve'], ['Bob']]
+
+
+def test_roster_following_needs_somebody_to_move(receptionist, studio, teacher, reformer, ada):
+    http = api(receptionist, studio)
+    http.post(LIST_URL, payload(teacher, reformer, ada), format='json')
+    first = Appointment.objects.order_by('start')[0]
+
+    assert http.post(action_url(first, 'roster-following'), {}, format='json').status_code == 400
