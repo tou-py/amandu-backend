@@ -1271,3 +1271,60 @@ def test_a_prefetched_client_is_not_loaded_again(monkeypatch, ada, pilates, djan
     monkeypatch.setattr(billing, 'client_prefetches', lambda path='': pytest.fail('loaded twice'))
     with django_assert_num_queries(0):
         billing._load(prefetched)
+
+
+def test_the_agendas_window_bills_every_attendee_as_the_whole_history_does(owner, studio, teacher, ada):
+    """
+    The agenda reads each attendee's turns near the period on screen
+    (client_prefetches(near=...)), a single turn their whole history. Both must
+    land on the same state for the same person: a quota counted from turns
+    weeks before the week shown, a past period paid, a client on no plan.
+    """
+    today = local_today(studio)
+    monday = today - timedelta(days=today.weekday())
+    pilates = Category.objects.create(tenant=studio, name='Pilates')
+    plan = Plan.objects.create(tenant=studio, name='Pilates 3', price=200000, sessions_per_period=3)
+    plan.categories.add(pilates)
+    # The running period began two weeks before the week shown, so its turns
+    # there are counted after ones the week does not contain.
+    subscribe(ada, plan, add_months(monday - timedelta(days=15), -2))
+    http = api(owner, studio)
+    http.post(client_url(ada, 'charge-periods'), {'count': 4, 'payment_method': 'cash'}, format='json')
+    bob = Client.objects.create(tenant=studio, name='Bob')
+    # Two classes a week since before the plan began: every period runs past
+    # its quota of three, so which ones are extra depends on turns outside the
+    # week on screen.
+    day = today - timedelta(days=90)
+    while day <= today + timedelta(days=14):
+        if day.weekday() in (0, 3):
+            turn(studio, teacher, [ada, bob] if day.weekday() == 3 else [ada],
+                 start=at(studio, day), category=pilates)
+        day += timedelta(days=1)
+
+    week = http.get(reverse('scheduling:appointment-list'), {
+        'from': monday.isoformat(), 'to': (monday + timedelta(days=6)).isoformat(),
+    }).data['results']
+
+    assert week
+    used = []
+    for row in week:
+        whole = billing_of(http, Appointment.objects.get(pk=row['id']))
+        for attendee in row['attendees']:
+            assert attendee['billing'] == whole[attendee['name']], (row['start'], attendee['name'])
+            used.append(attendee['billing']['quota_used'] or 0)
+    # A week holds two of Ada's classes: past 2, turns before it were counted.
+    assert max(used) > 2
+
+
+def test_the_window_leaves_turns_months_away_out(studio, teacher, ada):
+    from django.db.models import prefetch_related_objects
+
+    from apps.scheduling import billing
+
+    now = timezone.now()
+    turn(studio, teacher, [ada], start=now - timedelta(days=200))
+    near = turn(studio, teacher, [ada], start=now - timedelta(days=20))
+
+    prefetch_related_objects([ada], *billing.client_prefetches(near=(now, now + timedelta(days=7))))
+
+    assert [link.appointment for link in ada.turns_near] == [near]

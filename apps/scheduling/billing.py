@@ -165,57 +165,84 @@ def make_period(subscription, k, today):
     )
 
 
-def client_prefetches(path=''):
+# How far from a day its quota period can reach: a period is at most a month of
+# 31 days, plus a day either side for the business's offset from UTC.
+PERIOD_REACH = timedelta(days=33)
+
+
+def client_prefetches(path='', near=None):
     """
     Everything billing reads off a client, as prefetch lookups rooted at `path`
     (e.g. 'client_links__client__' from an appointment). One list, used by the
     agenda, the client file and Por cobrar alike, so no reader can forget a
     relation and quietly fall back to a query per attendee.
+
+    `near=(start, end)`: only the turns that can share a quota period with a turn
+    between those instants, which is all attendee_billing reads (the agenda),
+    instead of the client's whole history, which grows every month. They land in
+    `turns_near`, not in `appointment_links`, so a reader that needs the whole
+    history (_unpaid_turns) can never take the window for it (see _links).
     """
-    first_start = (
-        Subscription.objects.filter(client=OuterRef('client'))
-        .order_by('start_date').values('start_date')[:1]
+    # A pending public request is not a turn until the shop accepts it.
+    links = (
+        AppointmentClient.objects
+        .exclude(appointment__status__in=(Appointment.Status.CANCELLED, Appointment.Status.PENDING))
+        .select_related('appointment__service')
+        .prefetch_related('appointment__cash_entries')
     )
+    if near is not None:
+        links = Prefetch(
+            f'{path}appointment_links',
+            queryset=links.filter(
+                appointment__start__gte=near[0] - PERIOD_REACH,
+                appointment__start__lt=near[1] + PERIOD_REACH,
+            ),
+            to_attr='turns_near',
+        )
+    else:
+        first_start = (
+            Subscription.objects.filter(client=OuterRef('client'))
+            .order_by('start_date').values('start_date')[:1]
+        )
+        # Only the turns a rule can still ask about: from the first subscription
+        # (the quota) or the go-live cutoff (unpaid turns), whichever is earlier,
+        # less a day so a business east of UTC does not lose its first morning
+        # to the date-to-timestamp cast. LEAST skips the NULL of a client who
+        # never subscribed.
+        links = Prefetch(f'{path}appointment_links', queryset=links.filter(
+            appointment__start__gte=ExpressionWrapper(
+                Least(Subquery(first_start), Value(settings.BILLING_GO_LIVE)) - Value(timedelta(days=1)),
+                output_field=DateTimeField(),
+            ),
+        ))
     return [
         Prefetch(
             f'{path}subscriptions',
             queryset=Subscription.objects.select_related('plan', 'tenant')
             .prefetch_related('plan__categories', 'cash_entries'),
         ),
-        Prefetch(
-            f'{path}appointment_links',
-            queryset=AppointmentClient.objects
-            # A pending public request is not a turn until the shop accepts it.
-            .exclude(appointment__status__in=(Appointment.Status.CANCELLED, Appointment.Status.PENDING))
-            # Only the turns a rule can still ask about: from the first
-            # subscription (the quota) or the go-live cutoff (unpaid turns),
-            # whichever is earlier, less a day so a business east of UTC does not
-            # lose its first morning to the date-to-timestamp cast. LEAST skips
-            # the NULL of a client who never subscribed.
-            #
-            # ponytail: a subscribed client's whole history since joining is
-            # read to rank one turn. Fine at a few hundred turns per client; past
-            # that, bound it by the earliest period on screen.
-            .filter(appointment__start__gte=ExpressionWrapper(
-                Least(Subquery(first_start), Value(settings.BILLING_GO_LIVE))
-                - Value(timedelta(days=1)),
-                output_field=DateTimeField(),
-            ))
-            .select_related('appointment__service')
-            .prefetch_related('appointment__cash_entries'),
-        ),
+        links,
     ]
 
 
-def _load(client):
+def _load(client, near_enough=False):
     # One query per relation on a bare client (a single charge, a single client
     # file). A client the caller already prefetched is skipped outright: Django
     # would find nothing to fetch, but only after rebuilding client_prefetches()'
     # querysets -- per attendee, 40% of the weekly agenda's time (loadtest/).
+    # `near_enough`: the caller reads only quotas, so the agenda's window will do.
     cached = getattr(client, '_prefetched_objects_cache', {})
-    if 'subscriptions' in cached and 'appointment_links' in cached:
+    history = 'appointment_links' in cached or (near_enough and hasattr(client, 'turns_near'))
+    if 'subscriptions' in cached and history:
         return
     prefetch_related_objects([client], *client_prefetches())
+
+
+def _links(client):
+    """The client's turns: the whole history when loaded, else the agenda's window."""
+    if 'appointment_links' in getattr(client, '_prefetched_objects_cache', {}):
+        return client.appointment_links.all()
+    return client.turns_near
 
 
 def _subscriptions(client):
@@ -241,7 +268,7 @@ def unpaid_periods(client, today):
     A period belongs to a subscription only if it starts on or before its end
     date: ending a subscription is what stops it producing debt.
     """
-    _load(client)
+    _load(client, near_enough=True)  # reads subscriptions only
     for subscription in _subscriptions(client):
         paid = _paid_starts(subscription)
         k = 0
@@ -301,7 +328,7 @@ def _counted(client, subscription, k):
     start, end = period_start(subscription, k), period_end(subscription, k)
     categories = _covered_categories(subscription)
     return [
-        link for link in client.appointment_links.all()
+        link for link in _links(client)
         if (not categories or link.appointment.service.category_id in categories)
         and start <= _day(link.appointment.start, subscription.tenant) <= end
     ]
@@ -383,7 +410,7 @@ def attendee_billing(link):
         return answer
 
     client = link.client
-    _load(client)
+    _load(client, near_enough=True)
     subscriptions = _subscriptions(client)
     if subscriptions:
         # Against TODAY, not the turn's period: whoever owes September is told

@@ -1015,9 +1015,12 @@ def test_an_edit_that_leaves_the_hour_alone_keeps_its_reminder_spent(
     assert appointment.reminder_sent_at == sent
 
 
+# With a range the agenda's way (each attendee's turns near it), without one
+# the whole history: two prefetch paths, the same constant cost.
+@pytest.mark.parametrize('ranged', [True, False], ids=['agenda-range', 'no-range'])
 @pytest.mark.django_db
 def test_the_list_does_not_query_per_row(
-    salon, stylist, haircut, client_, django_assert_num_queries,
+    salon, stylist, haircut, client_, django_assert_num_queries, ranged,
 ):
     """
     The agenda list must cost the same whether it returns one row or twelve.
@@ -1063,7 +1066,9 @@ def test_the_list_does_not_query_per_row(
     # payments on those. Eleven, and it stays eleven as rows are added -- that
     # constancy is the property, not the number.
     with django_assert_num_queries(11):
-        response = http.get('/api/appointments/')
+        today = timezone.localdate(timezone=ZoneInfo(salon.timezone))
+        week = {'from': today.isoformat(), 'to': (today + timedelta(days=3)).isoformat()} if ranged else {}
+        response = http.get('/api/appointments/', week)
 
     assert response.status_code == 200
     assert len(response.data['results']) == 12
