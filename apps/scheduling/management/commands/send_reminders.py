@@ -434,7 +434,10 @@ class Command(BaseCommand):
             local_start = appointment.start.astimezone(ZoneInfo(appointment.tenant.timezone))
             body = f'{appointment.service.name} del {local_start:%d/%m a las %H:%M}'
             clients = ', '.join(client.name for client in appointment.clients.all())
-            if clients:
+            # Who came in or left says more than the roster it left behind.
+            if notification.detail:
+                body += f' · {notification.detail}'
+            elif clients:
                 body += f' · {clients}'
             body += '.'
         if notification.actor:

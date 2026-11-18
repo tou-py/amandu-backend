@@ -55,6 +55,7 @@ BILLING_DUE = 'billing_due'
 # Audiences.
 PROFESSIONAL = 'professional'  # whose diary the turno is in
 PREVIOUS = 'previous'  # whose diary it was taken from
+CREATOR = 'creator'  # who booked it: a teammate changing it must not go unseen
 MANAGERS = 'managers'  # owner, admins and coordinators: who runs the diary
 MONEY = 'money'  # owner and admins: who runs the money
 OWNERS = 'owners'  # who pays Kyo
@@ -68,16 +69,21 @@ class Rule:
     client_whatsapp: bool = False
 
 
+# Who booked a turno hears about a teammate changing it, beside its
+# professional: the owner who filled a class and then cancels a client because
+# she thinks it is full, when a coordinator added one, is the failure this
+# prevents. One row per person per change (notify dedupes).
 RULES = {
     BOOKED: Rule(push=((Verb.APPOINTMENT_BOOKED, PROFESSIONAL),)),
-    MOVED: Rule(push=((Verb.APPOINTMENT_RESCHEDULED, PROFESSIONAL),)),
-    CHANGED: Rule(push=((Verb.APPOINTMENT_UPDATED, PROFESSIONAL),)),
+    MOVED: Rule(push=((Verb.APPOINTMENT_RESCHEDULED, PROFESSIONAL), (Verb.APPOINTMENT_RESCHEDULED, CREATOR))),
+    CHANGED: Rule(push=((Verb.APPOINTMENT_UPDATED, PROFESSIONAL), (Verb.APPOINTMENT_UPDATED, CREATOR))),
     # The new professional has a turno booked into their day; the old one lost it.
     REASSIGNED: Rule(push=(
         (Verb.APPOINTMENT_BOOKED, PROFESSIONAL),
         (Verb.APPOINTMENT_REASSIGNED, PREVIOUS),
+        (Verb.APPOINTMENT_REASSIGNED, CREATOR),
     )),
-    CANCELLED: Rule(push=((Verb.APPOINTMENT_CANCELLED, PROFESSIONAL),)),
+    CANCELLED: Rule(push=((Verb.APPOINTMENT_CANCELLED, PROFESSIONAL), (Verb.APPOINTMENT_CANCELLED, CREATOR))),
     REQUESTED: Rule(push=((Verb.APPOINTMENT_REQUESTED, PROFESSIONAL),), client_whatsapp=True),
     # The client hears the answer from the business's own WhatsApp: the turno
     # sheet's "Avisar al cliente" step, owed through Appointment.answer_notice.
@@ -117,39 +123,70 @@ ROLES = {
 }
 
 
-def notify(event, *, appointment=None, tenant=None, actor=None, previous=None):
+def notify(event, *, appointment=None, tenant=None, actor=None, previous=None, detail=''):
     """
     Tell whoever `event` concerns. `appointment` for a turno's events, `tenant`
     for the business's own; `actor` is the member who did it (None for the
     public page and the sweep); `previous` the professional a turno was taken
-    from.
+    from; `detail` what changed, in words (roster_detail).
     """
     rule = RULES[event]
     tenant = tenant or appointment.tenant
 
     rows = []
+    # The first audience that names a person wins: the professional who also
+    # booked the turno gets one notice, not two.
+    told = {actor.pk} if actor is not None else set()
     for verb, audience in rule.push:
         recipients = [
             recipient for recipient in _audience(audience, tenant, appointment, previous)
-            if actor is None or recipient.pk != actor.pk
+            if recipient is not None and recipient.pk not in told
         ]
+        told |= {recipient.pk for recipient in recipients}
         if verb in REPLACES:
             Notification.objects.filter(recipient__in=recipients, verb=verb).delete()
-        rows += [Notification(recipient=r, actor=actor, appointment=appointment, verb=verb) for r in recipients]
+        rows += [
+            Notification(recipient=r, actor=actor, appointment=appointment, verb=verb, detail=detail)
+            for r in recipients
+        ]
     Notification.objects.bulk_create(rows)
 
     if rule.client_whatsapp and client_whatsapp_on(tenant):
         _file_whatsapp(event, appointment)
 
 
-def edited(appointment, *, actor, was_with, was_at):
-    """A teammate saved an edit of a turno: which of the four it was."""
+def edited(appointment, *, actor, was_with, was_at, was_clients=None):
+    """A teammate saved an edit of a turno: which of the four it was, and who
+    came in or left the roster with it (when `was_clients` is known)."""
+    detail = '' if was_clients is None else roster_detail(was_clients, list(appointment.clients.all()))
     if appointment.professional_id != was_with.pk:
-        notify(REASSIGNED, appointment=appointment, actor=actor, previous=was_with)
+        notify(REASSIGNED, appointment=appointment, actor=actor, previous=was_with, detail=detail)
     elif appointment.start != was_at:
-        notify(MOVED, appointment=appointment, actor=actor)
+        notify(MOVED, appointment=appointment, actor=actor, detail=detail)
     else:
-        notify(CHANGED, appointment=appointment, actor=actor)
+        notify(CHANGED, appointment=appointment, actor=actor, detail=detail)
+
+
+def roster_detail(before, after):
+    """
+    "agregó a Ana y Bea · quitó a Luis", or '' when the roster did not change.
+    Names, not counts: "one more" does not tell the owner WHICH client to stop
+    turning away.
+    """
+    was = {client.pk for client in before}
+    now = {client.pk for client in after}
+    parts = []
+    added = [client.name for client in after if client.pk not in was]
+    removed = [client.name for client in before if client.pk not in now]
+    if added:
+        parts.append(f'agregó a {_names(added)}')
+    if removed:
+        parts.append(f'quitó a {_names(removed)}')
+    return ' · '.join(parts)[:300]
+
+
+def _names(names):
+    return names[0] if len(names) == 1 else f'{", ".join(names[:-1])} y {names[-1]}'
 
 
 def _audience(audience, tenant, appointment, previous):
@@ -157,6 +194,9 @@ def _audience(audience, tenant, appointment, previous):
         return [appointment.professional]
     if audience == PREVIOUS:
         return [previous]
+    if audience == CREATOR:
+        # Null for the public page: nobody inside the business booked it.
+        return [appointment.created_by]
     members = tenant.memberships.filter(role__in=ROLES[audience], status=Membership.Status.ACTIVE)
     if audience == MANAGERS:
         # Already told, as the request's professional.

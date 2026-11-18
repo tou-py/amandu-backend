@@ -333,6 +333,8 @@ REST_FRAMEWORK = {
         # Guessing the CURRENT password from inside a session someone else
         # opened. Always a deliberate act, so it can be tighter than login.
         'change-password': '5/min',
+        # Each one rings every device of the caller.
+        'push-test': '5/min',
         # The public booking page (PublicPageThrottle). Browsing is cheap;
         # asking writes a held slot and can queue WhatsApp messages to any
         # number typed, so it is counted per IP and kept tight.
