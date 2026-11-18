@@ -39,6 +39,10 @@ class PushSubscription(models.Model):
     # as the endpoint.
     p256dh = models.CharField(max_length=200)
     auth = models.CharField(max_length=100)
+    # What the person calls this device ("Chrome en Android", "App en iPhone"),
+    # worded by the browser that subscribed, so the profile can list where the
+    # notices go. Blank for rows from before it was asked.
+    device = models.CharField(max_length=80, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
