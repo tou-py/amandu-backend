@@ -311,6 +311,17 @@ class AppointmentClient(models.Model):
         related_name='enrolments',
     )
 
+    # Who put this person on this slot: the turn's sheet says "agregado por
+    # Carmen" when it was not whoever booked the turn. Null for the public page
+    # and for rows from before it was recorded. SET_NULL like created_by.
+    added_by = models.ForeignKey(
+        'accounts.Membership',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+
     def mark(self, attendance):
         """
         A cancelled booking never ran, so nobody in it attended or failed to:

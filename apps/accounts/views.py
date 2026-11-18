@@ -456,3 +456,16 @@ class NotificationViewSet(NoHeuristicCacheMixin, mixins.ListModelMixin, viewsets
     def mark_all_read(self, request):
         self.get_queryset().filter(read_at__isnull=True).update(read_at=timezone.now())
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        request=inline_serializer('MarkTurnRead', {'appointment': serializers.UUIDField()}),
+        responses={204: OpenApiResponse(description='Marked; no body.')},
+    )
+    @action(detail=False, methods=['post'])
+    def mark_turn_read(self, request):
+        """Opening a turn reads what the bell said about it: the agenda's
+        "changed" dot and the bell's unread row are the same fact."""
+        field = serializers.UUIDField()
+        appointment = field.run_validation(request.data.get('appointment'))
+        self.get_queryset().filter(appointment_id=appointment, read_at__isnull=True).update(read_at=timezone.now())
+        return Response(status=status.HTTP_204_NO_CONTENT)
