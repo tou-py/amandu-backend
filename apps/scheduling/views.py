@@ -875,7 +875,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         # they paid (billing.attendee_billing). The plans, payments and quota
         # turns behind the rest of it come from get_queryset, once per page
         # instead of per row.
-        .prefetch_related('client_links__client', 'cash_entries')
+        .prefetch_related('client_links__client', 'client_links__added_by__user', 'cash_entries')
     )
     serializer_class = AppointmentSerializer
 
@@ -1020,6 +1020,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             lambda s: s.save(tenant=self.request.tenant, created_by=self.request.membership),
             serializer,
         )
+        serializer.instance.client_links.update(added_by=self.request.membership)
         notify.notify(notify.BOOKED, appointment=serializer.instance, actor=self.request.membership)
 
     def perform_update(self, serializer):
@@ -1031,6 +1032,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         was_with, was_at = appointment.professional, appointment.start
         was_clients = list(appointment.clients.all())
         self._save_or_conflict(super().perform_update, serializer)
+        appointment.client_links.exclude(client__in=was_clients).update(added_by=self.request.membership)
         notify.edited(
             appointment, actor=self.request.membership, was_with=was_with, was_at=was_at, was_clients=was_clients,
         )
@@ -1154,7 +1156,9 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             moved = [client.pk for client in clients]
             # Off the series too: the rule that put them on this slot did not
             # put them on that one.
-            source.client_links.filter(client__in=moved).update(appointment=into, series=None)
+            source.client_links.filter(client__in=moved).update(
+                appointment=into, series=None, added_by=request.membership,
+            )
             CashEntry.objects.filter(
                 appointment=source, client__in=moved, voided_at__isnull=True,
             ).update(appointment=into)
@@ -1266,7 +1270,7 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             # occurrence to serialise the answer.
             .select_related('professional__user', 'service', 'created_by__user')
             .prefetch_related(
-                'client_links__client', 'cash_entries',
+                'client_links__client', 'client_links__added_by__user', 'cash_entries',
                 *billing.client_prefetches('client_links__client__'),
             )
             .order_by('start')
@@ -1449,7 +1453,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
                     continue
                 one.client_links.filter(client__in=leaving).delete()
                 AppointmentClient.objects.bulk_create([
-                    AppointmentClient(appointment=one, client=client, series_id=one.series_id) for client in joining
+                    AppointmentClient(
+                        appointment=one, client=client, series_id=one.series_id, added_by=request.membership,
+                    )
+                    for client in joining
                 ])
                 one.save(update_fields=['updated_at'])
                 changed.append(one.pk)
