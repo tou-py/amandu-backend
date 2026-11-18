@@ -1197,6 +1197,9 @@ def test_a_teammate_changing_the_roster_tells_who_booked_it_and_who_came_in(
     assert _verbs(stylist) == ['appointment_booked', 'appointment_updated']
     pushed = Command().notification_payload(told)
     assert pushed['body'].endswith('· agregó a Eve · quitó a Bob.')
+    roster = api(owner, salon).get(detail_url(Appointment.objects.get(pk=created.data['id']))).data['attendees']
+    # Email, not a name: these users have none, and display_name falls back to it.
+    assert {a['name']: a['added_by_name'] for a in roster} == {'Ada': 'nadia@example.com', 'Eve': 'carmen@example.com'}
 
 
 def test_the_professional_who_booked_the_turn_is_told_once(

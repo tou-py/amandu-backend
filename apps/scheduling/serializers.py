@@ -619,6 +619,10 @@ class AttendeeSerializer(serializers.ModelSerializer):
     # The client file's own notes ("knee injury", "prefers the left bed"),
     # read in the sheet with the client in the chair. Same prefetch, no query.
     notes = serializers.CharField(source='client.notes', read_only=True)
+    # Who put them on this turn ("agregado por Carmen"); null for the public
+    # page and for rows from before it was recorded.
+    added_by = serializers.IntegerField(source='added_by_id', read_only=True, allow_null=True)
+    added_by_name = serializers.SerializerMethodField()
     # Per attendee and not per appointment: a group class holds four people and
     # each one owes, or is covered, on their own. Rides on the roster the agenda
     # already has, because fetching a client file per name would be a round
@@ -629,8 +633,11 @@ class AttendeeSerializer(serializers.ModelSerializer):
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'phone', 'notes', 'attendance', 'billing')
+        fields = ('id', 'name', 'phone', 'notes', 'added_by', 'added_by_name', 'attendance', 'billing')
         read_only_fields = fields
+
+    def get_added_by_name(self, link) -> str | None:
+        return link.added_by and link.added_by.display_name()
 
     @extend_schema_field(BillingSerializer)
     def get_billing(self, link):
@@ -946,6 +953,8 @@ def _attendee_row(link):
         'name': link.client.name,
         'phone': None if phone is None else str(phone),
         'notes': link.client.notes,
+        'added_by': link.added_by_id,
+        'added_by_name': link.added_by and link.added_by.display_name(),
         'attendance': link.attendance,
         'billing': {
             'state': state['state'],
@@ -1188,7 +1197,9 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                     created_by=booking['created_by'],
                 )
                 AppointmentClient.objects.bulk_create(
-                    AppointmentClient(appointment=appointment, client=client, series=series)
+                    AppointmentClient(
+                        appointment=appointment, client=client, series=series, added_by=booking['created_by'],
+                    )
                     for client in booking['clients']
                 )
         except IntegrityError as exc:
@@ -1249,7 +1260,9 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
             # and a term of Mondays must not die of one lost race.
             with transaction.atomic():
                 AppointmentClient.objects.bulk_create(
-                    AppointmentClient(appointment=existing, client=client, series=series)
+                    AppointmentClient(
+                        appointment=existing, client=client, series=series, added_by=booking['created_by'],
+                    )
                     for client in joining
                 )
         except IntegrityError:

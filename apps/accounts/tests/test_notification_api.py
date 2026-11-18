@@ -47,3 +47,30 @@ def test_marking_read_is_visible_on_the_very_next_poll(stylist):
     )
     assert second.status_code == 200
     assert second.data['results'][0]['read_at'] is not None
+
+
+def test_opening_a_turn_reads_only_what_was_said_about_it(stylist, salon, haircut):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.scheduling.models import Appointment
+
+    start = timezone.now() + timedelta(days=1)
+    seen, other = (
+        Appointment.objects.create(
+            tenant=salon, professional=stylist, service=haircut,
+            start=start + timedelta(hours=hours), end=start + timedelta(hours=hours, minutes=30),
+        )
+        for hours in (0, 2)
+    )
+    for appointment in (seen, other):
+        Notification.objects.create(recipient=stylist, appointment=appointment, verb=Notification.Verb.APPOINTMENT_UPDATED)
+
+    res = api(stylist.user, salon).post(
+        reverse('accounts:notification-mark-turn-read'), {'appointment': str(seen.pk)}, format='json',
+    )
+
+    assert res.status_code == 204
+    unread = Notification.objects.filter(read_at__isnull=True).values_list('appointment', flat=True)
+    assert list(unread) == [other.pk]
