@@ -1,9 +1,11 @@
+import hashlib
 from datetime import timedelta
+from unittest import mock
 
 import pytest
 from django.urls import reverse
 
-from apps.accounts.models import PushSubscription
+from apps.accounts.models import Notification, PushSubscription
 from apps.commons.tests.helpers import api
 
 ME_URL = reverse('accounts:me')
@@ -119,3 +121,38 @@ def test_the_public_key_is_not_writable(user, settings):
 
     assert res.status_code == 200
     assert res.data['vapid_public_key'] == 'the-public-key'
+
+
+# -- Where my notices go -------------------------------------------------------
+
+def test_lists_my_devices_without_their_endpoints(user, other):
+    api(user).post(PUSH_URL, {**SUBSCRIPTION, 'device': 'Chrome en Android'}, format='json')
+    api(other).post(PUSH_URL, {**SUBSCRIPTION, 'endpoint': 'https://web.push.apple.com/x'}, format='json')
+
+    res = api(user).get(PUSH_URL)
+
+    assert res.status_code == 200
+    assert [(d['device'], d['service']) for d in res.data] == [('Chrome en Android', 'other')]
+    assert 'endpoint' not in res.data[0]
+    assert res.data[0]['fingerprint'] == hashlib.sha256(SUBSCRIPTION['endpoint'].encode()).hexdigest()
+
+
+def test_removes_one_of_my_devices_but_never_someone_elses(user, other):
+    api(other).post(PUSH_URL, SUBSCRIPTION, format='json')
+    theirs = PushSubscription.objects.get()
+
+    assert api(user).delete(reverse('accounts:push-device', args=[theirs.pk])).status_code == 404
+    assert api(other).delete(reverse('accounts:push-device', args=[theirs.pk])).status_code == 204
+    assert not PushSubscription.objects.exists()
+
+
+def test_a_test_notice_rings_every_device_and_files_nothing(user):
+    api(user).post(PUSH_URL, SUBSCRIPTION, format='json')
+    api(user).post(PUSH_URL, {**SUBSCRIPTION, 'endpoint': 'https://push.example.com/def'}, format='json')
+
+    with mock.patch('apps.scheduling.management.commands.send_reminders.webpush') as push:
+        res = api(user).post(reverse('accounts:push-test'))
+
+    assert res.data == {'sent': 2, 'devices': 2}
+    assert push.call_count == 2
+    assert not Notification.objects.exists()

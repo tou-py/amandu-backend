@@ -1,3 +1,4 @@
+import hashlib
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
@@ -305,10 +306,11 @@ class PushSubscriptionSerializer(serializers.ModelSerializer):
     # runs. Uniqueness is still enforced by the column; here it means "upsert".
     endpoint = serializers.URLField(max_length=500, validators=[])
     keys = serializers.DictField(child=serializers.CharField(), write_only=True)
+    device = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
     class Meta:
         model = PushSubscription
-        fields = ('endpoint', 'keys')
+        fields = ('endpoint', 'keys', 'device')
 
     def validate_keys(self, value):
         missing = {'p256dh', 'auth'} - value.keys()
@@ -330,9 +332,41 @@ class PushSubscriptionSerializer(serializers.ModelSerializer):
                 'user': self.context['request'].user,
                 'p256dh': keys['p256dh'],
                 'auth': keys['auth'],
+                'device': validated_data.get('device', ''),
             },
         )
         return subscription
+
+
+class PushDeviceSerializer(serializers.ModelSerializer):
+    """
+    One device the caller's notices go to, as the profile lists it. Never the
+    endpoint (a secret): `service` is only its host, worded, and `fingerprint`
+    a hash the browser can compute from its own endpoint to say "este".
+    """
+
+    service = serializers.SerializerMethodField()
+    fingerprint = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PushSubscription
+        fields = ('id', 'device', 'service', 'fingerprint', 'created_at')
+        read_only_fields = fields
+
+    def get_service(self, subscription) -> str:
+        host = subscription.endpoint.split('/')[2]
+        for needle, name in (('apple', 'apple'), ('google', 'google'), ('mozilla', 'mozilla'), ('windows', 'microsoft')):
+            if needle in host:
+                return name
+        return 'other'
+
+    def get_fingerprint(self, subscription) -> str:
+        return hashlib.sha256(subscription.endpoint.encode()).hexdigest()
+
+
+class PushTestResultSerializer(serializers.Serializer):
+    sent = serializers.IntegerField()
+    devices = serializers.IntegerField()
 
 
 class ChangePasswordSerializer(serializers.Serializer):
