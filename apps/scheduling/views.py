@@ -66,6 +66,7 @@ from apps.scheduling.serializers import (
     ProfessionalSerializer,
     ReceivablesSerializer,
     RescheduleFollowingSerializer,
+    RosterFollowingSerializer,
     SubscriptionChangePlanSerializer,
     SubscriptionEndSerializer,
     SubscriptionSerializer,
@@ -402,8 +403,20 @@ class AppointmentSeriesViewSet(
 
     def perform_create(self, serializer):
         series = serializer.save()
-        # One row for the whole run, pointing at its first occurrence.
-        notify.notify(notify.BOOKED, appointment=series.appointments_created[0], actor=self.request.membership)
+        actor = self.request.membership
+        # One row for the whole run, pointing at its first occurrence -- for the
+        # turns it created and, apart, for the classes it joined: a client added
+        # to somebody else's class is a roster change to that class, and its
+        # professional and whoever booked it must hear who came in.
+        joined = series.appointments_joined
+        created = [one for one in series.appointments_created if one not in joined]
+        if created:
+            notify.notify(notify.BOOKED, appointment=created[0], actor=actor)
+        if joined:
+            notify.notify(
+                notify.CHANGED, appointment=joined[0], actor=actor,
+                detail=notify.roster_detail([], serializer.validated_data['clients']),
+            )
 
 
 class CategoryViewSet(TenantScopedModelViewSet):
@@ -1016,8 +1029,11 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         appointment = serializer.instance
         self._refuse_if_marked(appointment)
         was_with, was_at = appointment.professional, appointment.start
+        was_clients = list(appointment.clients.all())
         self._save_or_conflict(super().perform_update, serializer)
-        notify.edited(appointment, actor=self.request.membership, was_with=was_with, was_at=was_at)
+        notify.edited(
+            appointment, actor=self.request.membership, was_with=was_with, was_at=was_at, was_clients=was_clients,
+        )
 
     def perform_destroy(self, instance):
         # Filed first: the FK is SET_NULL, so the row survives the slot it names.
@@ -1145,7 +1161,10 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             if not source.client_links.exists():
                 source.cancel(body.validated_data.get('reason', ''))
             # One notice for one gesture, about the turn the clients are in now.
-            notify.notify(notify.CHANGED, appointment=into, actor=request.membership)
+            notify.notify(
+                notify.CHANGED, appointment=into, actor=request.membership,
+                detail=notify.roster_detail([], clients),
+            )
 
         return Response(self.get_serializer(self.get_queryset().get(pk=into.pk)).data)
 
@@ -1387,6 +1406,66 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
 
         return Response({
             'appointments': self.get_serializer(moved, many=True).data,
+            'skipped': [day.isoformat() for day in skipped],
+        })
+
+    @extend_schema(request=RosterFollowingSerializer, responses=MovedFollowingSerializer)
+    @action(detail=True, methods=['post'], url_path='roster-following')
+    def roster_following(self, request, pk=None):
+        """
+        Add clients to, or take them off, this occurrence and the rest of the
+        arrangement: a client who joins the Monday class joins the term.
+
+        Per occurrence, a change that does not fit is left out and its day
+        answered in `skipped`: the class is full, somebody was already marked,
+        the client already paid it, or taking them off would leave it empty
+        (that is cancelling, which has its own button). Already in, or already
+        out, is not a refusal: there is nothing to do.
+        """
+        appointment = self.get_object()
+        self._require_series(appointment)
+        body = RosterFollowingSerializer(data=request.data, context={'request': request})
+        body.is_valid(raise_exception=True)
+        add = body.validated_data.get('add', [])
+        remove = {client.pk for client in body.validated_data.get('remove', [])}
+        tz = ZoneInfo(request.tenant.timezone)
+
+        changed, skipped = [], []
+        with transaction.atomic():
+            for one in self._following(appointment).select_for_update(of=('self',)):
+                here = {link.client_id for link in one.client_links.all()}
+                joining = [client for client in add if client.pk not in here]
+                leaving = remove & here
+                if not joining and not leaving:
+                    continue
+                paid = {entry.client_id for entry in one.cash_entries.all() if entry.voided_at is None}
+                if (
+                    self._has_marks(one)
+                    or len(here) - len(leaving) + len(joining) > one.capacity
+                    or not here - leaving | {client.pk for client in joining}
+                    or leaving & paid
+                ):
+                    skipped.append(one.start.astimezone(tz).date())
+                    continue
+                one.client_links.filter(client__in=leaving).delete()
+                AppointmentClient.objects.bulk_create([
+                    AppointmentClient(appointment=one, client=client, series_id=one.series_id) for client in joining
+                ])
+                one.save(update_fields=['updated_at'])
+                changed.append(one.pk)
+
+            # One notice for the run, like the other series actions.
+            if changed:
+                notify.notify(
+                    notify.CHANGED, appointment=appointment, actor=request.membership,
+                    detail=notify.roster_detail(
+                        [client for client in body.validated_data.get('remove', [])], add,
+                    ),
+                )
+
+        fresh = self.get_queryset().filter(pk__in=changed).order_by('start')
+        return Response({
+            'appointments': self.get_serializer(fresh, many=True).data,
             'skipped': [day.isoformat() for day in skipped],
         })
 

@@ -15,7 +15,7 @@ from apps.accounts.emails import (
     send_password_reset_email,
     send_verification_email,
 )
-from apps.accounts.models import CustomUser, Invitation, Membership, Notification
+from apps.accounts.models import CustomUser, Invitation, Membership, Notification, PushSubscription
 from apps.accounts.serializers import (
     AcceptInvitationSerializer,
     ActiveMembershipSerializer,
@@ -27,7 +27,9 @@ from apps.accounts.serializers import (
     MemberSerializer,
     NotificationSerializer,
     PasswordResetConfirmSerializer,
+    PushDeviceSerializer,
     PushSubscriptionSerializer,
+    PushTestResultSerializer,
     SessionSerializer,
     SignupSerializer,
     TenantAwareTokenObtainPairSerializer,
@@ -132,18 +134,21 @@ class PushSubscriptionView(APIView):
     No tenant: a subscription belongs to a device and the person using it, who
     may work for several tenants and wants one reminder stream for all of them.
 
-    ONE verb, and no unsubscribe endpoint, because there is nothing for it to do.
-    A browser that turns reminders off calls PushSubscription.unsubscribe(), and
-    the push service then answers 404 for that endpoint (RFC 8030) -- which
-    `send_reminders` already has to handle, since a subscription can expire on
-    its own at any time. A DELETE here would be a second way to reach the state
-    the first one reaches anyway, on the next send.
+    No unsubscribe here: a browser that turns reminders off calls
+    PushSubscription.unsubscribe(), and the push service then answers 404 for
+    that endpoint (RFC 8030), which `send_reminders` already handles. Removing
+    ANOTHER device -- the old laptop the notices kept going to -- is
+    PushDeviceView, by id.
 
-    Not a ViewSet either: the endpoint is a secret the client already holds, so
-    listing them back would only widen where it can leak.
+    GET lists the caller's devices without their endpoints (a secret).
     """
 
     permission_classes = (IsAuthenticated,)
+
+    @extend_schema(responses=PushDeviceSerializer(many=True))
+    def get(self, request):
+        devices = PushSubscription.objects.filter(user=request.user).order_by('-created_at')
+        return Response(PushDeviceSerializer(devices, many=True).data)
 
     @extend_schema(
         request=PushSubscriptionSerializer,
@@ -156,6 +161,50 @@ class PushSubscriptionView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PushDeviceView(APIView):
+    """
+    Stop sending to one of the caller's devices: the one they no longer use,
+    which a browser cannot unsubscribe from somewhere else. Someone else's
+    device is a 404, not a 403, so ids do not reveal whose they are.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(responses={204: OpenApiResponse(description='Device removed.')})
+    def delete(self, request, pk):
+        # A string in the route, so a caller without a session is told 401
+        # before a malformed id is told 404.
+        deleted = pk.isdigit() and PushSubscription.objects.filter(pk=pk, user=request.user).delete()[0]
+        return Response(status=status.HTTP_204_NO_CONTENT if deleted else status.HTTP_404_NOT_FOUND)
+
+
+class PushTestView(APIView):
+    """
+    A test notice to every device of the caller, now, so they can see it ring on
+    the phone they actually carry. Not a Notification row: it is nobody's news,
+    and the bell must not keep it.
+    """
+
+    permission_classes = (IsAuthenticated,)
+    throttle_scope = 'push-test'
+
+    @extend_schema(request=None, responses=PushTestResultSerializer)
+    def post(self, request):
+        # The sweep's own delivery, so a test proves exactly what real notices do
+        # (and prunes a device the push service says is gone).
+        from apps.scheduling.management.commands.send_reminders import Command
+
+        payload = {
+            'title': 'Aviso de prueba',
+            'body': 'Si ves esto, los avisos de Kyo llegan a este dispositivo.',
+            'url': '/perfil',
+            'tag': 'push-test',
+        }
+        devices = list(PushSubscription.objects.filter(user=request.user))
+        sent = sum(Command().deliver(device, payload) for device in devices)
+        return Response({'sent': sent, 'devices': len(devices)})
 
 
 class InvitationViewSet(TenantScopedModelViewSet):

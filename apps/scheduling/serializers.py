@@ -616,6 +616,9 @@ class AttendeeSerializer(serializers.ModelSerializer):
     # writing to the person about this slot is one tap from the slot. Free of
     # queries because AppointmentViewSet prefetches `client_links__client`.
     phone = serializers.CharField(source='client.phone', read_only=True)
+    # The client file's own notes ("knee injury", "prefers the left bed"),
+    # read in the sheet with the client in the chair. Same prefetch, no query.
+    notes = serializers.CharField(source='client.notes', read_only=True)
     # Per attendee and not per appointment: a group class holds four people and
     # each one owes, or is covered, on their own. Rides on the roster the agenda
     # already has, because fetching a client file per name would be a round
@@ -626,7 +629,7 @@ class AttendeeSerializer(serializers.ModelSerializer):
         model = AppointmentClient
         # Read-only here: attendance is recorded through its own action, so it
         # cannot ride along on an edit that was only meant to move the time.
-        fields = ('id', 'name', 'phone', 'attendance', 'billing')
+        fields = ('id', 'name', 'phone', 'notes', 'attendance', 'billing')
         read_only_fields = fields
 
     @extend_schema_field(BillingSerializer)
@@ -942,6 +945,7 @@ def _attendee_row(link):
         'id': str(link.client_id),
         'name': link.client.name,
         'phone': None if phone is None else str(phone),
+        'notes': link.client.notes,
         'attendance': link.attendance,
         'billing': {
             'state': state['state'],
@@ -1117,6 +1121,10 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
             'capacity', Appointment._meta.get_field('capacity').default
         )
         booking['notes'] = validated_data.pop('notes', '')
+        # Who booked the term, on every turn it makes: the one-off booking
+        # records it too, and without it whoever booked a class never hears
+        # that a teammate changed it (notify.CREATOR).
+        booking['created_by'] = self.context['request'].membership
 
         series = AppointmentSeries.objects.create(tenant=tenant, **validated_data)
 
@@ -1127,6 +1135,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         zone = ZoneInfo(tenant.timezone)
         local_first = booking['start'].astimezone(zone)
         booked, joined, skipped = [], [], []
+        joined_into = []
         closed = opening_check(
             tenant, booking['professional'], booking['start'],
             datetime.combine(series.until, local_first.time()).replace(tzinfo=zone) + timedelta(days=1),
@@ -1142,6 +1151,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                 appointment = self._join(series, booking, start)
                 if appointment is not None:
                     joined.append(day)
+                    joined_into.append(appointment)
             (booked if appointment is not None else skipped).append(appointment or day)
 
         if not booked:
@@ -1158,6 +1168,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         series.skipped_days = skipped
         series.joined_days = joined
         series.appointments_created = booked
+        series.appointments_joined = joined_into
         return series
 
     @staticmethod
@@ -1174,6 +1185,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                     end=start + booking['service'].duration,
                     capacity=booking['capacity'],
                     notes=booking['notes'],
+                    created_by=booking['created_by'],
                 )
                 AppointmentClient.objects.bulk_create(
                     AppointmentClient(appointment=appointment, client=client, series=series)
@@ -1304,6 +1316,29 @@ class RescheduleFollowingSerializer(serializers.Serializer):
         tenant = getattr(self.context.get('request'), 'tenant', None)
         if tenant is not None:
             self.fields['professional'].queryset = Membership.professionals_for(tenant)
+
+
+class RosterFollowingSerializer(serializers.Serializer):
+    """
+    Body of "this one and the following" for the roster: who joins every later
+    occurrence of the arrangement, and who leaves it. The view decides, per
+    occurrence, whether the change fits.
+    """
+
+    add = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), many=True, required=False)
+    remove = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), many=True, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['add'].child_relation.queryset = Client.objects.for_tenant(tenant)
+            self.fields['remove'].child_relation.queryset = Client.objects.for_tenant(tenant)
+
+    def validate(self, attrs):
+        if not attrs.get('add') and not attrs.get('remove'):
+            raise serializers.ValidationError('Nobody to add or remove.')
+        return attrs
 
 
 class ClientDetailSerializer(ClientSerializer):

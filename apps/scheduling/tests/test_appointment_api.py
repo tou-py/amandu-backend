@@ -523,6 +523,21 @@ def test_an_appointment_carries_the_phone_of_every_attendee(
     }
 
 
+def test_an_appointment_carries_the_notes_of_every_attendee(
+    receptionist, salon, stylist, haircut
+):
+    """The sheet shows the client file's notes under each name, so a group
+    class does not need a file opened per person to read them."""
+    noted = Client.objects.create(tenant=salon, name='Ada', notes='Lesión de rodilla')
+    plain = Client.objects.create(tenant=salon, name='Bob')
+
+    res = api(receptionist, salon).post(
+        LIST_URL, booking(stylist, [noted, plain], haircut, TOMORROW), format='json',
+    )
+
+    assert {a['name']: a['notes'] for a in res.data['attendees']} == {'Ada': 'Lesión de rodilla', 'Bob': ''}
+
+
 def test_an_appointment_carries_the_price_of_its_service(receptionist, salon, stylist, client_):
     """
     Null when the service is not charged per session, the amount when it is. The
@@ -1157,6 +1172,44 @@ def test_a_teammate_booking_moving_and_editing_your_turn_tells_you(
     assert _verbs(stylist) == ['appointment_booked', 'appointment_rescheduled', 'appointment_updated']
     caller = Membership.objects.get(user__email='r@example.com', tenant=salon)
     assert set(Notification.objects.values_list('actor', flat=True)) == {caller.pk}
+
+
+def test_a_teammate_changing_the_roster_tells_who_booked_it_and_who_came_in(
+    django_user_model, salon, stylist, haircut
+):
+    """The owner booked a class of three; a coordinator added a fourth. The
+    owner has to hear WHO, or she turns a client away from a class she thinks
+    is full."""
+    owner = django_user_model.objects.create_user(email='nadia@example.com', password='pw')
+    nadia = Membership.objects.create(user=owner, tenant=salon, role=Membership.Role.OWNER)
+    coordinator = django_user_model.objects.create_user(email='carmen@example.com', password='pw')
+    Membership.objects.create(user=coordinator, tenant=salon, role=Membership.Role.COORDINATOR)
+    ada, bob, eve = (Client.objects.create(tenant=salon, name=name) for name in ('Ada', 'Bob', 'Eve'))
+    created = api(owner, salon).post(LIST_URL, booking(stylist, [ada, bob], haircut, TOMORROW), format='json')
+
+    api(coordinator, salon).patch(
+        detail_url(Appointment.objects.get(pk=created.data['id'])),
+        {'clients': [ada.pk, eve.pk]}, format='json',
+    )
+
+    told = Notification.objects.get(recipient=nadia)
+    assert (told.verb, told.detail) == ('appointment_updated', 'agregó a Eve · quitó a Bob')
+    assert _verbs(stylist) == ['appointment_booked', 'appointment_updated']
+    pushed = Command().notification_payload(told)
+    assert pushed['body'].endswith('· agregó a Eve · quitó a Bob.')
+
+
+def test_the_professional_who_booked_the_turn_is_told_once(
+    receptionist, salon, stylist, client_, haircut
+):
+    stylist_user = stylist.user
+    created = api(stylist_user, salon).post(LIST_URL, booking(stylist, [client_], haircut, TOMORROW), format='json')
+
+    api(receptionist, salon).patch(
+        reverse('scheduling:appointment-detail', args=[created.data['id']]), {'notes': 'x'}, format='json',
+    )
+
+    assert _verbs(stylist) == ['appointment_updated']
 
 
 def test_handing_a_turn_to_a_colleague_tells_both(

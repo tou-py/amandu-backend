@@ -13,7 +13,9 @@ from apps.accounts.views import (
     NotificationViewSet,
     PasswordResetConfirmView,
     PasswordResetView,
+    PushDeviceView,
     PushSubscriptionView,
+    PushTestView,
     ResendVerificationView,
     SignupView,
     VerifyEmailView,
@@ -41,6 +43,8 @@ urlpatterns = [
     path('me/password/', ChangePasswordView.as_view(), name='change-password'),
     path('me/terms/', AcceptTermsView.as_view(), name='accept-terms'),
     path('push/subscriptions/', PushSubscriptionView.as_view(), name='push-subscription'),
+    path('push/subscriptions/<str:pk>/', PushDeviceView.as_view(), name='push-device'),
+    path('push/test/', PushTestView.as_view(), name='push-test'),
     # Before the router: 'accept' must not be captured as an invitation pk.
     path('invitations/accept/', AcceptInvitationView.as_view(), name='invitation-accept'),
 ] + router.urls
