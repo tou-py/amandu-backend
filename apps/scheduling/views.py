@@ -1366,6 +1366,8 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         move: the class changed hour, and the one week the room was already
         taken is a thing the receptionist has to see, not a reason to abandon
         the other thirty-nine. Which ones stayed behind is in `skipped`.
+
+        In a series with a time per day only this weekday moves.
         """
         appointment = self.get_object()
         self._require_series(appointment)
@@ -1391,6 +1393,12 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
             new_start, new_start + appointment.service.duration, field='time',
         )
         following = list(self._following(appointment))
+        # A series with a time per day keeps each day's hour: moving Monday's
+        # class says nothing about Wednesday's. One time for every day still
+        # moves the whole run, as it always did.
+        if appointment.series.times:
+            weekday = appointment.start.astimezone(zone).weekday()
+            following = [one for one in following if one.start.astimezone(zone).weekday() == weekday]
         checks = {}
 
         def closed(one):
