@@ -834,3 +834,23 @@ def test_a_time_needs_one_of_the_weekdays_and_agrees_with_the_start(
 
     assert res.status_code == 400 and 'times' in res.data
     assert not AppointmentSeries.objects.exists()
+
+
+def test_moving_a_day_of_a_per_day_series_leaves_the_other_days_at_their_time(
+    receptionist, studio, teacher, reformer, ada
+):
+    """Monday's class changing hour says nothing about Wednesday's."""
+    http = api(receptionist, studio)
+    http.post(
+        LIST_URL, payload(teacher, reformer, ada, weekdays=[0, 2], times={'2': '18:00'}), format='json'
+    )
+    monday = Appointment.objects.order_by('start')[2]
+
+    res = http.post(action_url(monday, 'reschedule-following'), {'time': '09:00'}, format='json')
+
+    assert res.status_code == 200
+    starts = [local(one).strftime('%a %d %H:%M') for one in Appointment.objects.order_by('start')]
+    assert starts == [
+        'Mon 31 07:00', 'Wed 02 18:00', 'Mon 07 09:00', 'Wed 09 18:00',
+        'Mon 14 09:00', 'Wed 16 18:00', 'Mon 21 09:00',
+    ]
