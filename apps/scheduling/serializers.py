@@ -696,6 +696,21 @@ class AppointmentCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
+class CancelFollowingSerializer(AppointmentCancelSerializer):
+    """
+    Whose term ends. A shared class holds several terms at once, so on a turn
+    with more than one client the view refuses to guess.
+    """
+
+    client = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['client'].queryset = Client.objects.for_tenant(tenant)
+
+
 class JoinSerializer(serializers.Serializer):
     """
     Body of the join action: which of this turn's clients go to `into`, a turn
