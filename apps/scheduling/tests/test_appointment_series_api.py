@@ -795,3 +795,42 @@ def test_a_shared_turn_needs_to_be_told_whose_term_ends(
     assert res.status_code == 400 and 'client' in res.data
     assert not Appointment.objects.filter(status='cancelled').exists()
 
+
+# --- a time per day -----------------------------------------------------------
+
+def test_each_weekday_keeps_its_own_time_across_dst(receptionist, studio, teacher, reformer, ada):
+    """Monday at seven, Wednesday at six in the evening, either side of 2026-09-06."""
+    res = api(receptionist, studio).post(
+        LIST_URL,
+        payload(teacher, reformer, ada, weekdays=[0, 2], times={'0': '07:00', '2': '18:00'}, until='2026-09-09'),
+        format='json',
+    )
+
+    assert res.status_code == 201, res.data
+    assert res.data['times'] == {'0': '07:00', '2': '18:00'}
+    starts = [local(one).strftime('%a %d %H:%M') for one in Appointment.objects.order_by('start')]
+    assert starts == ['Mon 31 07:00', 'Wed 02 18:00', 'Mon 07 07:00', 'Wed 09 18:00']
+
+
+def test_cancelling_the_term_reaches_every_day_of_it(receptionist, studio, teacher, reformer, ada):
+    """One arrangement, one decision: leaving it reaches the Wednesdays too."""
+    http = api(receptionist, studio)
+    http.post(
+        LIST_URL, payload(teacher, reformer, ada, weekdays=[0, 2], times={'2': '18:00'}), format='json'
+    )
+
+    http.post(action_url(Appointment.objects.order_by('start')[0], 'cancel-following'), {}, format='json')
+
+    assert not Appointment.objects.filter(status='scheduled').exists()
+
+
+@pytest.mark.parametrize('times', [{'3': '18:00'}, {'0': '09:00'}, {'x': '18:00'}])
+def test_a_time_needs_one_of_the_weekdays_and_agrees_with_the_start(
+    receptionist, studio, teacher, reformer, ada, times
+):
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada, weekdays=[0, 2], times=times), format='json'
+    )
+
+    assert res.status_code == 400 and 'times' in res.data
+    assert not AppointmentSeries.objects.exists()
