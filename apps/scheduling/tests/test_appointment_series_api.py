@@ -727,3 +727,110 @@ def test_a_term_that_joins_a_class_tells_who_booked_that_class_who_came_in(
     assert (told.verb, told.detail) == (Notification.Verb.APPOINTMENT_UPDATED, 'agregó a Bob')
     verbs = list(Notification.objects.filter(recipient=teacher).order_by('created_at').values_list('verb', flat=True))
     assert verbs == [Notification.Verb.APPOINTMENT_BOOKED, Notification.Verb.APPOINTMENT_UPDATED]
+
+
+# --- cancelling one client's term in a shared class ---------------------------
+
+def roster(appointment):
+    return {link.client.name for link in appointment.client_links.all()}
+
+
+def test_a_joiner_cancelling_her_term_leaves_the_class_running(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    """Bob leaving the Monday class is not the Monday class ending for Ada."""
+    book_series(receptionist, studio, teacher, reformer, ada)
+    book_series(receptionist, studio, teacher, reformer, bob)
+    second = Appointment.objects.order_by('start')[1]
+
+    res = api(receptionist, studio).post(
+        action_url(second, 'cancel-following'), {'client': str(bob.pk)}, format='json'
+    )
+
+    assert res.status_code == 200
+    turns = list(Appointment.objects.order_by('start'))
+    assert [one.status for one in turns] == ['scheduled'] * 4
+    assert [roster(one) for one in turns] == [{'Ada', 'Bob'}, {'Ada'}, {'Ada'}, {'Ada'}]
+    assert Notification.objects.filter(
+        verb=Notification.Verb.APPOINTMENT_UPDATED, detail='quitó a Bob'
+    ).exists()
+
+
+def test_the_owner_cancelling_her_term_leaves_the_others_in_class(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    book_series(receptionist, studio, teacher, reformer, ada)
+    book_series(receptionist, studio, teacher, reformer, bob)
+    first = Appointment.objects.order_by('start')[0]
+
+    api(receptionist, studio).post(action_url(first, 'cancel-following'), {'client': str(ada.pk)}, format='json')
+
+    turns = list(Appointment.objects.order_by('start'))
+    assert [one.status for one in turns] == ['scheduled'] * 4
+    assert [roster(one) for one in turns] == [{'Bob'}] * 4
+
+
+def test_a_turn_left_empty_by_the_last_client_is_cancelled(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    book_series(receptionist, studio, teacher, reformer, ada)
+    book_series(receptionist, studio, teacher, reformer, bob, until='2026-09-07')
+    third = Appointment.objects.order_by('start')[2]
+
+    api(receptionist, studio).post(action_url(third, 'cancel-following'), {'client': str(ada.pk)}, format='json')
+
+    statuses = [one.status for one in Appointment.objects.order_by('start')]
+    assert statuses == ['scheduled', 'scheduled', 'cancelled', 'cancelled']
+
+
+def test_a_shared_turn_needs_to_be_told_whose_term_ends(
+    receptionist, studio, teacher, reformer, ada, bob
+):
+    book_series(receptionist, studio, teacher, reformer, ada)
+    book_series(receptionist, studio, teacher, reformer, bob)
+    first = Appointment.objects.order_by('start')[0]
+
+    res = api(receptionist, studio).post(action_url(first, 'cancel-following'), {}, format='json')
+
+    assert res.status_code == 400 and 'client' in res.data
+    assert not Appointment.objects.filter(status='cancelled').exists()
+
+
+# --- a time per day -----------------------------------------------------------
+
+def test_each_weekday_keeps_its_own_time_across_dst(receptionist, studio, teacher, reformer, ada):
+    """Monday at seven, Wednesday at six in the evening, either side of 2026-09-06."""
+    res = api(receptionist, studio).post(
+        LIST_URL,
+        payload(teacher, reformer, ada, weekdays=[0, 2], times={'0': '07:00', '2': '18:00'}, until='2026-09-09'),
+        format='json',
+    )
+
+    assert res.status_code == 201, res.data
+    assert res.data['times'] == {'0': '07:00', '2': '18:00'}
+    starts = [local(one).strftime('%a %d %H:%M') for one in Appointment.objects.order_by('start')]
+    assert starts == ['Mon 31 07:00', 'Wed 02 18:00', 'Mon 07 07:00', 'Wed 09 18:00']
+
+
+def test_cancelling_the_term_reaches_every_day_of_it(receptionist, studio, teacher, reformer, ada):
+    """One arrangement, one decision: leaving it reaches the Wednesdays too."""
+    http = api(receptionist, studio)
+    http.post(
+        LIST_URL, payload(teacher, reformer, ada, weekdays=[0, 2], times={'2': '18:00'}), format='json'
+    )
+
+    http.post(action_url(Appointment.objects.order_by('start')[0], 'cancel-following'), {}, format='json')
+
+    assert not Appointment.objects.filter(status='scheduled').exists()
+
+
+@pytest.mark.parametrize('times', [{'3': '18:00'}, {'0': '09:00'}, {'x': '18:00'}])
+def test_a_time_needs_one_of_the_weekdays_and_agrees_with_the_start(
+    receptionist, studio, teacher, reformer, ada, times
+):
+    res = api(receptionist, studio).post(
+        LIST_URL, payload(teacher, reformer, ada, weekdays=[0, 2], times=times), format='json'
+    )
+
+    assert res.status_code == 400 and 'times' in res.data
+    assert not AppointmentSeries.objects.exists()

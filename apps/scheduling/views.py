@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
@@ -47,6 +48,7 @@ from apps.scheduling.permissions import ManagesService, OwnsAppointmentOrActsFor
 from apps.scheduling.serializers import (
     appointment_row,
     AppointmentCancelSerializer,
+    CancelFollowingSerializer,
     AppointmentSeriesSerializer,
     AppointmentSerializer,
     AttendanceSerializer,
@@ -1256,13 +1258,13 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         come after it in time. Cancelled ones are already out of the way, and a
         completed one is history nothing may rewrite.
         """
+        return self._later(appointment).filter(series_id=appointment.series_id)
+
+    def _later(self, appointment):
+        """This turn and every later scheduled one, loaded for serialising."""
         return (
             Appointment.objects.for_tenant(self.request.tenant)
-            .filter(
-                series_id=appointment.series_id,
-                start__gte=appointment.start,
-                status=Appointment.Status.SCHEDULED,
-            )
+            .filter(start__gte=appointment.start, status=Appointment.Status.SCHEDULED)
             # The same related loading the class queryset carries, and for the
             # same reason: both actions below answer with AppointmentSerializer,
             # which reads the professional, whoever booked it and the roster. On
@@ -1281,35 +1283,74 @@ class AppointmentViewSet(NoHeuristicCacheMixin, TenantScopedModelViewSet):
         if appointment.series_id is None:
             raise ValidationError('This appointment is not part of a series.')
 
-    @extend_schema(request=AppointmentCancelSerializer, responses=AppointmentSerializer(many=True))
+    @extend_schema(request=CancelFollowingSerializer, responses=AppointmentSerializer(many=True))
     @action(detail=True, methods=['post'], url_path='cancel-following')
     def cancel_following(self, request, pk=None):
         """
-        Cancel this occurrence and the rest of the arrangement from here on.
+        End one client's term from this occurrence on.
 
-        The client left the term; the past stays exactly as it happened. Earlier
-        occurrences are untouched, and so is any later one already cancelled or
-        completed.
+        The client left the term; the past stays exactly as it happened. In a
+        shared class only that client leaves each later turn of THEIR enrolment,
+        which may be somebody else's class they joined; a turn they leave empty
+        is cancelled. Earlier occurrences are untouched, and so is any later one
+        already cancelled, completed or with attendance marked.
         """
         appointment = self.get_object()
         self._require_series(appointment)
 
-        body = AppointmentCancelSerializer(data=request.data)
+        body = CancelFollowingSerializer(data=request.data, context={'request': request})
         body.is_valid(raise_exception=True)
         reason = body.validated_data.get('reason', '')
+        client = body.validated_data.get('client')
 
-        # A marked occurrence already happened; it stays, like a completed one.
-        cancelled = [one for one in self._following(appointment) if not self._has_marks(one)]
-        for one in cancelled:
-            one.cancel(reason)
+        links = list(appointment.client_links.all())
+        if client is None:
+            # Guessing between two terms is how one client's leaving cancelled
+            # a whole class for everybody else in it.
+            if len(links) != 1:
+                raise ValidationError({'client': 'This turn has several clients: say whose term ends.'})
+            link = links[0]
+        else:
+            link = next((one for one in links if one.client_id == client.pk), None)
+            if link is None:
+                raise ValidationError({'client': 'That client is not on this turn.'})
 
-        # ONE notification for the whole run, not one per occurrence: the
-        # professional needs to know the arrangement ended, and forty rows
-        # saying so is a bell nobody will ever open again.
+        # The enrolment's own series; rows from before it was recorded only
+        # carry the appointment's.
+        term = link.series_id or appointment.series_id
+        enrolled = AppointmentClient.objects.filter(client_id=link.client_id).filter(
+            Q(series_id=term) | Q(series__isnull=True, appointment__series_id=term)
+        )
+
+        cancelled, left = [], []
+        with transaction.atomic():
+            turns = self._later(appointment).filter(pk__in=enrolled.values('appointment_id'))
+            for one in turns.select_for_update(of=('self',)):
+                # A marked occurrence already happened; it stays, like a completed one.
+                if self._has_marks(one):
+                    continue
+                if any(other.client_id != link.client_id for other in one.client_links.all()):
+                    one.client_links.filter(client_id=link.client_id).delete()
+                    one.save(update_fields=['updated_at'])
+                    left.append(one.pk)
+                else:
+                    one.cancel(reason)
+                    cancelled.append(one.pk)
+
+        # ONE notification per kind for the whole run, not one per occurrence:
+        # forty rows saying the same thing is a bell nobody will ever open again.
+        fresh = list(self.get_queryset().filter(pk__in=cancelled + left).order_by('start'))
         if cancelled:
-            notify.notify(notify.CANCELLED, appointment=appointment, actor=request.membership)
+            first = next(one for one in fresh if one.pk in cancelled)
+            notify.notify(notify.CANCELLED, appointment=first, actor=request.membership)
+        if left:
+            first = next(one for one in fresh if one.pk in left)
+            notify.notify(
+                notify.CHANGED, appointment=first, actor=request.membership,
+                detail=notify.roster_detail([link.client], []),
+            )
 
-        return Response(self.get_serializer(cancelled, many=True).data)
+        return Response(self.get_serializer(fresh, many=True).data)
 
     @extend_schema(
         request=RescheduleFollowingSerializer,

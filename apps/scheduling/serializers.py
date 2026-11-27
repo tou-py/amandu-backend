@@ -696,6 +696,21 @@ class AppointmentCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
+class CancelFollowingSerializer(AppointmentCancelSerializer):
+    """
+    Whose term ends. A shared class holds several terms at once, so on a turn
+    with more than one client the view refuses to guess.
+    """
+
+    client = serializers.PrimaryKeyRelatedField(queryset=Client.objects.none(), required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant = getattr(self.context.get('request'), 'tenant', None)
+        if tenant is not None:
+            self.fields['client'].queryset = Client.objects.for_tenant(tenant)
+
+
 class JoinSerializer(serializers.Serializer):
     """
     Body of the join action: which of this turn's clients go to `into`, a turn
@@ -1028,6 +1043,10 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
     start = serializers.DateTimeField(write_only=True)
     capacity = serializers.IntegerField(min_value=1, required=False, write_only=True)
     notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    # {"2": "18:00"}: weekday (Monday is "0") to the time that day starts at.
+    times = serializers.DictField(
+        child=serializers.TimeField(format='%H:%M'), required=False,
+    )
 
     # Everywhere this enrolment now belongs, whether the occurrence was created
     # for it or already existed. The caller asked to enrol somebody; the answer
@@ -1049,7 +1068,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         model = AppointmentSeries
         fields = (
             'id', 'professional', 'clients', 'service', 'start', 'capacity', 'notes',
-            'frequency', 'interval', 'weekdays', 'until',
+            'frequency', 'interval', 'weekdays', 'times', 'until',
             'appointments', 'skipped', 'joined', 'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
@@ -1088,6 +1107,8 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
                 {'weekdays': 'Only a weekly series repeats on chosen days.'}
             )
 
+        attrs['times'] = self._times(attrs, first, attrs['start'].astimezone(ZoneInfo(tenant.timezone)).time())
+
         # Asked before anything is written, using an unsaved row purely as the
         # rule calculator. The generator caps itself, but a silent cap is a term
         # that quietly stops in August and nobody knows why until a client turns
@@ -1110,6 +1131,22 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
 
         self._check_capacity(attrs)
         return attrs
+
+    @staticmethod
+    def _times(attrs, first, first_time):
+        times = attrs.get('times') or {}
+        if not times:
+            return {}
+        if attrs.get('frequency') == AppointmentSeries.Frequency.MONTHLY:
+            raise serializers.ValidationError({'times': 'Only a weekly series has a time per day.'})
+        days = attrs.get('weekdays') or [first.weekday()]
+        if any(not key.isdigit() or int(key) not in days for key in times):
+            raise serializers.ValidationError({'times': 'Every day given a time must be one of the weekdays.'})
+        # `start` is the occurrence somebody picked; its own day saying another
+        # hour is two answers to one question.
+        if times.get(str(first.weekday()), first_time) != first_time:
+            raise serializers.ValidationError({'times': "The first day's time must be the start's."})
+        return {key: value.isoformat(timespec='minutes') for key, value in times.items()}
 
     def create(self, validated_data):
         """
@@ -1151,7 +1188,7 @@ class AppointmentSeriesSerializer(AppointmentTemplateMixin, serializers.ModelSer
         )
 
         for day in series.occurrence_dates(local_first.date()):
-            start = datetime.combine(day, local_first.time()).replace(tzinfo=zone)
+            start = datetime.combine(day, series.time_for(day, local_first.time())).replace(tzinfo=zone)
             if closed(start, start + booking['service'].duration):
                 skipped.append(day)
                 continue
