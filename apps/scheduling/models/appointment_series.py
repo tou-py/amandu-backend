@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
@@ -55,6 +55,11 @@ class AppointmentSeries(TenantOwnedMixin, TimestampMixin):
     # arrangement is one row: "Mondays and Wednesdays" is a single decision the
     # receptionist made, so cancelling it forward has to reach both.
     weekdays = ArrayField(models.PositiveSmallIntegerField(), default=list, blank=True)
+    # A wall-clock time per weekday, keyed by the weekday as a string ("2":
+    # "18:00"), for the client who comes Monday at 13:00 and Wednesday at 18:00.
+    # A day left out keeps the first occurrence's time. Still one arrangement:
+    # leaving the term reaches every day of it.
+    times = models.JSONField(default=dict, blank=True)
     # The last day that may hold an occurrence, in the tenant's own calendar.
     # Inclusive.
     until = models.DateField()
@@ -78,6 +83,11 @@ class AppointmentSeries(TenantOwnedMixin, TimestampMixin):
         if self.frequency == self.Frequency.MONTHLY:
             return self._monthly(first)
         return self._weekly(first)
+
+    def time_for(self, day: date, default: time) -> time:
+        """The wall-clock time the occurrence on `day` starts at."""
+        chosen = self.times.get(str(day.weekday()))
+        return time.fromisoformat(chosen) if chosen else default
 
     def _weekly(self, first: date) -> list[date]:
         # No weekday listed means "the same day as the first one", which is what
